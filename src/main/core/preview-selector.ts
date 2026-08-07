@@ -1,0 +1,186 @@
+export interface PreviewSelection {
+  selector: string
+  matches: Element[]
+}
+
+/**
+ * Resolves the selector used by the remote preview picker.
+ *
+ * An empty scope means the user is choosing the repeated list-item container.
+ * A non-empty scope means the user is choosing a field relative to that scope.
+ * `:root` is used for fields that belong to the whole document (for example,
+ * a detail-page body) rather than to a repeated list item.
+ *
+ * Keep this function self-contained: PreviewService serializes it with
+ * Function.prototype.toString() and runs it inside the isolated preview page.
+ */
+export function resolvePreviewSelection(
+  target: Element,
+  scopeSelector: string
+): PreviewSelection {
+  const ownerDocument = target.ownerDocument
+
+  const cssEscape = (value: string): string => {
+    const css = ownerDocument.defaultView?.CSS
+    if (css && typeof css.escape === 'function') return css.escape(value)
+    return value.replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`)
+  }
+
+  const safeMatches = (element: Element, selector: string): boolean => {
+    try {
+      return element.matches(selector)
+    } catch {
+      return false
+    }
+  }
+
+  const structureSignature = (element: Element): string => {
+    const childTags = Array.from(element.children)
+      .map((child) => child.tagName.toLowerCase())
+      .join(',')
+    const hasText = (element.textContent || '').trim() ? 'text' : 'empty'
+    const hasLink = element.querySelector('a[href]') ? 'link' : 'no-link'
+    const hasMedia = element.querySelector('img, video, audio, source') ? 'media' : 'no-media'
+    return `${childTags}|${hasText}|${hasLink}|${hasMedia}`
+  }
+
+  const exactSegment = (
+    element: Element,
+    reusableAcrossScopes: boolean,
+    allowUniqueId: boolean
+  ): string => {
+    if (allowUniqueId && element.id) {
+      const idSelector = `#${cssEscape(element.id)}`
+      try {
+        if (ownerDocument.querySelectorAll(idSelector).length === 1) return idSelector
+      } catch {
+        // Fall through to a structural selector for malformed page IDs.
+      }
+    }
+
+    let result = element.tagName.toLowerCase()
+    let classes = Array.from(element.classList)
+    if (reusableAcrossScopes) {
+      classes = classes.filter(
+        (className) => ownerDocument.getElementsByClassName(className).length > 1
+      )
+    }
+    classes = classes.slice(0, 2)
+    if (classes.length) {
+      result += classes.map((className) => `.${cssEscape(className)}`).join('')
+    }
+
+    const parent = element.parentElement
+    if (!parent) return result
+    const equivalentSiblings = Array.from(parent.children).filter((sibling) =>
+      safeMatches(sibling, result)
+    )
+    if (equivalentSiblings.length <= 1) return result
+
+    const sameTagSiblings = Array.from(parent.children).filter(
+      (sibling) => sibling.tagName === element.tagName
+    )
+    return `${result}:nth-of-type(${sameTagSiblings.indexOf(element) + 1})`
+  }
+
+  const exactSelectorFor = (
+    element: Element,
+    root: Document | Element,
+    reusableAcrossScopes: boolean,
+    allowUniqueId: boolean
+  ): string => {
+    if (element === root) return ':scope'
+    const parts: string[] = []
+    let current: Element | null = element
+    while (current && current !== root) {
+      const part = exactSegment(current, reusableAcrossScopes, allowUniqueId)
+      parts.unshift(part)
+      if (allowUniqueId && part.startsWith('#')) break
+      current = current.parentElement
+    }
+    return parts.join(' > ')
+  }
+
+  const uniqueMatches = (selector: string): Element[] => {
+    if (!selector) return []
+    const matches: Element[] = []
+    try {
+      const scopes: Array<Document | Element> = scopeSelector
+        ? Array.from(ownerDocument.querySelectorAll(scopeSelector))
+        : [ownerDocument]
+      scopes.forEach((scope) => {
+        if (selector === ':scope' && scope !== ownerDocument) {
+          matches.push(scope as Element)
+          return
+        }
+        matches.push(...Array.from(scope.querySelectorAll(selector)))
+      })
+    } catch {
+      return []
+    }
+    return Array.from(new Set(matches))
+  }
+
+  const repeatedSegmentFor = (element: Element): string => {
+    const parent = element.parentElement
+    if (!parent) return ''
+    const sameTagSiblings = Array.from(parent.children).filter(
+      (sibling) => sibling.tagName === element.tagName
+    )
+    if (sameTagSiblings.length < 2) return ''
+
+    const signature = structureSignature(element)
+    const similarSiblings = sameTagSiblings.filter(
+      (sibling) => structureSignature(sibling) === signature
+    )
+    if (similarSiblings.length < 2) return ''
+
+    const tag = element.tagName.toLowerCase()
+    const universalClasses = Array.from(element.classList).filter((className) =>
+      similarSiblings.every((sibling) => sibling.classList.contains(className))
+    )
+    if (universalClasses.length) {
+      return `${tag}${universalClasses
+        .slice(0, 2)
+        .map((className) => `.${cssEscape(className)}`)
+        .join('')}`
+    }
+
+    const semanticRepeatTags = ['tr', 'li', 'article', 'dt', 'dd']
+    if (element.classList.length && !semanticRepeatTags.includes(tag)) return ''
+    return tag
+  }
+
+  if (!scopeSelector) {
+    let current: Element | null = target
+    while (current && current !== ownerDocument.documentElement) {
+      const parent = current.parentElement
+      const repeatedSegment = repeatedSegmentFor(current)
+      if (parent && repeatedSegment) {
+        const parentSelector = exactSelectorFor(parent, ownerDocument, false, true)
+        const selector = `${parentSelector} > ${repeatedSegment}`
+        let matches: Element[] = []
+        try {
+          matches = Array.from(ownerDocument.querySelectorAll(selector))
+        } catch {
+          matches = []
+        }
+        if (matches.length > 1 && matches.includes(current)) return { selector, matches }
+      }
+      current = current.parentElement
+    }
+
+    const selector = exactSelectorFor(target, ownerDocument, false, true)
+    return { selector, matches: uniqueMatches(selector) }
+  }
+
+  let root: Document | Element = ownerDocument
+  try {
+    root = target.closest(scopeSelector) || ownerDocument
+  } catch {
+    root = ownerDocument
+  }
+  const documentScope = scopeSelector === ':root'
+  const selector = exactSelectorFor(target, root, !documentScope, documentScope)
+  return { selector, matches: uniqueMatches(selector) }
+}

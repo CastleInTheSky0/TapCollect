@@ -1,0 +1,338 @@
+export type SelectorType = 'css' | 'xpath'
+export type PageSource = 'list' | 'detail'
+export type ExtractionType = 'text' | 'html' | 'attribute'
+export type MappingMode =
+  | 'unconfigured'
+  | 'page'
+  | 'fixed'
+  | 'system'
+  | 'merge'
+  | 'preserve'
+  | 'empty'
+  | 'external-url'
+export type MergeValueMode = 'page' | 'fixed' | 'system' | 'external-url'
+export type SystemValue = 'list-url' | 'detail-url' | 'collected-at'
+export type MatchMode = 'first' | 'all'
+export type XmlNodeKind = 'element' | 'attribute'
+export type RunStatus = 'idle' | 'preparing' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
+export type RunStage = 'preparing' | 'list' | 'detail' | 'writing' | 'completed' | 'cancelled' | 'failed'
+
+export interface HeaderEntry {
+  id: string
+  key: string
+  value: string
+}
+
+export interface ReplacementRule {
+  id: string
+  from: string
+  to: string
+}
+
+export interface FieldReplacementRule {
+  id: string
+  from: string
+  to: string
+}
+
+export interface SelectorConfig {
+  selectorType: SelectorType
+  selector: string
+}
+
+export interface DetailConfig {
+  enabled: boolean
+  link: SelectorConfig
+  linkAttribute: string
+}
+
+export interface PaginationConfig {
+  urlTemplate: string
+  startPage: number
+  step: number
+  maxPages: number
+}
+
+export interface RequestConfig {
+  userAgent: string
+  headers: HeaderEntry[]
+  timeoutSeconds: number
+  delayMs: number
+  detailConcurrency: number
+  manualEncoding: '' | 'utf-8' | 'gbk' | 'gb2312' | 'gb18030'
+}
+
+export interface HtmlProcessingConfig {
+  cleanHtml: boolean
+  absolutizeResources: boolean
+  customResourceAttributes: string[]
+}
+
+export interface OutputConfig {
+  rootDirectory: string
+  recordsPerFile: number
+  overwrite: boolean
+}
+
+export interface XmlFieldDefinition {
+  path: string
+  name: string
+  kind: XmlNodeKind
+  cdata: boolean
+  sampleValue: string
+}
+
+export interface PageExtractionConfig {
+  pageSource: PageSource
+  selectorType: SelectorType
+  selector: string
+  extraction: ExtractionType
+  attribute: string
+  matchMode: MatchMode
+  separator: string
+  trim: boolean
+  collapseWhitespace: boolean
+  replacements: FieldReplacementRule[]
+}
+
+export interface MergeValueConfig extends PageExtractionConfig {
+  id: string
+  mode: MergeValueMode
+  fixedValue: string
+  systemValue: SystemValue
+}
+
+export interface FieldMapping extends PageExtractionConfig {
+  fieldPath: string
+  mode: MappingMode
+  required: boolean
+  fixedValue: string
+  systemValue: SystemValue
+  mergeSeparator: string
+  mergeValues: MergeValueConfig[]
+}
+
+export interface XmlTemplateConfig {
+  fileName: string
+  content: string
+  encoding: string
+  recordPath: string
+  fields: XmlFieldDefinition[]
+  mappings: FieldMapping[]
+  importedAt: string
+}
+
+export interface TaskConfig {
+  version: 1
+  id: string
+  name: string
+  listUrl: string
+  listPageRules: string[]
+  listItem: SelectorConfig
+  detail: DetailConfig
+  pagination: PaginationConfig
+  request: RequestConfig
+  html: HtmlProcessingConfig
+  resourceReplacements: ReplacementRule[]
+  output: OutputConfig
+  xml: XmlTemplateConfig | null
+  dedupeFieldPath: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TaskSummary {
+  id: string
+  name: string
+  listUrl: string
+  updatedAt: string
+  runnable: boolean
+  hasCheckpoint: boolean
+}
+
+export interface XmlTreeNode {
+  path: string
+  name: string
+  kind: XmlNodeKind
+  children: XmlTreeNode[]
+}
+
+export interface XmlImportResult {
+  cancelled: boolean
+  template: XmlTemplateConfig | null
+  tree: XmlTreeNode[]
+}
+
+export interface PaginationParameter {
+  name: string
+  value: string
+  template: string
+}
+
+export interface ExtractedRecord {
+  sequence: number
+  collectedAt: string
+  page: number
+  itemIndex: number
+  listUrl: string
+  detailUrl: string
+  externalUrl: string
+  values: Record<string, string>
+}
+
+export interface RecordFailure {
+  page: number
+  itemIndex: number
+  listUrl: string
+  detailUrl: string
+  stage: string
+  fieldPath: string
+  reason: string
+  retries: number
+  time: string
+}
+
+export interface TestCollectionResult {
+  records: ExtractedRecord[]
+  rows: Record<string, string>[]
+  matchCounts: Record<string, number[]>
+  failures: RecordFailure[]
+  listItemCount: number
+  xmlPreview: string
+  messages: string[]
+}
+
+export interface RunCounters {
+  discovered: number
+  succeeded: number
+  duplicated: number
+  skipped: number
+  failed: number
+}
+
+export interface RunProgress {
+  runId: string
+  taskId: string
+  status: RunStatus
+  stage: RunStage
+  page: number
+  maxPages: number
+  currentUrl: string
+  currentFile: string
+  recordsInCurrentFile: number
+  counters: RunCounters
+  message: string
+}
+
+export interface RunLog {
+  runId: string
+  level: 'info' | 'warning' | 'error' | 'success'
+  time: string
+  message: string
+}
+
+export interface RunResult {
+  runId: string
+  taskId: string
+  status: Extract<RunStatus, 'completed' | 'cancelled' | 'failed'>
+  startedAt: string
+  finishedAt: string
+  pagesVisited: number
+  outputFiles: string[]
+  errorLogPath: string
+  counters: RunCounters
+  message: string
+}
+
+export interface RunCheckpoint {
+  version: 1
+  taskId: string
+  runId: string
+  startedAt: string
+  runStamp: string
+  nextRuleIndex: number
+  nextPage: number
+  templatePagesVisited: number
+  nextSequence: number
+  nextFileIndex: number
+  pagesVisited: number
+  seenPageUrls: string[]
+  seenKeys: string[]
+  pendingRecords: ExtractedRecord[]
+  outputFiles: string[]
+  errorLogPath: string
+  counters: RunCounters
+}
+
+export interface PreviewBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PreviewPickRequest {
+  selectorType: SelectorType
+  scopeSelector: string
+}
+
+export interface PreviewPickResult {
+  cancelled: boolean
+  selector: string
+  selectorType: SelectorType
+  matchCount: number
+  sample: string
+}
+
+export interface PreviewEvaluateRequest {
+  selectorType: SelectorType
+  selector: string
+  scopeSelector: string
+}
+
+export interface PreviewEvaluateResult {
+  matchCount: number
+  sample: string
+  error: string
+}
+
+export interface AppSettings {
+  defaultOutputDirectory: string
+}
+
+export interface CollectorApi {
+  getSettings: () => Promise<AppSettings>
+  saveSettings: (settings: AppSettings) => Promise<AppSettings>
+  listTasks: () => Promise<TaskSummary[]>
+  loadTask: (id: string) => Promise<TaskConfig | null>
+  saveTask: (task: TaskConfig) => Promise<TaskConfig>
+  duplicateTask: (id: string) => Promise<TaskConfig>
+  deleteTask: (id: string) => Promise<boolean>
+  chooseOutputDirectory: () => Promise<string>
+  importXmlTemplate: () => Promise<XmlImportResult>
+  inspectXmlTemplate: (content: string) => Promise<XmlTreeNode[]>
+  selectXmlRecord: (
+    content: string,
+    fileName: string,
+    recordPath: string
+  ) => Promise<XmlTemplateConfig>
+  detectPaginationParameters: (url: string) => Promise<PaginationParameter[]>
+  getDetailSamples: (task: TaskConfig) => Promise<string[]>
+  testTask: (task: TaskConfig) => Promise<TestCollectionResult>
+  getCheckpoint: (taskId: string) => Promise<RunCheckpoint | null>
+  startRun: (taskId: string, resume: boolean) => Promise<RunResult>
+  pauseRun: (runId: string) => Promise<boolean>
+  resumeRun: (runId: string) => Promise<boolean>
+  cancelRun: (runId: string) => Promise<boolean>
+  openOutputDirectory: (taskId: string) => Promise<boolean>
+  openErrorLog: (taskId: string, path: string) => Promise<boolean>
+  previewOpen: (url: string, bounds: PreviewBounds) => Promise<boolean>
+  previewNavigate: (url: string) => Promise<boolean>
+  previewSetBounds: (bounds: PreviewBounds) => Promise<boolean>
+  previewClose: () => Promise<boolean>
+  previewPick: (request: PreviewPickRequest) => Promise<PreviewPickResult>
+  previewEvaluate: (request: PreviewEvaluateRequest) => Promise<PreviewEvaluateResult>
+  onRunProgress: (listener: (progress: RunProgress) => void) => () => void
+  onRunLog: (listener: (log: RunLog) => void) => () => void
+  onRunFinished: (listener: (result: RunResult) => void) => () => void
+}
