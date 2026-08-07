@@ -3,7 +3,15 @@
   "version": "0.1.0",
   "description": "可配置的静态网页列表与详情信息采集、XML 模板映射和分批导出工具",
   "main": "./out/main/index.js",
-  "author": "Sylvan",
+  "author": {
+    "name": "Sylvan",
+    "email": "CastleInTheSky0@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/CastleInTheSky0/TapCollect",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CastleInTheSky0/TapCollect.git"
+  },
   "license": "MIT",
   "type": "module",
   "scripts": {

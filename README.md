@@ -134,7 +134,15 @@ macOS 打包必须在 macOS 上执行。当前配置为两种架构分别生成 
 
 - `CI`：推送到 `main` 或创建 Pull Request 时运行 lint、TypeScript 检查、测试和生产构建。
 - `Package installers`：推送到 `main`、推送 `v*` 标签或手动触发时，分别生成 Windows x64、UOS/Linux ARM64、macOS Intel 与 macOS Apple Silicon 产物。
-- 构建完成后，在对应 Actions 运行页面的 **Artifacts** 区域下载；默认保留 14 天。
+- 普通 `main` 推送和手动运行的安装包可在对应 Actions 运行页面的 **Artifacts** 区域临时下载，默认保留 14 天。
+- 推送 `v*` 标签时，必须等待所有平台打包成功，然后自动创建或更新 GitHub Release，并附加 Windows `.exe`、UOS ARM64 `.deb`、macOS x64/ARM64 `.dmg` 与 `.zip`。正式版本请从 [Releases](https://github.com/CastleInTheSky0/TapCollect/releases) 下载。
+
+发布新版本时，先确保 `package.json` 的版本号与标签一致，再推送版本标签，例如：
+
+```powershell
+git tag -a v0.1.0 -m "TapCollect v0.1.0"
+git push origin v0.1.0
+```
 
 仓库的 `.gitignore` 已排除本地任务、检查点、运行清单、采集输出、导入模板、界面测试截图及开发工具状态目录。提交前仍建议执行 `git status --short`，确认清单中没有本地采集数据。
 
