@@ -21,12 +21,15 @@ release/
 *.local.xml
 
 # TapCollect local tasks, checkpoints, manifests, and collected output
+/data/
+/.data-migration-*/
 /collector-data/
 /tasks/
 /checkpoints/
 /manifests/
 /采集输出/
 /图片新闻.xml
+/output
 
 # Local smoke-test and UI artifacts
 /.playwright-cli/
@@ -43,6 +46,7 @@ release/
 /Trellis任务说明.md
 
 # OS and editor files
+~$*.docx
 .DS_Store
 Thumbs.db
 .idea/

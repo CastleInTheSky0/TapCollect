@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   PANE_LAYOUT,
+  RUN_LOG_LAYOUT,
   defaultPaneWidths,
+  fitRunLogHeight,
   fitPaneWidths,
+  maxRunLogHeight,
+  resizeRunLogHeight,
   resizePaneWidths,
   workspaceWidthForPaneLayout
 } from './pane-layout'
@@ -49,5 +53,12 @@ describe('resizable pane layout', () => {
     expect(workspaceWidthForPaneLayout(1_180, resized, visibility)).toBeGreaterThanOrEqual(
       PANE_LAYOUT.workspaceMin
     )
+  })
+
+  it('resizes the bottom log upward while keeping it usable at the minimum window height', () => {
+    expect(resizeRunLogHeight(176, -120, 720)).toBe(296)
+    expect(resizeRunLogHeight(176, 500, 720)).toBe(RUN_LOG_LAYOUT.minHeight)
+    expect(maxRunLogHeight(720)).toBe(420)
+    expect(fitRunLogHeight(900, 720)).toBe(420)
   })
 })

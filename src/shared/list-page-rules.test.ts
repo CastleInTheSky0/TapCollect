@@ -49,6 +49,36 @@ describe('list page rules', () => {
     ])
   })
 
+  it('accepts one fixed URL for click pagination and validates its page limit', () => {
+    const analysis = analyzeListPageRules(['https://example.com/dynamic'], {
+      mode: 'click',
+      startPage: 1,
+      step: 0,
+      maxPages: 12
+    })
+
+    expect(analysis.errors).toEqual([])
+    expect(analysis.mode).toBe('click')
+    expect(analysis.rules).toEqual([
+      { kind: 'fixed', url: 'https://example.com/dynamic', lineNumber: 1 }
+    ])
+  })
+
+  it('rejects templates, multiple URLs, and an invalid limit in click pagination', () => {
+    const analysis = analyzeListPageRules(
+      ['https://example.com/dynamic', 'https://example.com/page_{page}.html'],
+      { mode: 'click', startPage: 1, step: 1, maxPages: 0 }
+    )
+
+    expect(analysis.errors).toEqual(
+      expect.arrayContaining([
+        '第 2 行在动态分页模式下不能包含 {page}',
+        '点击下一页模式只能配置一条固定列表 URL',
+        '动态分页最大采集页数必须在 1–500 之间'
+      ])
+    )
+  })
+
   it('rejects multiple templates, a zero step, and mixed hostnames', () => {
     const multipleTemplates = analyzeListPageRules(
       ['https://example.com/a_{page}.htm', 'https://example.com/b_{page}.htm'],

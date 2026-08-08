@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ExtractedRecord,
   RecordFailure,
+  ResourcePlan,
   RunCheckpoint,
   RunLog,
   RunProgress,
@@ -9,7 +10,11 @@ import type {
   TaskConfig,
   TestCollectionResult
 } from '@shared/types'
-import { createEmptyCounters, isTaskRunnable } from '@shared/defaults'
+import {
+  createEmptyCounters,
+  createEmptyResourceCounters,
+  isTaskRunnable
+} from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
 import { renderXmlBatch } from './xml-template'
 import {
@@ -17,12 +22,15 @@ import {
   createRecordFailure,
   extractDetailPage,
   extractListPage,
+  type ExtractListPageResult,
   type ListCandidate
 } from './extraction'
 import { HttpClient, HttpRequestError } from './http-client'
+import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
 import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
 import { missingRequiredMergeFields, resolveFieldValue } from './field-values'
 import { XmlOutputSession } from '@main/services/output-writer'
+import { ResourceDownloader } from '@main/services/resource-downloader'
 import type { TaskStore } from '@main/services/task-store'
 
 export interface CollectorEvents {
@@ -35,6 +43,11 @@ interface CandidateOutcome {
   failures: RecordFailure[]
   counter: 'success' | 'skipped' | 'failed'
   matchCounts: Record<string, number>
+}
+
+interface LoadedListPage {
+  html: string
+  finalUrl: string
 }
 
 const delay = async (milliseconds: number): Promise<void> => {
@@ -133,22 +146,60 @@ const resolveListOnlyDedupeValue = (task: TaskConfig, candidate: ListCandidate):
   return resolveFieldValue(mapping, field, candidateToRecord(candidate))
 }
 
+const compactLogValue = (value: string): string => {
+  const compact = value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact
+}
+
+const candidateTargetUrl = (
+  candidate: ListCandidate,
+  record: ExtractedRecord | null = null
+): string =>
+  record?.externalUrl ||
+  record?.detailUrl ||
+  candidate.externalUrl ||
+  candidate.detailRequestUrl ||
+  candidate.detailUrl ||
+  candidate.listUrl
+
+const describeCandidate = (
+  candidate: ListCandidate,
+  record: ExtractedRecord | null = null
+): string => {
+  const summary = Object.values(candidate.values).map(compactLogValue).find(Boolean) ?? ''
+  return [
+    `列表页 ${candidate.page}`,
+    `第 ${candidate.itemIndex} 条`,
+    summary,
+    candidateTargetUrl(candidate, record)
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+const describeFailure = (failure: RecordFailure): string => {
+  const position =
+    failure.itemIndex > 0
+      ? `列表页 ${failure.page} · 第 ${failure.itemIndex} 条`
+      : `列表页 ${failure.page}`
+  const stage = `${failure.stage}${failure.fieldPath ? `/${failure.fieldPath}` : ''}`
+  const retry = failure.retries > 0 ? ` · 已重试 ${failure.retries} 次` : ''
+  const targetUrl = failure.detailUrl || failure.listUrl
+  return `${position} · ${stage}：${failure.reason}${retry}${targetUrl ? ` · ${targetUrl}` : ''}`
+}
+
 export class CollectorEngine {
   constructor(
     private readonly store: TaskStore,
-    private readonly httpClient = new HttpClient()
+    private readonly httpClient = new HttpClient(),
+    private readonly dynamicPageProvider: DynamicPageProvider | null = null,
+    private readonly resourceDownloader = new ResourceDownloader(httpClient)
   ) {}
 
   async getDetailSamples(task: TaskConfig, limit = 20): Promise<string[]> {
     if (!task.detail.enabled || !task.detail.link.selector.trim()) return []
-    const listUrl = firstTaskListPageUrl(task)
-    if (!listUrl) return []
-    const response = await this.httpClient.fetchHtml(
-      listUrl,
-      task.request,
-      new URL(listUrl).hostname
-    )
-    if (response.kind !== 'success') return []
+    const response = await this.loadInitialListPage(task)
+    if (!response) return []
     const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
     return [
       ...new Set(
@@ -161,14 +212,8 @@ export class CollectorEngine {
 
   async testTask(task: TaskConfig): Promise<TestCollectionResult> {
     if (!task.xml) throw new Error('请先导入 XML 模板并配置记录节点')
-    const listUrl = firstTaskListPageUrl(task)
-    if (!listUrl) throw new Error('请先填写有效的列表页面 URL')
-    const response = await this.httpClient.fetchHtml(
-      listUrl,
-      task.request,
-      new URL(listUrl).hostname
-    )
-    if (response.kind !== 'success') throw new Error('测试列表页未返回可采集的 HTML')
+    const response = await this.loadInitialListPage(task)
+    if (!response) throw new Error('测试列表页未返回可采集的 HTML')
     const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
     const failures: RecordFailure[] = []
     const records: ExtractedRecord[] = []
@@ -203,6 +248,13 @@ export class CollectorEngine {
       }
       return row
     })
+    const resourcePlans = Array.from(
+      new Map(
+        records
+          .flatMap((record) => record.resources ?? [])
+          .map((plan) => [plan.normalizedUrl, plan] as const)
+      ).values()
+    )
     return {
       records,
       rows,
@@ -210,9 +262,13 @@ export class CollectorEngine {
       failures,
       listItemCount: page.itemCount,
       xmlPreview: records.length > 0 ? renderXmlBatch(task.xml, records) : '',
+      resourcePlans,
       messages: [
         `列表项匹配 ${page.itemCount} 条`,
         `测试生成 ${records.length} 条记录`,
+        ...(task.resources.download.enabled
+          ? [`预计下载 ${resourcePlans.length} 个站内资源（测试不会写入文件）`]
+          : []),
         failures.length > 0 ? `发现 ${failures.length} 个问题` : '必填字段检查通过'
       ]
     }
@@ -246,7 +302,9 @@ export class CollectorEngine {
       pendingRecords: [],
       outputFiles: [],
       errorLogPath: '',
-      counters: createEmptyCounters()
+      counters: createEmptyCounters(),
+      resources: createEmptyResourceCounters(),
+      processedResourceUrls: []
     }
     const freshRun = resumeCheckpoint === null
     const output = new XmlOutputSession(task, this.store, checkpoint.runStamp, checkpoint.errorLogPath)
@@ -274,6 +332,7 @@ export class CollectorEngine {
         currentFile: checkpoint.outputFiles.at(-1) ?? '',
         recordsInCurrentFile: checkpoint.pendingRecords.length,
         counters: { ...checkpoint.counters },
+        resources: { ...checkpoint.resources },
         message
       })
     }
@@ -295,7 +354,85 @@ export class CollectorEngine {
 
     const appendFailure = async (failure: RecordFailure): Promise<void> => {
       await output.appendFailure(failure)
-      emitLog('warning', `${failure.stage}${failure.fieldPath ? `/${failure.fieldPath}` : ''}：${failure.reason}`)
+      emitLog('warning', describeFailure(failure))
+    }
+
+    const processedResourceUrls = new Set(checkpoint.processedResourceUrls)
+    const resourceFailure = (
+      candidate: ListCandidate,
+      plan: ResourcePlan,
+      error: unknown
+    ): RecordFailure => ({
+      page: candidate.page,
+      itemIndex: candidate.itemIndex,
+      listUrl: candidate.listUrl,
+      detailUrl: plan.sourceUrl,
+      stage: 'resource-download',
+      fieldPath: '',
+      reason: [
+        `原始 URL：${plan.sourceUrl}`,
+        `本地目标：${plan.localPath}`,
+        `XML 目标：${plan.xmlUrl}`,
+        `失败原因：${error instanceof Error ? error.message : String(error)}`
+      ].join('；'),
+      retries: error instanceof HttpRequestError ? error.retries : 0,
+      time: new Date().toISOString()
+    })
+
+    const processRecordResources = async (
+      record: ExtractedRecord,
+      candidate: ListCandidate
+    ): Promise<void> => {
+      if (!task.resources.download.enabled || !record.resources?.length) return
+      const plans: ResourcePlan[] = []
+      for (const plan of record.resources) {
+        if (processedResourceUrls.has(plan.normalizedUrl)) {
+          emitLog('info', `资源已在本次运行处理，跳过重复引用：${plan.sourceUrl}`)
+          continue
+        }
+        processedResourceUrls.add(plan.normalizedUrl)
+        checkpoint.processedResourceUrls.push(plan.normalizedUrl)
+        plans.push(plan)
+      }
+
+      const results = await orderedConcurrentMap(plans, 3, async (plan) => {
+        currentUrl = plan.sourceUrl
+        emitProgress('running', 'resource', `正在处理资源：${plan.sourceUrl}`)
+        emitLog('info', `下载资源：${plan.sourceUrl} → ${plan.localPath}`)
+        try {
+          const result = await this.resourceDownloader.download(
+            plan,
+            task.request,
+            task.output.overwrite
+          )
+          return { plan, result, error: null as unknown }
+        } catch (error) {
+          return { plan, result: null, error }
+        }
+      })
+
+      for (const item of results) {
+        if (item.result?.kind === 'downloaded') {
+          checkpoint.resources.downloaded += 1
+          emitLog('success', `资源下载完成：${item.plan.sourceUrl} → ${item.plan.localPath}`)
+        } else if (item.result?.kind === 'skipped') {
+          checkpoint.resources.skipped += 1
+          emitLog('info', `资源已存在，按覆盖设置跳过：${item.plan.localPath}`)
+        } else {
+          checkpoint.resources.failed += 1
+          const failure = resourceFailure(candidate, item.plan, item.error)
+          try {
+            await output.appendFailure(failure)
+          } catch (error) {
+            emitLog(
+              'error',
+              `资源失败日志写入失败：${error instanceof Error ? error.message : String(error)}`
+            )
+          }
+          emitLog('error', describeFailure(failure))
+        }
+      }
+      control.setCheckpoint(checkpoint)
     }
 
     const flushFullBatches = async (): Promise<void> => {
@@ -322,13 +459,224 @@ export class CollectorEngine {
       emitLog('success', `已生成 ${path}`)
     }
 
+    const processExtractedPage = async (
+      extracted: ExtractListPageResult,
+      pageDescription: string
+    ): Promise<boolean> => {
+      emitLog('info', `${pageDescription}解析完成，共 ${extracted.itemCount} 条信息`)
+
+      const committedKeys = new Set(checkpoint.seenKeys)
+      const reservedKeys = new Set(checkpoint.seenKeys)
+      const work: Array<{ candidate: ListCandidate; key: string }> = []
+      let duplicateCount = 0
+
+      for (const candidate of extracted.candidates) {
+        let key = ''
+        if (task.detail.enabled) {
+          const link = candidate.externalUrl || candidate.detailUrl
+          if (link) key = normalizeUrl(link)
+        } else {
+          key = resolveListOnlyDedupeValue(task, candidate).trim()
+        }
+
+        if (!key) {
+          checkpoint.counters.skipped += 1
+          const reason = task.detail.enabled ? '没有有效的详情链接' : '去重字段没有值'
+          await appendFailure(createRecordFailure(candidate, 'list', reason, task.dedupeFieldPath))
+          continue
+        }
+        if (reservedKeys.has(key)) {
+          duplicateCount += 1
+          checkpoint.counters.duplicated += 1
+          emitLog('warning', `已跳过（重复）：${describeCandidate(candidate)}`)
+          continue
+        }
+        reservedKeys.add(key)
+
+        if (candidate.missingListFields.length > 0) {
+          committedKeys.add(key)
+          checkpoint.seenKeys.push(key)
+          checkpoint.counters.skipped += 1
+          for (const failure of missingFailures(candidate, 'list-field', candidate.missingListFields)) {
+            await appendFailure(failure)
+          }
+          continue
+        }
+        work.push({ candidate, key })
+      }
+
+      const outcomes = await orderedConcurrentMap(
+        work,
+        task.request.detailConcurrency,
+        async ({ candidate }) => {
+          emitLog(
+            'info',
+            `${candidate.externalUrl ? '正在记录站外链接' : task.detail.enabled ? '正在采集详情' : '正在处理'}：${describeCandidate(candidate)}`
+          )
+          if (task.detail.enabled && candidate.detailRequestUrl) await delay(task.request.delayMs)
+          return this.processCandidate(task, candidate, control)
+        }
+      )
+
+      for (const [index, outcome] of outcomes.entries()) {
+        const completedWork = work[index]
+        let completedKey = completedWork?.key ?? ''
+        if (task.detail.enabled && outcome.record) {
+          const finalLink = outcome.record.externalUrl || outcome.record.detailUrl
+          if (finalLink) completedKey = normalizeUrl(finalLink)
+        }
+        if (completedKey && committedKeys.has(completedKey)) {
+          duplicateCount += 1
+          checkpoint.counters.duplicated += 1
+          if (completedWork) {
+            emitLog(
+              'warning',
+              `已跳过（重复）：${describeCandidate(completedWork.candidate, outcome.record)}`
+            )
+          }
+          continue
+        }
+        if (completedKey) {
+          committedKeys.add(completedKey)
+          checkpoint.seenKeys.push(completedKey)
+        }
+        for (const failure of outcome.failures) await appendFailure(failure)
+        if (outcome.counter === 'failed') checkpoint.counters.failed += 1
+        if (outcome.counter === 'skipped') checkpoint.counters.skipped += 1
+        if (outcome.record) {
+          if (completedWork) {
+            await processRecordResources(outcome.record, completedWork.candidate)
+          }
+          checkpoint.pendingRecords.push(outcome.record)
+          checkpoint.counters.succeeded += 1
+          if (completedWork) {
+            emitLog(
+              'success',
+              `采集成功：${describeCandidate(completedWork.candidate, outcome.record)}`
+            )
+          }
+          await flushFullBatches()
+        }
+      }
+
+      checkpoint.nextSequence += extracted.itemCount
+      checkpoint.counters.discovered += extracted.itemCount
+      return duplicateCount === extracted.itemCount
+    }
+
     emitProgress('running', 'preparing', freshRun ? '开始新任务' : '从检查点继续任务')
     emitLog(
       'info',
-      freshRun ? '开始采集' : `从第 ${checkpoint.nextRuleIndex + 1} 条列表地址规则继续采集`
+      freshRun
+        ? '开始采集'
+        : task.pagination.mode === 'click'
+          ? `从动态列表第 ${checkpoint.pagesVisited + 1} 页继续采集`
+          : `从第 ${checkpoint.nextRuleIndex + 1} 条列表地址规则继续采集`
     )
 
     try {
+      if (task.pagination.mode === 'click') {
+        if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持动态分页')
+        currentUrl = listPages.firstUrl
+        if (checkpoint.pagesVisited >= task.pagination.maxPages) {
+          checkpoint.nextRuleIndex = 1
+          terminalMessage = `动态分页已达到最大采集页数 ${task.pagination.maxPages}`
+          control.setCheckpoint(checkpoint)
+          await this.store.saveCheckpoint(checkpoint)
+        } else if (checkpoint.nextRuleIndex < 1) {
+          const session = await this.dynamicPageProvider.create(task)
+          try {
+            let snapshot: DynamicPageSnapshot = await session.current()
+            if (checkpoint.pagesVisited > 0) {
+              emitLog(
+                'info',
+                `正在从初始页快进 ${checkpoint.pagesVisited} 次，以恢复动态分页检查点`
+              )
+            }
+            for (let index = 0; index < checkpoint.pagesVisited; index += 1) {
+              if (!(await synchronize())) break
+              if (task.request.delayMs > 0) await delay(task.request.delayMs)
+              const advanced = await session.advance()
+              if (advanced.kind === 'end') {
+                throw new Error(`无法恢复动态分页检查点：${advanced.reason}`)
+              }
+              snapshot = advanced.snapshot
+              emitLog('info', `动态分页检查点快进到第 ${index + 2} 页`)
+            }
+
+            while (
+              !control.isCancelled() &&
+              checkpoint.nextRuleIndex < 1 &&
+              checkpoint.pagesVisited < task.pagination.maxPages
+            ) {
+              if (!(await synchronize())) break
+              currentPageOrdinal = checkpoint.pagesVisited + 1
+              currentUrl = snapshot.url
+              const pageDescription = `第 ${currentPageOrdinal} 个动态列表页`
+              emitProgress('running', 'list', `正在采集${pageDescription}`)
+              emitLog('info', `读取动态列表页：${currentUrl}`)
+
+              const extracted = extractListPage(
+                task,
+                snapshot.html,
+                snapshot.url,
+                currentPageOrdinal,
+                checkpoint.nextSequence
+              )
+              const dynamicPageKey = `dynamic:${currentPageOrdinal}:${normalizeUrl(listPages.firstUrl)}`
+              if (extracted.itemCount === 0) {
+                checkpoint.seenPageUrls.push(dynamicPageKey)
+                checkpoint.pagesVisited += 1
+                checkpoint.nextRuleIndex = 1
+                terminalMessage = '当前动态页没有列表项，结束分页'
+                emitLog('info', terminalMessage)
+                control.setCheckpoint(checkpoint)
+                await this.store.saveCheckpoint(checkpoint)
+                break
+              }
+
+              const pageWasDuplicate = await processExtractedPage(extracted, pageDescription)
+              checkpoint.seenPageUrls.push(dynamicPageKey)
+              checkpoint.pagesVisited += 1
+              control.setCheckpoint(checkpoint)
+              await this.store.saveCheckpoint(checkpoint)
+              emitProgress('running', 'list', `${pageDescription}处理完成`)
+
+              if (pageWasDuplicate) {
+                checkpoint.nextRuleIndex = 1
+                terminalMessage = '当前动态页全部为本次任务已见记录，结束分页'
+                emitLog('info', terminalMessage)
+                control.setCheckpoint(checkpoint)
+                await this.store.saveCheckpoint(checkpoint)
+                break
+              }
+              if (checkpoint.pagesVisited >= task.pagination.maxPages) {
+                checkpoint.nextRuleIndex = 1
+                terminalMessage = `动态分页已达到最大采集页数 ${task.pagination.maxPages}`
+                emitLog('info', terminalMessage)
+                control.setCheckpoint(checkpoint)
+                await this.store.saveCheckpoint(checkpoint)
+                break
+              }
+
+              if (task.request.delayMs > 0) await delay(task.request.delayMs)
+              const advanced = await session.advance()
+              if (advanced.kind === 'end') {
+                checkpoint.nextRuleIndex = 1
+                terminalMessage = advanced.reason
+                emitLog('info', terminalMessage)
+                control.setCheckpoint(checkpoint)
+                await this.store.saveCheckpoint(checkpoint)
+                break
+              }
+              snapshot = advanced.snapshot
+              terminalMessage = '采集完成'
+            }
+          } finally {
+            await session.close()
+          }
+        }
+      } else {
       while (checkpoint.nextRuleIndex < pageRules.length) {
         if (!(await synchronize())) break
         const rule = pageRules[checkpoint.nextRuleIndex]
@@ -406,88 +754,11 @@ export class CollectorEngine {
           await this.store.saveCheckpoint(checkpoint)
           continue
         }
-
-        const committedKeys = new Set(checkpoint.seenKeys)
-        const reservedKeys = new Set(checkpoint.seenKeys)
-        const work: Array<{ candidate: ListCandidate; key: string }> = []
-        let duplicateCount = 0
-
-        for (const candidate of extracted.candidates) {
-          let key = ''
-          if (task.detail.enabled) {
-            const link = candidate.externalUrl || candidate.detailUrl
-            if (link) key = normalizeUrl(link)
-          } else {
-            key = resolveListOnlyDedupeValue(task, candidate).trim()
-          }
-
-          if (!key) {
-            checkpoint.counters.skipped += 1
-            const reason = task.detail.enabled ? '没有有效的详情链接' : '去重字段没有值'
-            await appendFailure(createRecordFailure(candidate, 'list', reason, task.dedupeFieldPath))
-            continue
-          }
-          if (reservedKeys.has(key)) {
-            duplicateCount += 1
-            checkpoint.counters.duplicated += 1
-            continue
-          }
-          reservedKeys.add(key)
-
-          if (candidate.missingListFields.length > 0) {
-            committedKeys.add(key)
-            checkpoint.seenKeys.push(key)
-            checkpoint.counters.skipped += 1
-            for (const failure of missingFailures(candidate, 'list-field', candidate.missingListFields)) {
-              await appendFailure(failure)
-            }
-            continue
-          }
-          work.push({ candidate, key })
-        }
-
-        const outcomes = await orderedConcurrentMap(
-          work,
-          task.request.detailConcurrency,
-          async ({ candidate }) => {
-            if (task.detail.enabled && candidate.detailRequestUrl) await delay(task.request.delayMs)
-            return this.processCandidate(task, candidate, control)
-          }
-        )
-
-        for (const [index, outcome] of outcomes.entries()) {
-          const completedWork = work[index]
-          let completedKey = completedWork?.key ?? ''
-          if (task.detail.enabled && outcome.record) {
-            const finalLink = outcome.record.externalUrl || outcome.record.detailUrl
-            if (finalLink) completedKey = normalizeUrl(finalLink)
-          }
-          if (completedKey && committedKeys.has(completedKey)) {
-            duplicateCount += 1
-            checkpoint.counters.duplicated += 1
-            continue
-          }
-          if (completedKey) {
-            committedKeys.add(completedKey)
-            checkpoint.seenKeys.push(completedKey)
-          }
-          for (const failure of outcome.failures) await appendFailure(failure)
-          if (outcome.counter === 'failed') checkpoint.counters.failed += 1
-          if (outcome.counter === 'skipped') checkpoint.counters.skipped += 1
-          if (outcome.record) {
-            checkpoint.pendingRecords.push(outcome.record)
-            checkpoint.counters.succeeded += 1
-            await flushFullBatches()
-          }
-        }
+        const pageWasDuplicate = await processExtractedPage(extracted, pageDescription)
 
         checkpoint.seenPageUrls.push(normalizedPageUrl)
         checkpoint.pagesVisited += 1
         if (rule.kind === 'template') checkpoint.templatePagesVisited += 1
-        checkpoint.nextSequence += extracted.itemCount
-        checkpoint.counters.discovered += extracted.itemCount
-
-        const pageWasDuplicate = duplicateCount === extracted.itemCount
         if (rule.kind === 'template') {
           if (pageWasDuplicate) {
             checkpoint.nextRuleIndex += 1
@@ -510,6 +781,7 @@ export class CollectorEngine {
         } else {
           terminalMessage = '采集完成'
         }
+      }
       }
 
       if (control.isCancelled()) {
@@ -548,6 +820,30 @@ export class CollectorEngine {
       emitLog('error', `任务失败：${message}`)
       return this.buildResult(checkpoint, 'failed', message)
     }
+  }
+
+  private async loadInitialListPage(task: TaskConfig): Promise<LoadedListPage | null> {
+    const listUrl = firstTaskListPageUrl(task)
+    if (!listUrl) return null
+    if (task.pagination.mode === 'click') {
+      if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持动态分页')
+      const session = await this.dynamicPageProvider.create(task)
+      try {
+        const snapshot = await session.current()
+        return { html: snapshot.html, finalUrl: snapshot.url }
+      } finally {
+        await session.close()
+      }
+    }
+
+    const response = await this.httpClient.fetchHtml(
+      listUrl,
+      task.request,
+      new URL(listUrl).hostname
+    )
+    return response.kind === 'success'
+      ? { html: response.html, finalUrl: response.finalUrl }
+      : null
   }
 
   private async processCandidate(
@@ -669,6 +965,7 @@ export class CollectorEngine {
       outputFiles: [...checkpoint.outputFiles],
       errorLogPath: checkpoint.errorLogPath,
       counters: { ...checkpoint.counters },
+      resources: { ...checkpoint.resources },
       message
     }
   }

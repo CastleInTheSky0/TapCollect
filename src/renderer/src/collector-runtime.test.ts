@@ -12,6 +12,7 @@ describe('collector renderer runtime', () => {
       hasCollectorRuntime({
         getSettings: async () => ({}),
         listTasks: async () => [],
+        chooseResourceDirectory: async () => '',
         onRunProgress: () => () => undefined,
         onRunLog: () => () => undefined,
         onRunFinished: () => () => undefined

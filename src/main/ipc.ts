@@ -52,6 +52,13 @@ export const registerIpcHandlers = (
     })
     return result.canceled ? '' : (result.filePaths[0] ?? '')
   })
+  ipcMain.handle(IPC_CHANNELS.chooseResourceDirectory, async () => {
+    const result = await dialog.showOpenDialog(window, {
+      title: '选择资源存放根目录',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return result.canceled ? '' : (result.filePaths[0] ?? '')
+  })
   ipcMain.handle(IPC_CHANNELS.importXmlTemplate, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: '导入 XML 模板',

@@ -52,4 +52,25 @@ describe('HTTP client', () => {
       expect(result.html).toContain('完成')
     }
   })
+
+  it('returns an unbuffered resource response after retrying a server error', async () => {
+    const responses = [
+      new Response(null, { status: 503 }),
+      new Response('binary-content', { status: 200 })
+    ]
+    const fakeFetch = (async () => responses.shift()!) as typeof fetch
+    const client = new HttpClient(fakeFetch)
+    const task = createTask('resource-task')
+    const result = await client.fetchResource(
+      'https://www.example.com/files/a.bin',
+      task.request,
+      'www.example.com'
+    )
+
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.retries).toBe(1)
+      await expect(result.response.text()).resolves.toBe('binary-content')
+    }
+  })
 })

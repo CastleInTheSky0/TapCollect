@@ -19,11 +19,34 @@ export const PANE_LAYOUT = {
   previewMax: 900
 } as const
 
+export const RUN_LOG_LAYOUT = {
+  defaultHeight: 176,
+  minHeight: 104,
+  maxHeight: 480,
+  viewportReserve: 300,
+  keyboardStep: 24
+} as const
+
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(Math.max(value, minimum), Math.max(minimum, maximum))
 
 const availableForSidePanes = (viewportWidth: number): number =>
   Math.max(0, viewportWidth - PANE_LAYOUT.dividerSize * 2 - PANE_LAYOUT.workspaceMin)
+
+export const maxRunLogHeight = (viewportHeight: number): number =>
+  Math.max(
+    RUN_LOG_LAYOUT.minHeight,
+    Math.min(RUN_LOG_LAYOUT.maxHeight, viewportHeight - RUN_LOG_LAYOUT.viewportReserve)
+  )
+
+export const fitRunLogHeight = (height: number, viewportHeight: number): number =>
+  Math.round(clamp(height, RUN_LOG_LAYOUT.minHeight, maxRunLogHeight(viewportHeight)))
+
+export const resizeRunLogHeight = (
+  startHeight: number,
+  pointerDeltaY: number,
+  viewportHeight: number
+): number => fitRunLogHeight(startHeight - pointerDeltaY, viewportHeight)
 
 export const defaultPaneWidths = (viewportWidth: number): PaneWidths =>
   fitPaneWidths(

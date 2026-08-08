@@ -1,10 +1,11 @@
-import type { PaginationConfig, TaskConfig } from './types'
+import type { PaginationConfig, PaginationMode, TaskConfig } from './types'
 
 export type ListPageRule =
   | { kind: 'fixed'; url: string; lineNumber: number }
   | { kind: 'template'; template: string; lineNumber: number }
 
 export interface ListPageRuleAnalysis {
+  mode: PaginationMode
   lines: string[]
   rules: ListPageRule[]
   errors: string[]
@@ -47,8 +48,10 @@ export const buildPageUrl = (template: string, page: number): string => {
 
 export const analyzeListPageRules = (
   lines: string[],
-  pagination: Pick<PaginationConfig, 'startPage' | 'step' | 'maxPages'>
+  pagination: Pick<PaginationConfig, 'startPage' | 'step' | 'maxPages'> &
+    Partial<Pick<PaginationConfig, 'mode'>>
 ): ListPageRuleAnalysis => {
+  const mode = pagination.mode ?? 'url'
   const normalizedLines = normalizeListPageRuleLines(lines)
   const errors: string[] = []
   const rules: ListPageRule[] = []
@@ -58,6 +61,10 @@ export const analyzeListPageRules = (
   normalizedLines.forEach((line, index) => {
     const lineNumber = index + 1
     const markers = markerCount(line)
+    if (mode === 'click' && markers > 0) {
+      errors.push(`第 ${lineNumber} 行在动态分页模式下不能包含 {page}`)
+      return
+    }
     if (markers > 1) {
       errors.push(`第 ${lineNumber} 行只能包含一个 {page}`)
       return
@@ -94,7 +101,18 @@ export const analyzeListPageRules = (
   })
 
   if (normalizedLines.length === 0) errors.push('请至少填写一个列表页面 URL')
-  if (templateRule) {
+  if (mode === 'click' && normalizedLines.length > 1) {
+    errors.push('点击下一页模式只能配置一条固定列表 URL')
+  }
+  if (mode === 'click') {
+    if (
+      !Number.isInteger(pagination.maxPages) ||
+      pagination.maxPages < 1 ||
+      pagination.maxPages > 500
+    ) {
+      errors.push('动态分页最大采集页数必须在 1–500 之间')
+    }
+  } else if (templateRule) {
     if (!Number.isInteger(pagination.startPage)) errors.push('分页起始值必须是整数')
     if (!Number.isInteger(pagination.step) || pagination.step === 0) {
       errors.push('分页步长必须是非零整数')
@@ -117,6 +135,7 @@ export const analyzeListPageRules = (
         : ''
 
   return {
+    mode,
     lines: normalizedLines,
     rules,
     errors,
@@ -128,6 +147,7 @@ export const analyzeListPageRules = (
 
 export const analyzeTaskListPageRules = (task: TaskListPageSource): ListPageRuleAnalysis =>
   analyzeListPageRules(taskListPageRuleLines(task), {
+    mode: task.pagination.mode ?? 'url',
     startPage: task.pagination.startPage,
     step: task.pagination.step ?? 1,
     maxPages: task.pagination.maxPages

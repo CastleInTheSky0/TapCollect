@@ -1,13 +1,14 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { app, net } from 'electron'
+import { app, BrowserWindow, net } from 'electron'
 import type { TaskConfig } from '@shared/types'
 import { analyzeTaskListPageRules } from '@shared/list-page-rules'
 import { CollectorEngine, CollectorRunControl } from '@main/core/collector-engine'
 import { HttpClient } from '@main/core/http-client'
 import { validateXmlOutput } from '@main/core/xml-template'
 import { TaskStore } from '@main/services/task-store'
+import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
 
 const taskConfigPath = (): string => {
   const configuredPath = process.argv[2] || process.env.TAPCOLLECT_SMOKE_TASK
@@ -29,9 +30,14 @@ const loadSmokeTask = async (path: string, temporaryRoot: string): Promise<TaskC
   task.listUrl = firstUrl
   task.listPageRules = [firstUrl]
   task.pagination.urlTemplate = ''
-  task.pagination.startPage = 1
-  task.pagination.step = 1
-  task.pagination.maxPages = 1
+  if (task.pagination.mode === 'click') {
+    task.pagination.maxPages = 2
+  } else {
+    task.pagination.mode = 'url'
+    task.pagination.startPage = 1
+    task.pagination.step = 1
+    task.pagination.maxPages = 1
+  }
   task.request.delayMs = 0
   task.output.rootDirectory = join(temporaryRoot, 'output')
   task.output.recordsPerFile = Math.min(3, Math.max(1, task.output.recordsPerFile))
@@ -42,10 +48,25 @@ const loadSmokeTask = async (path: string, temporaryRoot: string): Promise<TaskC
 const run = async (): Promise<void> => {
   const sourcePath = taskConfigPath()
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'tapcollect-live-smoke-'))
+  let hostWindow: BrowserWindow | null = null
   try {
     const store = new TaskStore(join(temporaryRoot, 'data'))
     const task = await store.saveTask(await loadSmokeTask(sourcePath, temporaryRoot))
-    const engine = new CollectorEngine(store, new HttpClient(net.fetch as typeof fetch))
+    if (task.pagination.mode === 'click') {
+      hostWindow = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true
+        }
+      })
+    }
+    const engine = new CollectorEngine(
+      store,
+      new HttpClient(net.fetch as typeof fetch),
+      hostWindow ? new ElectronDynamicPageProvider(hostWindow) : null
+    )
     const tested = await engine.testTask(task)
     if (tested.listItemCount === 0 || tested.records.length === 0) {
       throw new Error('本地任务未采集到列表或详情记录')
@@ -59,6 +80,14 @@ const run = async (): Promise<void> => {
     if (result.status !== 'completed' || result.outputFiles.length === 0) {
       throw new Error(`本地任务正式采集失败：${result.message}`)
     }
+    if (
+      task.pagination.mode === 'click' &&
+      (result.pagesVisited < 2 || result.counters.succeeded <= tested.listItemCount)
+    ) {
+      throw new Error(
+        `动态分页未采集到第二页新数据：pages=${result.pagesVisited}, records=${result.counters.succeeded}`
+      )
+    }
 
     for (const outputFile of result.outputFiles) {
       validateXmlOutput(await readFile(outputFile, 'utf8'))
@@ -70,6 +99,7 @@ const run = async (): Promise<void> => {
           sourceTask: basename(sourcePath),
           listItems: tested.listItemCount,
           testedRecords: tested.records.length,
+          pagesVisited: result.pagesVisited,
           outputRecords: result.counters.succeeded,
           outputFiles: result.outputFiles.length,
           xmlEncoding: task.xml?.encoding ?? ''
@@ -79,6 +109,7 @@ const run = async (): Promise<void> => {
       )}\n`
     )
   } finally {
+    hostWindow?.destroy()
     await rm(temporaryRoot, { recursive: true, force: true })
   }
 }

@@ -3,6 +3,7 @@ import type { CollectorApi } from '@shared/types'
 export const COLLECTOR_RUNTIME_METHODS = [
   'getSettings',
   'listTasks',
+  'chooseResourceDirectory',
   'onRunProgress',
   'onRunLog',
   'onRunFinished'

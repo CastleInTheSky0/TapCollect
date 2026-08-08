@@ -60,7 +60,7 @@ export class PreviewService {
     if (!this.view) throw new Error('网页预览尚未打开')
     const payload = JSON.stringify(request)
     return this.view.webContents.executeJavaScript(`
-      (() => new Promise((resolve) => {
+      (() => new Promise((resolve, reject) => {
         const request = ${payload};
         const marker = '__collectorHighlightedElements';
         const clearHighlights = () => {
@@ -93,14 +93,23 @@ export class PreviewService {
           window[marker] = entries;
         };
         const cleanup = () => {
-          document.removeEventListener('mousemove', move, true);
-          document.removeEventListener('click', click, true);
-          document.removeEventListener('keydown', keydown, true);
+          window.removeEventListener('mousemove', move, true);
+          window.removeEventListener('click', click, true);
+          window.removeEventListener('keydown', keydown, true);
           overlay.remove();
         };
+        const eventElement = (event) => {
+          const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+          return path.find((entry) => entry instanceof Element && entry !== overlay) || null;
+        };
+        const fail = (error) => {
+          cleanup();
+          const message = error instanceof Error ? error.message : String(error);
+          reject(new Error(message || '无法识别点选节点'));
+        };
         const move = (event) => {
-          const target = event.target;
-          if (!(target instanceof Element) || target === overlay) return;
+          const target = eventElement(event);
+          if (!target) return;
           const rect = target.getBoundingClientRect();
           Object.assign(overlay.style, {
             display: 'block', left: rect.left + 'px', top: rect.top + 'px',
@@ -109,30 +118,39 @@ export class PreviewService {
         };
         const click = (event) => {
           event.preventDefault();
-          event.stopPropagation();
-          const target = event.target;
-          if (!(target instanceof Element)) return;
-          const selection = (${previewSelectionResolverSource})(target, request.scopeSelector);
-          const selector = selection.selector;
-          const matches = selection.matches;
-          cleanup();
-          highlight(matches);
-          resolve({
-            cancelled: false,
-            selector,
-            selectorType: 'css',
-            matchCount: matches.length,
-            sample: (target.textContent || '').trim().slice(0, 160)
-          });
+          event.stopImmediatePropagation();
+          const target = eventElement(event);
+          if (!target) {
+            fail(new Error('无法识别点选节点，请点击列表文字或列表区域后重试'));
+            return;
+          }
+          try {
+            const selection = (${previewSelectionResolverSource})(target, request.scopeSelector);
+            const selector = selection.selector;
+            const matches = selection.matches;
+            cleanup();
+            highlight(matches);
+            resolve({
+              cancelled: false,
+              selector,
+              selectorType: 'css',
+              matchCount: matches.length,
+              sample: (target.textContent || '').trim().slice(0, 160)
+            });
+          } catch (error) {
+            fail(error);
+          }
         };
         const keydown = (event) => {
           if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
           cleanup();
           resolve({ cancelled: true, selector: '', selectorType: 'css', matchCount: 0, sample: '' });
         };
-        document.addEventListener('mousemove', move, true);
-        document.addEventListener('click', click, true);
-        document.addEventListener('keydown', keydown, true);
+        window.addEventListener('mousemove', move, true);
+        window.addEventListener('click', click, true);
+        window.addEventListener('keydown', keydown, true);
       }))()
     `, true) as Promise<PreviewPickResult>
   }

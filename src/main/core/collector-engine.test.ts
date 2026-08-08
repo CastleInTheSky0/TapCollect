@@ -1,13 +1,19 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createEmptyCounters, createTask } from '@shared/defaults'
+import {
+  createEmptyCounters,
+  createEmptyResourceCounters,
+  createTask
+} from '@shared/defaults'
 import { configureXmlRecord } from './xml-template'
 import type { FetchHtmlResult, HttpClient } from './http-client'
+import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
 import { CollectorEngine, CollectorRunControl } from './collector-engine'
 import { TaskStore } from '@main/services/task-store'
 import { readOutputXml } from '@main/services/output-writer'
+import type { ResourceDownloader } from '@main/services/resource-downloader'
 import type { RunCheckpoint, TaskConfig } from '@shared/types'
 
 const temporaryDirectories: string[] = []
@@ -31,6 +37,66 @@ const createListOnlyTask = (id: string, root: string): TaskConfig => {
   task.dedupeFieldPath = 'title'
   return task
 }
+
+const createResourceTask = (id: string, root: string): TaskConfig => {
+  const task = createTask(id)
+  task.name = '资源下载测试'
+  task.listPageRules = ['https://example.com/list']
+  task.listUrl = task.listPageRules[0]!
+  task.listItem.selector = '.item'
+  task.detail.enabled = false
+  task.request.delayMs = 0
+  task.output.rootDirectory = join(root, 'exports')
+  task.resources.download.enabled = true
+  task.resources.download.rootDirectory = join(root, 'resources')
+  task.resources.download.urlPrefix = '/resources'
+  task.xml = configureXmlRecord(
+    '<book><article><title/><text><![CDATA[]]></text></article></book>',
+    'template.xml',
+    '/book/article'
+  )
+  const title = task.xml.mappings.find((mapping) => mapping.fieldPath === 'title')!
+  title.mode = 'page'
+  title.pageSource = 'list'
+  title.selector = '.title'
+  const text = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
+  text.mode = 'page'
+  text.pageSource = 'list'
+  text.selector = '.body'
+  text.extraction = 'html'
+  task.dedupeFieldPath = 'title'
+  return task
+}
+
+const createDynamicProvider = (
+  snapshots: DynamicPageSnapshot[],
+  endReason = '页面中找不到下一页按钮'
+): {
+  provider: DynamicPageProvider
+  create: ReturnType<typeof vi.fn>
+  current: ReturnType<typeof vi.fn>
+  advance: ReturnType<typeof vi.fn>
+  close: ReturnType<typeof vi.fn>
+} => {
+  let index = 0
+  const current = vi.fn(async () => snapshots[index]!)
+  const advance = vi.fn(async () => {
+    const next = snapshots[index + 1]
+    if (!next) return { kind: 'end' as const, reason: endReason }
+    index += 1
+    return { kind: 'page' as const, snapshot: next }
+  })
+  const close = vi.fn(async () => undefined)
+  const create = vi.fn(async () => ({ current, advance, close }))
+  return { provider: { create }, create, current, advance, close }
+}
+
+const dynamicSnapshot = (page: number, title: string): DynamicPageSnapshot => ({
+  html: `<main><div class="item"><span class="title">${title}</span></div></main>`,
+  url: `https://example.com/dynamic#page-${page}`,
+  itemCount: 1,
+  signature: `page-${page}`
+})
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })))
@@ -94,9 +160,10 @@ describe('CollectorEngine', () => {
     const client = { fetchHtml } as unknown as HttpClient
     const store = new TaskStore(join(root, 'data'))
     const engine = new CollectorEngine(store, client)
+    const logMessages: string[] = []
     const result = await engine.run(task, null, new CollectorRunControl(), {
       progress: () => undefined,
-      log: () => undefined
+      log: (log) => logMessages.push(log.message)
     })
 
     expect(result.status).toBe('completed')
@@ -106,6 +173,17 @@ describe('CollectorEngine', () => {
     expect(first.indexOf('标题1')).toBeLessThan(first.indexOf('标题2'))
     expect(first).not.toContain('标题3')
     expect(second).toContain('标题3')
+    expect(logMessages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('解析完成，共 3 条信息'),
+        expect.stringContaining(
+          '正在采集详情：列表页 1 · 第 1 条 · 标题1 · https://www.example.com/detail/1'
+        ),
+        expect.stringContaining(
+          '采集成功：列表页 1 · 第 3 条 · 标题3 · https://www.example.com/detail/3'
+        )
+      ])
+    )
     await expect(store.getCheckpoint(task.id)).resolves.toBeNull()
   })
 
@@ -497,7 +575,9 @@ describe('CollectorEngine', () => {
       pendingRecords: [],
       outputFiles: [],
       errorLogPath: '',
-      counters: createEmptyCounters()
+      counters: createEmptyCounters(),
+      resources: createEmptyResourceCounters(),
+      processedResourceUrls: []
     }
     const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
       kind: 'success',
@@ -521,5 +601,238 @@ describe('CollectorEngine', () => {
       'https://example.com/list_98.htm',
       'https://example.com/after.htm'
     ])
+  })
+
+  it('collects rendered DOM pages until the dynamic next action ends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-dynamic-pages-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-dynamic-pages', root)
+    task.listPageRules = ['https://example.com/dynamic']
+    task.pagination.mode = 'click'
+    task.pagination.maxPages = 10
+    task.pagination.nextButton.selector = '.next'
+    const dynamic = createDynamicProvider([
+      dynamicSnapshot(1, '动态记录1'),
+      dynamicSnapshot(2, '动态记录2')
+    ])
+    const fetchHtml = vi.fn()
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      dynamic.provider
+    )
+    const logs: string[] = []
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: (entry) => logs.push(entry.message)
+    })
+    const output = await readOutputXml(result.outputFiles[0]!, 'utf-8')
+
+    expect(result.status).toBe('completed')
+    expect(result.pagesVisited).toBe(2)
+    expect(result.counters.succeeded).toBe(2)
+    expect(output.indexOf('动态记录1')).toBeLessThan(output.indexOf('动态记录2'))
+    expect(dynamic.advance).toHaveBeenCalledTimes(2)
+    expect(dynamic.close).toHaveBeenCalledOnce()
+    expect(fetchHtml).not.toHaveBeenCalled()
+    expect(logs).toContain('页面中找不到下一页按钮')
+  })
+
+  it('counts the initial dynamic page in the maximum page limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-dynamic-limit-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-dynamic-limit', root)
+    task.listPageRules = ['https://example.com/dynamic']
+    task.pagination.mode = 'click'
+    task.pagination.maxPages = 2
+    task.pagination.nextButton.selector = '.next'
+    const dynamic = createDynamicProvider([
+      dynamicSnapshot(1, '记录1'),
+      dynamicSnapshot(2, '记录2'),
+      dynamicSnapshot(3, '记录3')
+    ])
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml: vi.fn() } as unknown as HttpClient,
+      dynamic.provider
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+
+    expect(result.pagesVisited).toBe(2)
+    expect(result.counters.succeeded).toBe(2)
+    expect(dynamic.advance).toHaveBeenCalledOnce()
+    expect(result.message).toBe('动态分页已达到最大采集页数 2')
+  })
+
+  it('fast-forwards rendered pages when resuming a dynamic checkpoint', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-dynamic-resume-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-dynamic-resume', root)
+    task.listPageRules = ['https://example.com/dynamic']
+    task.pagination.mode = 'click'
+    task.pagination.maxPages = 2
+    task.pagination.nextButton.selector = '.next'
+    const checkpoint: RunCheckpoint = {
+      version: 1,
+      taskId: task.id,
+      runId: 'dynamic-resume-run',
+      startedAt: '2026-08-07T00:00:00.000Z',
+      runStamp: '20260807_080000',
+      nextRuleIndex: 0,
+      nextPage: 1,
+      templatePagesVisited: 0,
+      nextSequence: 1,
+      nextFileIndex: 1,
+      pagesVisited: 1,
+      seenPageUrls: ['dynamic:1:https://example.com/dynamic'],
+      seenKeys: ['动态记录1'],
+      pendingRecords: [],
+      outputFiles: [],
+      errorLogPath: '',
+      counters: {
+        ...createEmptyCounters(),
+        discovered: 1,
+        succeeded: 1
+      },
+      resources: createEmptyResourceCounters(),
+      processedResourceUrls: []
+    }
+    const dynamic = createDynamicProvider([
+      dynamicSnapshot(1, '动态记录1'),
+      dynamicSnapshot(2, '动态记录2')
+    ])
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml: vi.fn() } as unknown as HttpClient,
+      dynamic.provider
+    )
+
+    const result = await engine.run(task, checkpoint, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.pagesVisited).toBe(2)
+    expect(result.counters.succeeded).toBe(2)
+    expect(dynamic.advance).toHaveBeenCalledOnce()
+  })
+
+  it('previews resource plans during test collection without downloading or creating directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-preview-'))
+    temporaryDirectories.push(root)
+    const task = createResourceTask('task-resource-preview', root)
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html:
+        '<div class="item"><span class="title">记录1</span>' +
+        '<div class="body"><img src="/images/preview.jpg"></div></div>',
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const download = vi.fn()
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      null,
+      { download } as unknown as ResourceDownloader
+    )
+
+    const result = await engine.testTask(task)
+
+    expect(result.records).toHaveLength(1)
+    expect(result.resourcePlans).toHaveLength(1)
+    expect(result.resourcePlans[0]?.xmlUrl).toBe('/resources/images/preview.jpg')
+    expect(download).not.toHaveBeenCalled()
+    await expect(stat(task.resources.download.rootDirectory)).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+  })
+
+  it('downloads the same planned resource only once across multiple records', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-dedupe-'))
+    temporaryDirectories.push(root)
+    const task = createResourceTask('task-resource-dedupe', root)
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html:
+        '<div class="item"><span class="title">记录1</span><div class="body"><img src="/images/shared.jpg"></div></div>' +
+        '<div class="item"><span class="title">记录2</span><div class="body"><img src="/images/shared.jpg"></div></div>',
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const download = vi.fn(async (plan: { localPath: string }) => ({
+      kind: 'downloaded' as const,
+      path: plan.localPath,
+      retries: 0
+    }))
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      null,
+      { download } as unknown as ResourceDownloader
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.resources).toEqual({ downloaded: 1, skipped: 0, failed: 0 })
+    expect(download).toHaveBeenCalledOnce()
+    const xml = await readOutputXml(result.outputFiles[0]!, task.xml!.encoding)
+    expect(xml.match(/\/resources\/images\/shared\.jpg/g)).toHaveLength(2)
+  })
+
+  it('keeps XML records and writes detailed error data when a resource download fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-failure-'))
+    temporaryDirectories.push(root)
+    const task = createResourceTask('task-resource-failure', root)
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html:
+        '<div class="item"><span class="title">记录1</span><div class="body"><img src="/images/missing.jpg"></div></div>',
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const download = vi.fn(async () => {
+      throw new Error('磁盘写入失败')
+    })
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      null,
+      { download } as unknown as ResourceDownloader
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.counters.succeeded).toBe(1)
+    expect(result.resources.failed).toBe(1)
+    const xml = await readOutputXml(result.outputFiles[0]!, task.xml!.encoding)
+    expect(xml).toContain('/resources/images/missing.jpg')
+    const errorLog = await readFile(result.errorLogPath, 'utf8')
+    expect(errorLog).toContain('https://example.com/images/missing.jpg')
+    expect(errorLog).toContain('/resources/images/missing.jpg')
+    expect(errorLog).toContain('磁盘写入失败')
   })
 })

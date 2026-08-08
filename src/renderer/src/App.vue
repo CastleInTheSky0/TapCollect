@@ -6,6 +6,7 @@ import {
   onMounted,
   ref
 } from 'vue'
+import { MessagePlugin } from 'tdesign-vue-next'
 import {
   AddIcon,
   ChevronLeftIcon,
@@ -46,8 +47,12 @@ import FieldMappingEditor from './components/FieldMappingEditor.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import {
   defaultPaneWidths,
+  fitRunLogHeight,
   fitPaneWidths,
+  maxRunLogHeight,
+  resizeRunLogHeight,
   resizePaneWidths,
+  RUN_LOG_LAYOUT,
   type PaneVisibility,
   type PaneWidths,
   type ResizablePane
@@ -56,6 +61,13 @@ import { snapshotTaskForIpc } from './task-ipc'
 
 const api = window.collector
 const steps = ['基本信息', '列表与分页', '详情页', 'XML 映射', '输出与测试']
+const resourceKindLabels = {
+  image: '图片',
+  audio: '音频',
+  video: '视频',
+  attachment: '附件',
+  other: '其他资源'
+} as const
 
 const tasks = ref<TaskSummary[]>([])
 const activeTask = ref<TaskConfig | null>(null)
@@ -63,8 +75,7 @@ const settings = ref<AppSettings>({ defaultOutputDirectory: '' })
 const currentStep = ref(1)
 const busy = ref(false)
 const saving = ref(false)
-const errorMessage = ref('')
-const noticeMessage = ref('')
+const MESSAGE_AUTO_DISMISS_MS = 5_000
 const xmlTree = ref<XmlTreeNode[]>([])
 const paginationSuggestions = ref<PaginationParameter[]>([])
 const paginationDetectionLineIndex = ref(-1)
@@ -86,6 +97,9 @@ const resizingPane = ref<ResizablePane | null>(null)
 const running = ref(false)
 const runProgress = ref<RunProgress | null>(null)
 const runLogs = ref<RunLog[]>([])
+const runLogsElement = ref<HTMLElement | null>(null)
+const runLogHeight = ref(fitRunLogHeight(RUN_LOG_LAYOUT.defaultHeight, window.innerHeight))
+const runLogMaxHeight = ref(maxRunLogHeight(window.innerHeight))
 const runResult = ref<RunResult | null>(null)
 const resumePrompt = ref(false)
 const pendingDeleteTaskId = ref('')
@@ -111,6 +125,7 @@ const listPageRulesText = computed({
 const listPageRuleAnalysis = computed(() =>
   activeTask.value ? analyzeTaskListPageRules(activeTask.value) : null
 )
+const isClickPagination = computed(() => activeTask.value?.pagination.mode === 'click')
 const hasPaginationTemplate = computed(() => Boolean(listPageRuleAnalysis.value?.templateRule))
 const fixedListPageCount = computed(
   () => listPageRuleAnalysis.value?.rules.filter((rule) => rule.kind === 'fixed').length ?? 0
@@ -150,6 +165,23 @@ const testTableColumns = computed(() => [
     ellipsis: true
   }))
 ])
+const testResourceTableData = computed(() =>
+  (testResult.value?.resourcePlans ?? []).map((plan, index) => ({
+    __rowKey: `${plan.normalizedUrl}-${index}`,
+    __index: index + 1,
+    kind: resourceKindLabels[plan.kind],
+    sourceUrl: plan.sourceUrl,
+    localPath: plan.localPath,
+    xmlUrl: plan.xmlUrl
+  }))
+)
+const testResourceTableColumns = [
+  { colKey: '__index', title: '#', width: 54, fixed: 'left' as const },
+  { colKey: 'kind', title: '类型', width: 82 },
+  { colKey: 'sourceUrl', title: '原始地址', width: 280, ellipsis: true },
+  { colKey: 'localPath', title: '本地目标', width: 280, ellipsis: true },
+  { colKey: 'xmlUrl', title: 'XML 地址', width: 240, ellipsis: true }
+]
 const listHostname = computed(() => {
   return listPageRuleAnalysis.value?.hostname || 'URL 尚未有效'
 })
@@ -168,17 +200,22 @@ const flatXmlTree = computed(() => {
 const messageFromError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
+const showFeedback = (theme: 'success' | 'error', content: string): void => {
+  MessagePlugin.closeAll()
+  void MessagePlugin(theme, {
+    closeBtn: true,
+    content,
+    duration: MESSAGE_AUTO_DISMISS_MS,
+    placement: 'top'
+  })
+}
+
 const showError = (error: unknown): void => {
-  errorMessage.value = messageFromError(error)
-  noticeMessage.value = ''
+  showFeedback('error', messageFromError(error))
 }
 
 const showNotice = (message: string): void => {
-  noticeMessage.value = message
-  errorMessage.value = ''
-  window.setTimeout(() => {
-    if (noticeMessage.value === message) noticeMessage.value = ''
-  }, 2_600)
+  showFeedback('success', message)
 }
 
 const selectStep = (value: string | number): void => {
@@ -310,6 +347,13 @@ const applyPaginationSuggestion = (suggestion: PaginationParameter): void => {
   paginationSuggestions.value = []
 }
 
+const changePaginationMode = (): void => {
+  if (!activeTask.value) return
+  synchronizeListPageMetadata(activeTask.value)
+  paginationSuggestions.value = []
+  paginationDetectionLineIndex.value = -1
+}
+
 const importXml = async (): Promise<void> => {
   if (!activeTask.value) return
   try {
@@ -360,6 +404,12 @@ const chooseOutputDirectory = async (): Promise<void> => {
   if (path) activeTask.value.output.rootDirectory = path
 }
 
+const chooseResourceDirectory = async (): Promise<void> => {
+  if (!activeTask.value) return
+  const path = await api.chooseResourceDirectory()
+  if (path) activeTask.value.resources.download.rootDirectory = path
+}
+
 const saveDefaultOutputDirectory = async (): Promise<void> => {
   const path = activeTask.value?.output.rootDirectory.trim()
   if (!path) {
@@ -379,6 +429,12 @@ let paneResizeStart: {
   pane: ResizablePane
   startX: number
   widths: PaneWidths
+} | null = null
+let runLogResizeStart: {
+  pointerId: number
+  startY: number
+  startHeight: number
+  handle: HTMLElement
 } | null = null
 
 const fitCurrentPaneWidths = (): void => {
@@ -487,8 +543,68 @@ const resizePaneWithKeyboard = (
   schedulePreviewBoundsUpdate()
 }
 
+const startRunLogResize = (event: PointerEvent): void => {
+  if (event.button !== 0) return
+  const handle = event.currentTarget
+  if (!(handle instanceof HTMLElement)) return
+  event.preventDefault()
+  handle.setPointerCapture(event.pointerId)
+  runLogResizeStart = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: runLogHeight.value,
+    handle
+  }
+  document.body.classList.add('run-log-resizing')
+}
+
+const handleRunLogResize = (event: PointerEvent): void => {
+  if (!runLogResizeStart || event.pointerId !== runLogResizeStart.pointerId) return
+  runLogHeight.value = resizeRunLogHeight(
+    runLogResizeStart.startHeight,
+    event.clientY - runLogResizeStart.startY,
+    window.innerHeight
+  )
+}
+
+const stopRunLogResize = (event: PointerEvent): void => {
+  if (!runLogResizeStart || event.pointerId !== runLogResizeStart.pointerId) return
+  if (runLogResizeStart.handle.hasPointerCapture(event.pointerId)) {
+    runLogResizeStart.handle.releasePointerCapture(event.pointerId)
+  }
+  runLogResizeStart = null
+  document.body.classList.remove('run-log-resizing')
+}
+
+const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  if (event.key === 'Home') {
+    runLogHeight.value = RUN_LOG_LAYOUT.minHeight
+    return
+  }
+  if (event.key === 'End') {
+    runLogHeight.value = runLogMaxHeight.value
+    return
+  }
+  runLogHeight.value = resizeRunLogHeight(
+    runLogHeight.value,
+    event.key === 'ArrowUp' ? -RUN_LOG_LAYOUT.keyboardStep : RUN_LOG_LAYOUT.keyboardStep,
+    window.innerHeight
+  )
+}
+
+const scrollRunLogsToEnd = (): void => {
+  void nextTick(() => {
+    const element = runLogsElement.value
+    if (element) element.scrollTop = element.scrollHeight
+  })
+}
+
 const handleWindowResize = (): void => {
   fitCurrentPaneWidths()
+  runLogMaxHeight.value = maxRunLogHeight(window.innerHeight)
+  runLogHeight.value = fitRunLogHeight(runLogHeight.value, window.innerHeight)
   schedulePreviewBoundsUpdate()
 }
 
@@ -534,20 +650,35 @@ const ensureListItemSelector = (): boolean => {
   return false
 }
 
-const pickBaseSelector = async (target: 'list-item' | 'detail-link'): Promise<void> => {
+type BaseSelectorTarget = 'list-item' | 'next-button' | 'detail-link'
+
+const pickBaseSelector = async (target: BaseSelectorTarget): Promise<void> => {
   if (!activeTask.value) return
   if (target === 'detail-link' && !ensureListItemSelector()) return
   if (!(await ensurePreview())) return
-  pickingLabel.value = target === 'list-item' ? '正在点选列表项，按 Esc 取消' : '正在点选详情链接，按 Esc 取消'
+  pickingLabel.value =
+    target === 'list-item'
+      ? '正在点选列表项，按 Esc 取消'
+      : target === 'next-button'
+        ? '正在点选下一页按钮，按 Esc 取消'
+        : '正在点选详情链接，按 Esc 取消'
   try {
     const result = await api.previewPick({
       selectorType: 'css',
-      scopeSelector: target === 'detail-link' ? activeTask.value.listItem.selector : ''
+      scopeSelector:
+        target === 'detail-link'
+          ? activeTask.value.listItem.selector
+          : target === 'next-button'
+            ? ':root'
+            : ''
     })
     if (result.cancelled) return
     if (target === 'list-item') {
       activeTask.value.listItem.selectorType = 'css'
       activeTask.value.listItem.selector = result.selector
+    } else if (target === 'next-button') {
+      activeTask.value.pagination.nextButton.selectorType = 'css'
+      activeTask.value.pagination.nextButton.selector = result.selector
     } else {
       activeTask.value.detail.link.selectorType = 'css'
       activeTask.value.detail.link.selector = result.selector
@@ -563,12 +694,22 @@ const pickBaseSelector = async (target: 'list-item' | 'detail-link'): Promise<vo
   }
 }
 
-const evaluateBaseSelector = async (target: 'list-item' | 'detail-link'): Promise<void> => {
+const evaluateBaseSelector = async (target: BaseSelectorTarget): Promise<void> => {
   if (!activeTask.value) return
   if (target === 'detail-link' && !ensureListItemSelector()) return
   if (!(await ensurePreview())) return
-  const config = target === 'list-item' ? activeTask.value.listItem : activeTask.value.detail.link
-  const scope = target === 'detail-link' ? activeTask.value.listItem.selector : ''
+  const config =
+    target === 'list-item'
+      ? activeTask.value.listItem
+      : target === 'next-button'
+        ? activeTask.value.pagination.nextButton
+        : activeTask.value.detail.link
+  const scope =
+    target === 'detail-link'
+      ? activeTask.value.listItem.selector
+      : target === 'next-button'
+        ? ':root'
+        : ''
   try {
     const result = await api.previewEvaluate({
       selectorType: config.selectorType,
@@ -767,6 +908,7 @@ onMounted(async () => {
   removeLogListener = api.onRunLog((log) => {
     runLogs.value.push(log)
     if (runLogs.value.length > 500) runLogs.value.splice(0, runLogs.value.length - 500)
+    scrollRunLogsToEnd()
   })
   removeFinishedListener = api.onRunFinished((result) => {
     runResult.value = result
@@ -775,6 +917,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  MessagePlugin.closeAll()
   resizeObserver?.disconnect()
   if (previewBoundsFrame !== null) window.cancelAnimationFrame(previewBoundsFrame)
   window.removeEventListener('resize', handleWindowResize)
@@ -782,6 +925,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', stopPaneResize)
   window.removeEventListener('pointercancel', stopPaneResize)
   document.body.classList.remove('pane-resizing')
+  document.body.classList.remove('run-log-resizing')
   removeProgressListener()
   removeLogListener()
   removeFinishedListener()
@@ -837,15 +981,6 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div class="message-stack">
-        <Transition name="toast">
-          <t-alert v-if="errorMessage" theme="error" :message="errorMessage" close @close="errorMessage = ''" />
-        </Transition>
-        <Transition name="toast">
-          <t-alert v-if="noticeMessage" theme="success" :message="noticeMessage" />
-        </Transition>
-      </div>
-
       <template v-if="activeTask">
         <t-steps :current="currentStep" class="wizard-nav" :readonly="false" separator="line" @change="selectStep">
           <t-step-item v-for="(label, index) in steps" :key="label" :value="index + 1" :title="label" />
@@ -870,7 +1005,8 @@ onBeforeUnmount(() => {
                     <span>列表页面 URL（每行一条）</span>
                     <div class="inline-control list-url-control">
                       <t-textarea v-model="listPageRulesText" :autosize="{ minRows: 3, maxRows: 8 }"
-                        :spell-check="false" placeholder="固定地址或包含 {page} 的模板，每行一条" />
+                        :spell-check="false"
+                        :placeholder="isClickPagination ? '只填写一个动态列表初始 URL' : '固定地址或包含 {page} 的模板，每行一条'" />
                       <t-button theme="default" variant="outline"
                         @click="previewUrl = firstTaskListPageUrl(activeTask); openPreview()">
                         <template #icon>
@@ -880,7 +1016,12 @@ onBeforeUnmount(() => {
                       </t-button>
                     </div>
                     <div class="list-rule-summary">
-                      <t-tag variant="light">固定地址 {{ fixedListPageCount }} 条</t-tag>
+                      <t-tag variant="light">
+                        {{ isClickPagination ? '动态初始地址' : '固定地址' }} {{ fixedListPageCount }} 条
+                      </t-tag>
+                      <t-tag v-if="isClickPagination" theme="warning" variant="light">
+                        点击下一页
+                      </t-tag>
                       <t-tag v-if="hasPaginationTemplate" theme="primary" variant="light">
                         分页模板 1 条
                       </t-tag>
@@ -891,7 +1032,9 @@ onBeforeUnmount(() => {
                     <t-alert v-if="listPageRuleAnalysis?.errors.length" theme="error"
                       :message="listPageRuleAnalysis.errors.join('；')" />
                     <small>
-                      按行顺序采集；固定 URL 各请求一次，最多一行可包含 {page}。正式采集不执行页面 JavaScript。
+                      {{ isClickPagination
+                        ? '动态模式只接受一个初始 URL，正式采集会执行页面脚本并读取最终渲染的列表。'
+                        : '按行顺序采集；固定 URL 各请求一次，最多一行可包含 {page}。' }}
                     </small>
                   </div>
                 </div>
@@ -906,6 +1049,15 @@ onBeforeUnmount(() => {
                   <span>02 / 05</span>
                   <h1>列表结构与分页</h1>
                   <p>先选一条完整列表记录，再用相对选择器采集每条记录中的字段。</p>
+                </div>
+                <div class="section-line">
+                  <div class="section-title">
+                    <strong>分页方式</strong><span>静态地址规则或动态点击下一页</span>
+                  </div>
+                  <t-select v-model="activeTask.pagination.mode" @change="changePaginationMode">
+                    <t-option value="url" label="固定 URL / 数字页码模板" />
+                    <t-option value="click" label="点击下一页（动态渲染）" />
+                  </t-select>
                 </div>
                 <div class="section-line">
                   <div class="section-title"><strong>列表项容器</strong><span>重复出现的一整条记录</span></div>
@@ -924,7 +1076,7 @@ onBeforeUnmount(() => {
                     </t-button>
                   </div>
                 </div>
-                <div class="section-line">
+                <div v-if="!isClickPagination" class="section-line">
                   <div class="section-title">
                     <strong>数字页码规则</strong><span>支持路径、文件名或查询参数中的 {page}</span>
                   </div>
@@ -972,6 +1124,38 @@ onBeforeUnmount(() => {
                   </p>
                   <p class="inline-note">
                     模板遇到无列表项、URL 重复、404/410 或整页记录重复时会结束，并继续后面的固定 URL。
+                  </p>
+                </div>
+                <div v-else class="section-line">
+                  <div class="section-title">
+                    <strong>下一页按钮</strong><span>在整个页面中点选，只负责触发一次翻页</span>
+                  </div>
+                  <div class="selector-grid">
+                    <t-select v-model="activeTask.pagination.nextButton.selectorType">
+                      <t-option value="css" label="CSS" />
+                      <t-option value="xpath" label="XPath 1.0" />
+                    </t-select>
+                    <t-input v-model="activeTask.pagination.nextButton.selector" class="code-input"
+                      :spell-check="false" placeholder="例如 .next-page" />
+                    <t-button theme="default" variant="outline" @click="evaluateBaseSelector('next-button')">
+                      <SearchIcon />
+                    </t-button>
+                    <t-button theme="primary" variant="outline" @click="pickBaseSelector('next-button')">
+                      <CursorIcon />
+                    </t-button>
+                  </div>
+                  <div class="form-grid compact">
+                    <div class="field">
+                      <span>最大采集页数</span>
+                      <t-input-number v-model="activeTask.pagination.maxPages" theme="column" :min="1" :max="500"
+                        :step="1" :decimal-places="0" />
+                      <small>包含初始页，用于防止按钮或页面脚本异常造成无限翻页。</small>
+                    </div>
+                  </div>
+                  <t-alert theme="info"
+                    message="工具等待列表内容发生变化后再采集下一页；接口返回 HTML、JSON 数组或 JSON 对象都不需要单独配置。" />
+                  <p class="inline-note">
+                    按钮缺失、禁用、列表不变、整页重复或达到最大页数时会自动结束。
                   </p>
                 </div>
               </template>
@@ -1104,40 +1288,88 @@ onBeforeUnmount(() => {
                 <div class="step-heading">
                   <span>05 / 05</span>
                   <h1>输出、请求与测试</h1>
-                  <p>最后确认路径替换、批次上限和网络参数，然后先执行一次小范围测试。</p>
+                  <p>最后确认资源处理、批次上限和网络参数，然后先执行一次小范围测试。</p>
                 </div>
 
                 <div class="section-line">
-                  <div class="section-title"><strong>资源路径处理</strong><span>先绝对化，再按顺序做字面替换；不会下载资源</span></div>
-                  <div class="check-row">
-                    <t-checkbox v-model="activeTask.html.absolutizeResources">资源地址绝对化</t-checkbox>
+                  <div class="section-title"><strong>资源处理</strong><span>可只改写地址，也可下载 XML 中实际引用的站内资源</span></div>
+                  <div class="form-grid compact resource-mode-grid">
+                    <div class="field">
+                      <span>不下载时的地址处理方式</span>
+                      <t-select v-model="activeTask.resources.addressMode"
+                        :disabled="activeTask.resources.download.enabled">
+                        <t-option value="absolute-replace" label="绝对地址 + 替换规则" />
+                        <t-option value="prefix" label="自定义前缀 + 原路径" />
+                      </t-select>
+                    </div>
+                    <div class="switch-line compact-switch resource-download-switch">
+                      <span><strong>下载资源</strong><small>默认关闭，仅处理最终 XML 引用</small></span>
+                      <t-switch v-model="activeTask.resources.download.enabled" />
+                    </div>
+                  </div>
+                  <div class="check-row resource-cleaning-row">
                     <t-checkbox v-model="activeTask.html.cleanHtml">清理脚本、事件和 DocView 预览</t-checkbox>
+                    <t-checkbox v-if="!activeTask.resources.download.enabled && activeTask.resources.addressMode === 'absolute-replace'"
+                      v-model="activeTask.html.absolutizeResources">资源地址绝对化</t-checkbox>
                   </div>
                   <div class="field full">
                     <span>补充资源属性（逗号分隔）</span>
                     <t-input :value="activeTask.html.customResourceAttributes.join(', ')"
                       placeholder="例如 data-file, data-url" @change="setCustomAttributes" />
                   </div>
-                  <div class="subheading">
-                    <span>有序路径替换</span>
-                    <t-button size="small" theme="default" variant="text" @click="addResourceReplacement">
-                      <template #icon>
-                        <AddIcon />
-                      </template>
-                      添加规则
-                    </t-button>
+
+                  <template v-if="activeTask.resources.download.enabled">
+                    <t-alert class="resource-mode-note" theme="info"
+                      message="只下载与资源所属页面主机名完全相同的图片、音视频和附件；站外资源保持原地址。测试采集只预览计划，不会写文件。" />
+                    <div class="field full resource-field">
+                      <span>资源存放根目录</span>
+                      <div class="inline-control">
+                        <t-input v-model="activeTask.resources.download.rootDirectory" readonly placeholder="请选择目录" />
+                        <t-button theme="default" variant="outline" @click="chooseResourceDirectory">
+                          <template #icon>
+                            <FolderOpenIcon />
+                          </template>
+                          选择目录
+                        </t-button>
+                      </div>
+                    </div>
+                    <div class="field full resource-field">
+                      <span>XML 中的资源访问前缀</span>
+                      <t-input v-model="activeTask.resources.download.urlPrefix"
+                        placeholder="例如 /resources 或 https://static.example.com/resources" />
+                      <small>本地目录按原资源路径建立；查询参数会生成稳定短标识，避免同名文件互相覆盖。</small>
+                    </div>
+                  </template>
+
+                  <div v-else-if="activeTask.resources.addressMode === 'prefix'" class="field full resource-field">
+                    <span>自定义资源访问前缀</span>
+                    <t-input v-model="activeTask.resources.urlPrefix"
+                      placeholder="例如 /resources 或 https://static.example.com/resources" />
+                    <small>站内资源会改为“前缀 + 原 URL 路径”；不会下载文件，也不会执行下面的替换规则。</small>
                   </div>
-                  <div v-for="rule in activeTask.resourceReplacements" :key="rule.id" class="replacement-line">
-                    <t-input v-model="rule.from" placeholder="原字符串" />
-                    <span>→</span>
-                    <t-input v-model="rule.to" placeholder="新字符串" />
-                    <t-tooltip content="删除替换规则" placement="top">
-                      <t-button theme="danger" variant="text" shape="square"
-                        @click="activeTask.resourceReplacements.splice(activeTask.resourceReplacements.indexOf(rule), 1)">
-                        <DeleteIcon />
+
+                  <template v-else>
+                    <div class="subheading">
+                      <span>有序路径替换</span>
+                      <t-button size="small" theme="default" variant="text" @click="addResourceReplacement">
+                        <template #icon>
+                          <AddIcon />
+                        </template>
+                        添加规则
                       </t-button>
-                    </t-tooltip>
-                  </div>
+                    </div>
+                    <div v-for="rule in activeTask.resourceReplacements" :key="rule.id" class="replacement-line">
+                      <t-input v-model="rule.from" placeholder="原字符串" />
+                      <span>→</span>
+                      <t-input v-model="rule.to" placeholder="新字符串" />
+                      <t-tooltip content="删除替换规则" placement="top">
+                        <t-button theme="danger" variant="text" shape="square"
+                          @click="activeTask.resourceReplacements.splice(activeTask.resourceReplacements.indexOf(rule), 1)">
+                          <DeleteIcon />
+                        </t-button>
+                      </t-tooltip>
+                    </div>
+                  </template>
                 </div>
 
                 <div class="section-line">
@@ -1259,6 +1491,17 @@ onBeforeUnmount(() => {
                     <t-table :data="testTableData" :columns="testTableColumns" row-key="__rowKey" size="small"
                       table-layout="fixed" :bordered="true" :hover="true" :max-height="280" />
                   </div>
+                  <t-collapse v-if="testResult.resourcePlans.length" class="result-collapse resource-plan-collapse"
+                    borderless>
+                    <t-collapse-panel value="resource-preview"
+                      :header="`资源计划（${testResult.resourcePlans.length} 个，不会实际下载）`">
+                      <div class="resource-plan-table">
+                        <t-table :data="testResourceTableData" :columns="testResourceTableColumns"
+                          row-key="__rowKey" size="small" table-layout="fixed" :bordered="true" :hover="true"
+                          :max-height="300" />
+                      </div>
+                    </t-collapse-panel>
+                  </t-collapse>
                   <t-collapse v-if="testResult.xmlPreview" class="result-collapse" borderless>
                     <t-collapse-panel value="xml-preview" header="XML 预览">
                       <pre>{{ testResult.xmlPreview }}</pre>
@@ -1268,8 +1511,8 @@ onBeforeUnmount(() => {
                     <strong>发现问题</strong>
                     <p v-for="(failure, index) in testResult.failures" :key="index">
                       第 {{ failure.itemIndex }} 条 · {{ failure.stage }}{{ failure.fieldPath ? ` / ${failure.fieldPath}`
-                      : '' }} · {{
-                      failure.reason }}
+                        : '' }} · {{
+                        failure.reason }}
                     </p>
                   </div>
                 </div>
@@ -1286,13 +1529,8 @@ onBeforeUnmount(() => {
             上一步
           </t-button>
           <span>第 {{ currentStep }} 步，共 5 步</span>
-          <t-button
-            class="wizard-next-button"
-            theme="default"
-            variant="outline"
-            :disabled="currentStep === 5"
-            @click="currentStep += 1"
-          >
+          <t-button class="wizard-next-button" theme="default" variant="outline" :disabled="currentStep === 5"
+            @click="currentStep += 1">
             下一步
             <ChevronRightIcon />
           </t-button>
@@ -1356,7 +1594,9 @@ onBeforeUnmount(() => {
           </t-button>
         </div>
       </div>
-      <footer class="preview-footer"><span class="status-light" />正式采集使用原始静态 HTML，而非预览渲染结果</footer>
+      <footer class="preview-footer">
+        <span class="status-light" />静态模式读取原始 HTML；动态模式读取页面渲染后的 DOM
+      </footer>
     </aside>
 
     <section v-if="running || runProgress || runResult" class="run-drawer">
@@ -1374,22 +1614,53 @@ onBeforeUnmount(() => {
         <div class="run-metrics">
           <div><span>当前页</span><strong>{{ runProgress?.page ?? '—' }}</strong></div>
           <div><span>发现</span><strong>{{ runProgress?.counters.discovered ?? runResult?.counters.discovered ?? 0
-              }}</strong>
+          }}</strong>
           </div>
           <div><span>成功</span><strong>{{ runProgress?.counters.succeeded ?? runResult?.counters.succeeded ?? 0
-              }}</strong>
+          }}</strong>
           </div>
           <div><span>重复</span><strong>{{ runProgress?.counters.duplicated ?? runResult?.counters.duplicated ?? 0
-              }}</strong>
+          }}</strong>
           </div>
           <div><span>跳过/失败</span><strong>{{ (runProgress?.counters.skipped ?? runResult?.counters.skipped ?? 0) +
             (runProgress?.counters.failed ?? runResult?.counters.failed ?? 0) }}</strong></div>
+          <div><span>资源下载</span><strong>{{ runProgress?.resources.downloaded ?? runResult?.resources.downloaded ?? 0
+          }}</strong></div>
+          <div><span>资源已存在</span><strong>{{ runProgress?.resources.skipped ?? runResult?.resources.skipped ?? 0
+          }}</strong></div>
+          <div><span>资源失败</span><strong>{{ runProgress?.resources.failed ?? runResult?.resources.failed ?? 0
+          }}</strong></div>
         </div>
         <div class="run-current"><span>{{ runProgress?.currentUrl || runResult?.outputFiles.at(-1) || '等待任务开始' }}</span>
         </div>
-        <div class="run-logs">
-          <p v-for="(log, index) in runLogs.slice(-8)" :key="`${log.time}-${index}`" :class="log.level"><time>{{ new
-            Date(log.time).toLocaleTimeString('zh-CN', { hour12: false }) }}</time>{{ log.message }}</p>
+        <div class="run-log-panel" :style="{ height: `${runLogHeight}px` }">
+          <div
+            class="run-log-resizer"
+            role="separator"
+            aria-label="调整运行日志高度"
+            aria-orientation="horizontal"
+            :aria-valuemin="RUN_LOG_LAYOUT.minHeight"
+            :aria-valuemax="runLogMaxHeight"
+            :aria-valuenow="runLogHeight"
+            tabindex="0"
+            title="向上拖动可增大日志区域，也可使用上下方向键"
+            @pointerdown="startRunLogResize"
+            @pointermove="handleRunLogResize"
+            @pointerup="stopRunLogResize"
+            @pointercancel="stopRunLogResize"
+            @keydown="resizeRunLogWithKeyboard"
+          >
+            <span>拖动调整日志高度</span>
+          </div>
+          <div ref="runLogsElement" class="run-logs">
+            <p v-if="runLogs.length === 0" class="empty">
+              <span>等待运行日志…</span>
+            </p>
+            <p v-for="(log, index) in runLogs" :key="`${log.time}-${index}`" :class="log.level">
+              <time>{{ new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false }) }}</time>
+              <span>{{ log.message }}</span>
+            </p>
+          </div>
         </div>
         <div class="run-controls">
           <template v-if="running">
@@ -1416,7 +1687,7 @@ onBeforeUnmount(() => {
 
     <t-dialog v-model:visible="resumePrompt" header="发现未完成检查点" theme="warning" :footer="false"
       :close-on-overlay-click="false" width="480px">
-      <p class="dialog-copy">继续会从上次页码和未满批次恢复；重新开始会放弃检查点，并按当前覆盖设置处理旧 XML。</p>
+      <p class="dialog-copy">继续会从上次页码、未满批次和资源统计恢复；重新开始会放弃检查点，并按当前覆盖设置处理旧 XML 与资源。</p>
       <div class="dialog-actions">
         <t-button theme="default" variant="text" @click="resumePrompt = false">取消</t-button>
         <t-button theme="default" variant="outline" @click="launchRun(false)">放弃并重新开始</t-button>
@@ -1442,3 +1713,8 @@ onBeforeUnmount(() => {
     </t-dialog>
   </main>
 </template>
+<style>
+.section-line .full {
+  margin-bottom: 13px;
+}
+</style>

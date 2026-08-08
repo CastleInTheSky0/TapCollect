@@ -1,8 +1,31 @@
 import { JSDOM } from 'jsdom'
-import type { HtmlProcessingConfig, ReplacementRule } from '@shared/types'
-import { applyReplacementRules, resolveHttpUrl } from './url-utils'
+import { isValidResourceUrlPrefix } from '@shared/resource-config'
+import type {
+  HtmlProcessingConfig,
+  ReplacementRule,
+  ResourcePlan,
+  TaskConfig
+} from '@shared/types'
+import { applyReplacementRules, hasSameHostname, resolveHttpUrl } from './url-utils'
+import {
+  classifyResourceReference,
+  createResourcePlan,
+  rewriteInternalResourceWithPrefix,
+  type ResourceReferenceContext
+} from './resource-planner'
 
 const DEFAULT_RESOURCE_ATTRIBUTES = ['src', 'data-src', 'data-original', 'href']
+const OTHER_URL_ATTRIBUTES = ['action', 'formaction', 'poster', 'xlink:href']
+const EXECUTABLE_URL_PROTOCOL = /^(?:javascript|vbscript):/i
+
+const removeControlWhitespace = (value: string): string =>
+  Array.from(value, (character) => {
+    const code = character.charCodeAt(0)
+    return code <= 0x20 || (code >= 0x7f && code <= 0x9f) ? '' : character
+  }).join('')
+
+const hasExecutableUrlProtocol = (value: string): boolean =>
+  EXECUTABLE_URL_PROTOCOL.test(removeControlWhitespace(value))
 
 const rewriteSrcset = (value: string, baseUrl: string): string =>
   value
@@ -33,14 +56,31 @@ const shouldRemoveAttachmentPreview = (element: Element): boolean => {
   return (element.getAttribute('src') ?? '').toLowerCase().includes('docview.aspx')
 }
 
-export const processHtml = (
+interface HtmlDocumentContext {
+  document: Document
+  attributes: Set<string>
+}
+
+export interface ProcessedResourceValue {
+  value: string
+  resources: ResourcePlan[]
+}
+
+const createHtmlDocument = (
   html: string,
   baseUrl: string,
-  config: HtmlProcessingConfig,
-  replacements: ReplacementRule[]
-): string => {
+  config: HtmlProcessingConfig
+): HtmlDocumentContext => {
   const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { url: baseUrl })
   const { document } = dom.window
+  const attributes = new Set(
+    [...DEFAULT_RESOURCE_ATTRIBUTES, ...config.customResourceAttributes]
+      .map((attribute) => attribute.trim())
+      .filter(Boolean)
+  )
+  const sanitizedUrlAttributes = new Set(
+    [...attributes, ...OTHER_URL_ATTRIBUTES].map((attribute) => attribute.toLowerCase())
+  )
 
   if (config.cleanHtml) {
     document.querySelectorAll('script,noscript').forEach((element) => element.remove())
@@ -50,12 +90,30 @@ export const processHtml = (
     removeComments(document)
     document.body.querySelectorAll('*').forEach((element) => {
       for (const attribute of Array.from(element.attributes)) {
-        if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name)
+        const attributeName = attribute.name.toLowerCase()
+        if (
+          /^on/i.test(attribute.name) ||
+          attributeName === 'srcdoc' ||
+          (sanitizedUrlAttributes.has(attributeName) &&
+            hasExecutableUrlProtocol(attribute.value))
+        ) {
+          element.removeAttribute(attribute.name)
+        }
       }
     })
   }
 
-  const attributes = new Set([...DEFAULT_RESOURCE_ATTRIBUTES, ...config.customResourceAttributes])
+  return { document, attributes }
+}
+
+export const processHtml = (
+  html: string,
+  baseUrl: string,
+  config: HtmlProcessingConfig,
+  replacements: ReplacementRule[]
+): string => {
+  const { document, attributes } = createHtmlDocument(html, baseUrl, config)
+
   document.body.querySelectorAll('*').forEach((element) => {
     if (config.absolutizeResources) {
       for (const attribute of attributes) {
@@ -80,6 +138,254 @@ export const processAttributeValue = (
   shouldAbsolutize: boolean,
   replacements: ReplacementRule[]
 ): string => {
+  if (hasExecutableUrlProtocol(value)) return ''
   const absolute = shouldAbsolutize ? resolveHttpUrl(value, baseUrl) || value : value
   return applyReplacementRules(absolute, replacements)
+}
+
+const assertResourceConfiguration = (task: TaskConfig): void => {
+  if (task.resources.download.enabled) {
+    if (!task.resources.download.rootDirectory.trim()) {
+      throw new Error('请先选择资源存放根目录')
+    }
+    if (!isValidResourceUrlPrefix(task.resources.download.urlPrefix)) {
+      throw new Error('请填写有效的资源下载访问前缀')
+    }
+    return
+  }
+  if (
+    task.resources.addressMode === 'prefix' &&
+    !isValidResourceUrlPrefix(task.resources.urlPrefix)
+  ) {
+    throw new Error('请填写有效的资源地址前缀')
+  }
+}
+
+const elementReferenceContext = (
+  element: Element | null,
+  attributeName: string,
+  customAttributes: Set<string>,
+  styleUrl = false
+): ResourceReferenceContext => ({
+  tagName: element?.tagName ?? '',
+  parentTagName: element?.parentElement?.tagName ?? '',
+  attributeName,
+  hasDownloadAttribute: element?.hasAttribute('download') ?? false,
+  customAttribute: customAttributes.has(attributeName.toLowerCase()),
+  styleUrl
+})
+
+const processResourceReference = (
+  sourceValue: string,
+  element: Element | null,
+  attributeName: string,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig,
+  customAttributes: Set<string>,
+  styleUrl = false
+): ProcessedResourceValue => {
+  if (hasExecutableUrlProtocol(sourceValue)) return { value: '', resources: [] }
+  if (styleUrl && sourceValue.trim().startsWith('#')) {
+    return { value: sourceValue, resources: [] }
+  }
+  const absoluteUrl = resolveHttpUrl(sourceValue, resolutionBaseUrl)
+  if (!absoluteUrl) return { value: sourceValue, resources: [] }
+  const kind = classifyResourceReference(
+    absoluteUrl,
+    elementReferenceContext(element, attributeName, customAttributes, styleUrl)
+  )
+
+  if (!kind) {
+    const value = task.html.absolutizeResources ? absoluteUrl : sourceValue
+    return {
+      value: task.resources.download.enabled
+        ? applyReplacementRules(value, task.resourceReplacements)
+        : value,
+      resources: []
+    }
+  }
+
+  if (!hasSameHostname(ownerPageUrl, absoluteUrl)) {
+    return { value: sourceValue, resources: [] }
+  }
+
+  if (task.resources.download.enabled) {
+    const plan = createResourcePlan(
+      sourceValue,
+      resolutionBaseUrl,
+      ownerPageUrl,
+      task.resources.download.rootDirectory,
+      task.resources.download.urlPrefix,
+      kind
+    )
+    return plan ? { value: plan.xmlUrl, resources: [plan] } : { value: sourceValue, resources: [] }
+  }
+
+  return {
+    value: rewriteInternalResourceWithPrefix(
+      absoluteUrl,
+      ownerPageUrl,
+      task.resources.urlPrefix
+    ),
+    resources: []
+  }
+}
+
+const processSrcsetWithResources = (
+  value: string,
+  element: Element,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig,
+  customAttributes: Set<string>
+): ProcessedResourceValue => {
+  const resources: ResourcePlan[] = []
+  const candidates = value.split(',').map((candidate) => {
+    const parts = candidate.trim().split(/\s+/)
+    const source = parts.shift() ?? ''
+    const processed = processResourceReference(
+      source,
+      element,
+      'srcset',
+      resolutionBaseUrl,
+      ownerPageUrl,
+      task,
+      customAttributes
+    )
+    resources.push(...processed.resources)
+    return [processed.value, ...parts].join(' ')
+  })
+  return { value: candidates.join(', '), resources }
+}
+
+const processStyleWithResources = (
+  value: string,
+  element: Element,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig,
+  customAttributes: Set<string>
+): ProcessedResourceValue => {
+  const resources: ResourcePlan[] = []
+  const processed = value.replace(
+    /url\(\s*(['"]?)(.*?)\1\s*\)/gi,
+    (_match, quote: string, source: string) => {
+      const result = processResourceReference(
+        source,
+        element,
+        'style',
+        resolutionBaseUrl,
+        ownerPageUrl,
+        task,
+        customAttributes,
+        true
+      )
+      resources.push(...result.resources)
+      return result.value ? `url(${quote}${result.value}${quote})` : ''
+    }
+  )
+  return { value: processed, resources }
+}
+
+export const processHtmlWithResources = (
+  html: string,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig
+): ProcessedResourceValue => {
+  if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
+    return {
+      value: processHtml(html, resolutionBaseUrl, task.html, task.resourceReplacements),
+      resources: []
+    }
+  }
+  assertResourceConfiguration(task)
+  const { document, attributes } = createHtmlDocument(html, resolutionBaseUrl, task.html)
+  const processingAttributes = new Set([...attributes, 'poster'])
+  const customAttributes = new Set(
+    task.html.customResourceAttributes.map((attribute) => attribute.trim().toLowerCase()).filter(Boolean)
+  )
+  const resources: ResourcePlan[] = []
+
+  document.body.querySelectorAll('*').forEach((element) => {
+    for (const attribute of processingAttributes) {
+      const current = element.getAttribute(attribute)
+      if (!current) continue
+      const processed = processResourceReference(
+        current,
+        element,
+        attribute,
+        resolutionBaseUrl,
+        ownerPageUrl,
+        task,
+        customAttributes
+      )
+      if (processed.value) element.setAttribute(attribute, processed.value)
+      else element.removeAttribute(attribute)
+      resources.push(...processed.resources)
+    }
+    const srcset = element.getAttribute('srcset')
+    if (srcset) {
+      const processed = processSrcsetWithResources(
+        srcset,
+        element,
+        resolutionBaseUrl,
+        ownerPageUrl,
+        task,
+        customAttributes
+      )
+      element.setAttribute('srcset', processed.value)
+      resources.push(...processed.resources)
+    }
+    const style = element.getAttribute('style')
+    if (style) {
+      const processed = processStyleWithResources(
+        style,
+        element,
+        resolutionBaseUrl,
+        ownerPageUrl,
+        task,
+        customAttributes
+      )
+      element.setAttribute('style', processed.value)
+      resources.push(...processed.resources)
+    }
+  })
+
+  return { value: document.body.innerHTML, resources }
+}
+
+export const processAttributeValueWithResources = (
+  value: string,
+  element: Element | null,
+  attributeName: string,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig
+): ProcessedResourceValue => {
+  if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
+    return {
+      value: processAttributeValue(
+        value,
+        resolutionBaseUrl,
+        task.html.absolutizeResources,
+        task.resourceReplacements
+      ),
+      resources: []
+    }
+  }
+  assertResourceConfiguration(task)
+  const customAttributes = new Set(
+    task.html.customResourceAttributes.map((attribute) => attribute.trim().toLowerCase()).filter(Boolean)
+  )
+  return processResourceReference(
+    value,
+    element,
+    attributeName,
+    resolutionBaseUrl,
+    ownerPageUrl,
+    task,
+    customAttributes
+  )
 }

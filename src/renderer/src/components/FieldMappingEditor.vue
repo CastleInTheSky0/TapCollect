@@ -45,20 +45,10 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 </script>
 
 <template>
-  <t-collapse
-    v-model="expanded"
-    class="mapping-list"
-    borderless
-    expand-icon-placement="right"
-    :expand-on-row-click="true"
-  >
-    <t-collapse-panel
-      v-for="mapping in model.mappings"
-      :key="mapping.fieldPath"
-      :value="mapping.fieldPath"
-      class="mapping-row"
-      :class="{ unresolved: !isFieldMappingConfigured(mapping) }"
-    >
+  <t-collapse v-model="expanded" class="mapping-list" borderless expand-icon-placement="right"
+    :expand-on-row-click="true">
+    <t-collapse-panel v-for="mapping in model.mappings" :key="mapping.fieldPath" :value="mapping.fieldPath"
+      class="mapping-row" :class="{ unresolved: !isFieldMappingConfigured(mapping) }">
       <template #header>
         <div class="mapping-summary">
           <span class="field-identity">
@@ -70,11 +60,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
             </span>
             <small>{{ mapping.fieldPath }}</small>
           </span>
-          <t-tag
-            size="small"
-            :theme="isFieldMappingConfigured(mapping) ? 'default' : 'warning'"
-            variant="light"
-          >
+          <t-tag size="small" :theme="isFieldMappingConfigured(mapping) ? 'default' : 'warning'" variant="light">
             {{ modeLabels[mapping.mode] }}
           </t-tag>
         </div>
@@ -95,13 +81,8 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
           </t-select>
         </div>
 
-        <PageValueEditor
-          v-if="mapping.mode === 'page'"
-          :model-value="mapping"
-          show-required
-          @pick="$emit('pick', mapping.fieldPath)"
-          @evaluate="$emit('evaluate', mapping.fieldPath)"
-        />
+        <PageValueEditor v-if="mapping.mode === 'page'" :model-value="mapping" show-required
+          @pick="$emit('pick', mapping.fieldPath)" @evaluate="$emit('evaluate', mapping.fieldPath)" />
 
         <div v-else-if="mapping.mode === 'merge'" class="merge-editor full">
           <div class="merge-settings">
@@ -113,44 +94,22 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
               <t-checkbox v-model="mapping.required">合并结果必填，无值时跳过记录</t-checkbox>
             </div>
           </div>
-          <t-alert
-            theme="info"
-            message="按下面的顺序拼接非空子值；空子值会自动忽略，不产生多余分隔符。"
-          />
-          <div
-            v-for="(value, index) in mapping.mergeValues"
-            :key="value.id"
-            class="merge-value-card"
-          >
+          <t-alert theme="info" message="按下面的顺序拼接非空子值；空子值会自动忽略，不产生多余分隔符。" />
+          <div v-for="(value, index) in mapping.mergeValues" :key="value.id" class="merge-value-card">
             <div class="merge-value-header">
               <strong>合并项 {{ index + 1 }}</strong>
               <div class="merge-value-actions">
-                <t-button
-                  size="small"
-                  theme="default"
-                  variant="text"
-                  :disabled="index === 0"
-                  @click="moveMergeValue(mapping, index, -1)"
-                >
+                <t-button size="small" theme="default" variant="text" :disabled="index === 0"
+                  @click="moveMergeValue(mapping, index, -1)">
                   上移
                 </t-button>
-                <t-button
-                  size="small"
-                  theme="default"
-                  variant="text"
-                  :disabled="index === mapping.mergeValues.length - 1"
-                  @click="moveMergeValue(mapping, index, 1)"
-                >
+                <t-button size="small" theme="default" variant="text"
+                  :disabled="index === mapping.mergeValues.length - 1" @click="moveMergeValue(mapping, index, 1)">
                   下移
                 </t-button>
                 <t-tooltip content="删除合并项" placement="top">
-                  <t-button
-                    size="small"
-                    theme="danger"
-                    variant="text"
-                    shape="square"
-                    @click="mapping.mergeValues.splice(index, 1)"
-                  >
+                  <t-button size="small" theme="danger" variant="text" shape="square"
+                    @click="mapping.mergeValues.splice(index, 1)">
                     <DeleteIcon />
                   </t-button>
                 </t-tooltip>
@@ -165,12 +124,9 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
                 <t-option value="external-url" label="外链 URL" />
               </t-select>
             </div>
-            <PageValueEditor
-              v-if="value.mode === 'page'"
-              :model-value="value"
+            <PageValueEditor v-if="value.mode === 'page'" :model-value="value"
               @pick="$emit('pick', mapping.fieldPath, value.id)"
-              @evaluate="$emit('evaluate', mapping.fieldPath, value.id)"
-            />
+              @evaluate="$emit('evaluate', mapping.fieldPath, value.id)" />
             <div v-else-if="value.mode === 'fixed'" class="field full">
               <span>固定值</span>
               <t-textarea v-model="value.fixedValue" :autosize="{ minRows: 2, maxRows: 6 }" />
@@ -183,15 +139,12 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
                 <t-option value="collected-at" label="采集时间（ISO）" />
               </t-select>
             </div>
-            <t-alert
-              v-else
-              class="mapping-note full"
-              theme="info"
-              message="站外记录使用补全后的外链 URL；站内记录此子值为空。"
-            />
+            <t-alert v-else class="mapping-note full" theme="info" message="站外记录使用补全后的外链 URL；站内记录此子值为空。" />
           </div>
           <t-button theme="default" variant="dashed" block @click="addMergeValue(mapping)">
-            <template #icon><AddIcon /></template>
+            <template #icon>
+              <AddIcon />
+            </template>
             添加合并项
           </t-button>
         </div>
@@ -210,24 +163,12 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
           </t-select>
         </div>
 
-        <t-alert
-          v-else-if="mapping.mode === 'external-url'"
-          class="mapping-note full"
-          theme="info"
-          message="站外链接不请求详情；补全后的绝对地址写入此字段。站内记录输出为空。"
-        />
-        <t-alert
-          v-else-if="mapping.mode === 'preserve'"
-          class="mapping-note full"
-          theme="info"
-          :message="`输出模板中的示例值：${fieldFor(mapping)?.sampleValue || '（空）'}`"
-        />
-        <t-alert
-          v-else-if="mapping.mode === 'empty'"
-          class="mapping-note full"
-          theme="info"
-          message="该字段会保留节点结构并输出为空。"
-        />
+        <t-alert v-else-if="mapping.mode === 'external-url'" class="mapping-note full" theme="info"
+          message="站外链接不请求详情；补全后的绝对地址写入此字段。站内记录输出为空。" />
+        <t-alert v-else-if="mapping.mode === 'preserve'" class="mapping-note full" theme="info"
+          :message="`输出模板中的示例值：${fieldFor(mapping)?.sampleValue || '（空）'}`" />
+        <t-alert v-else-if="mapping.mode === 'empty'" class="mapping-note full" theme="info"
+          message="该字段会保留节点结构并输出为空。" />
       </div>
     </t-collapse-panel>
   </t-collapse>
@@ -315,7 +256,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 }
 
 .field-name-line :deep(.t-tag),
-.mapping-summary > :deep(.t-tag) {
+.mapping-summary> :deep(.t-tag) {
   height: 19px;
   flex: 0 0 auto;
   padding: 0 6px;
@@ -340,10 +281,11 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
   min-width: 0;
   flex-direction: column;
   gap: 6px;
+
 }
 
-.field > span,
-.subheading > span {
+.field>span,
+.subheading>span {
   color: #536067;
   font-size: 10px;
   font-weight: 700;
@@ -391,7 +333,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
   margin-bottom: 7px;
 }
 
-.replacement-line + .replacement-line {
+.replacement-line+.replacement-line {
   margin-top: 7px;
 }
 
@@ -400,7 +342,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
   flex: 1;
 }
 
-.replacement-line > span {
+.replacement-line>span {
   color: #929da2;
 }
 
@@ -465,7 +407,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
   }
 
   .merge-value-header,
-  .merge-value-card > .full {
+  .merge-value-card>.full {
     grid-column: 1;
   }
 }

@@ -4,9 +4,15 @@ import type {
   FieldMapping,
   PageExtractionConfig,
   RecordFailure,
+  ResourcePlan,
   TaskConfig
 } from '@shared/types'
-import { processAttributeValue, processHtml } from './html-processing'
+import {
+  processAttributeValue,
+  processAttributeValueWithResources,
+  processHtmlWithResources,
+  type ProcessedResourceValue
+} from './html-processing'
 import { cleanTextValue, extractRawValue, selectNodes } from './selector-engine'
 import { hasSameHostname, resolveHttpUrl } from './url-utils'
 import { pageValueEntries } from './field-values'
@@ -21,6 +27,7 @@ export interface ListCandidate {
   detailUrl: string
   externalUrl: string
   values: Record<string, string>
+  resources: ResourcePlan[]
   missingListFields: string[]
 }
 
@@ -46,27 +53,69 @@ const extractMappingValue = (
   root: Document | Element,
   mapping: PageExtractionConfig,
   baseUrl: string,
+  pageUrl: string,
   task: TaskConfig
-): string => {
-  const raw = extractRawValue(root, mapping)
+): ProcessedResourceValue => {
+  const raw = extractRawValue(root, mapping, task.html.cleanHtml)
   if (mapping.extraction === 'html') {
-    return applyFieldCleanup(
-      processHtml(raw, baseUrl, task.html, task.resourceReplacements),
-      mapping
-    )
+    const processed = processHtmlWithResources(raw, baseUrl, pageUrl, task)
+    const value = applyFieldCleanup(processed.value, mapping)
+    return {
+      value,
+      resources: processed.resources.filter((plan) => value.includes(plan.xmlUrl))
+    }
   }
   if (mapping.extraction === 'attribute') {
-    return applyFieldCleanup(
-      processAttributeValue(
-        raw,
+    if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
+      return {
+        value: applyFieldCleanup(
+          processAttributeValue(
+            raw,
+            baseUrl,
+            task.html.absolutizeResources,
+            task.resourceReplacements
+          ),
+          mapping
+        ),
+        resources: []
+      }
+    }
+    const matches = selectNodes(root, mapping.selectorType, mapping.selector)
+    const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
+    const processedValues = selected.map((node) => {
+      const element =
+        node.nodeType === node.ATTRIBUTE_NODE
+          ? (node as Attr).ownerElement
+          : node.nodeType === node.ELEMENT_NODE
+            ? (node as Element)
+            : null
+      const attributeName =
+        node.nodeType === node.ATTRIBUTE_NODE ? node.nodeName : mapping.attribute
+      const attributeValue =
+        node.nodeType === node.ATTRIBUTE_NODE
+          ? node.nodeValue ?? ''
+          : element?.getAttribute(mapping.attribute) ?? ''
+      return processAttributeValueWithResources(
+        attributeValue,
+        element,
+        attributeName,
         baseUrl,
-        task.html.absolutizeResources,
-        task.resourceReplacements
-      ),
+        pageUrl,
+        task
+      )
+    })
+    const value = applyFieldCleanup(
+      processedValues.map((processed) => processed.value).join(mapping.separator),
       mapping
     )
+    return {
+      value,
+      resources: processedValues
+        .flatMap((processed) => processed.resources)
+        .filter((plan) => value.includes(plan.xmlUrl))
+    }
   }
-  return applyFieldCleanup(raw, mapping)
+  return { value: applyFieldCleanup(raw, mapping), resources: [] }
 }
 
 const extractDetailHref = (item: Element, task: TaskConfig): string => {
@@ -115,11 +164,14 @@ export const extractListPage = (
 
   const candidates = items.map((item, index): ListCandidate => {
     const values = initialValues(task)
+    const resources: ResourcePlan[] = []
     for (const entry of entries) {
       matchCounts[entry.matchKey]?.push(
         selectNodes(item, entry.mapping.selectorType, entry.mapping.selector).length
       )
-      values[entry.valueKey] = extractMappingValue(item, entry.mapping, baseUrl, task)
+      const processed = extractMappingValue(item, entry.mapping, baseUrl, pageUrl, task)
+      values[entry.valueKey] = processed.value
+      resources.push(...processed.resources)
     }
 
     let detailRequestUrl = ''
@@ -148,6 +200,7 @@ export const extractListPage = (
       detailUrl,
       externalUrl,
       values,
+      resources,
       missingListFields: missingRequiredFields(requiredMappings, values)
     }
   })
@@ -167,6 +220,7 @@ export const extractDetailPage = (
   const entries = pageValueEntries(task, 'detail')
   const requiredMappings = requiredPageMappings(task, 'detail')
   const values = { ...candidate.values }
+  const resources = [...candidate.resources]
   const matchCounts: Record<string, number> = {}
   for (const entry of entries) {
     matchCounts[entry.matchKey] = selectNodes(
@@ -174,7 +228,9 @@ export const extractDetailPage = (
       entry.mapping.selectorType,
       entry.mapping.selector
     ).length
-    values[entry.valueKey] = extractMappingValue(document, entry.mapping, baseUrl, task)
+    const processed = extractMappingValue(document, entry.mapping, baseUrl, pageUrl, task)
+    values[entry.valueKey] = processed.value
+    resources.push(...processed.resources)
   }
   return {
     record: {
@@ -185,7 +241,8 @@ export const extractDetailPage = (
       listUrl: candidate.listUrl,
       detailUrl: pageUrl,
       externalUrl: '',
-      values
+      values,
+      resources
     },
     missingFields: missingRequiredFields(requiredMappings, values),
     matchCounts
@@ -200,7 +257,8 @@ export const candidateToRecord = (candidate: ListCandidate): ExtractedRecord => 
   listUrl: candidate.listUrl,
   detailUrl: candidate.externalUrl ? '' : candidate.detailUrl,
   externalUrl: candidate.externalUrl,
-  values: { ...candidate.values }
+  values: { ...candidate.values },
+  resources: [...candidate.resources]
 })
 
 export const createRecordFailure = (

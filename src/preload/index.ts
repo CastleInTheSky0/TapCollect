@@ -17,6 +17,7 @@ const api: CollectorApi = {
   duplicateTask: (id) => ipcRenderer.invoke(IPC_CHANNELS.duplicateTask, id),
   deleteTask: (id) => ipcRenderer.invoke(IPC_CHANNELS.deleteTask, id),
   chooseOutputDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chooseOutputDirectory),
+  chooseResourceDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chooseResourceDirectory),
   importXmlTemplate: () => ipcRenderer.invoke(IPC_CHANNELS.importXmlTemplate),
   inspectXmlTemplate: (content) => ipcRenderer.invoke(IPC_CHANNELS.inspectXmlTemplate, content),
   selectXmlRecord: (content, fileName, recordPath) =>

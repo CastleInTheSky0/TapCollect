@@ -1,13 +1,17 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, Menu } from 'electron'
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { registerIpcHandlers } from './ipc'
 import { PreviewService } from './services/preview-service'
+import { ElectronDynamicPageProvider } from './services/dynamic-page-service'
+import { prepareDataDirectory } from './services/data-directory'
 import { RunManager } from './services/run-manager'
 import { TaskStore } from './services/task-store'
 
 const APP_NAME = 'TapCollect'
 const APP_ID = 'cn.local.tapcollect'
+const IS_DEVELOPMENT_PREVIEW =
+  !app.isPackaged && Boolean(process.env.ELECTRON_RENDERER_URL)
 
 let mainWindow: BrowserWindow | null = null
 
@@ -19,6 +23,7 @@ const createWindow = async (): Promise<void> => {
     minWidth: 1180,
     minHeight: 720,
     show: false,
+    autoHideMenuBar: !IS_DEVELOPMENT_PREVIEW,
     backgroundColor: '#f3f4f6',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -29,10 +34,19 @@ const createWindow = async (): Promise<void> => {
   }
   if (!app.isPackaged) windowOptions.icon = join(app.getAppPath(), 'build', 'icon.png')
   const window = new BrowserWindow(windowOptions)
+  if (!IS_DEVELOPMENT_PREVIEW) window.removeMenu()
   mainWindow = window
-  const store = new TaskStore(join(app.getPath('userData'), 'collector-data'))
+  const dataDirectory = await prepareDataDirectory({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    appPath: app.getAppPath(),
+    executablePath: app.getPath('exe'),
+    legacyRootDirectory: join(app.getPath('userData'), 'collector-data')
+  })
+  if (dataDirectory.warning) console.warn(dataDirectory.warning)
+  const store = new TaskStore(dataDirectory.rootDirectory)
   await store.initialize()
-  const runManager = new RunManager(store)
+  const runManager = new RunManager(store, new ElectronDynamicPageProvider(window))
   const preview = new PreviewService(window)
   registerIpcHandlers(window, store, runManager, preview)
 
@@ -85,6 +99,7 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     app.setAppUserModelId(APP_ID)
+    if (!IS_DEVELOPMENT_PREVIEW) Menu.setApplicationMenu(null)
     await createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow()

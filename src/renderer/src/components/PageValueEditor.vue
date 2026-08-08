@@ -39,18 +39,17 @@ const addReplacement = (): void => {
     <div class="field selector-field full">
       <span>选择器</span>
       <div class="inline-control">
-        <t-input
-          v-model="model.selector"
-          class="code-input"
-          :spell-check="false"
-          placeholder="例如 .title 或 .//h1"
-        />
+        <t-input v-model="model.selector" class="code-input" :spell-check="false" placeholder="例如 .title 或 .//h1" />
         <t-button theme="default" variant="outline" @click="$emit('evaluate')">
-          <template #icon><SearchIcon /></template>
+          <template #icon>
+            <SearchIcon />
+          </template>
           验证
         </t-button>
         <t-button theme="primary" variant="outline" @click="$emit('pick')">
-          <template #icon><CursorIcon /></template>
+          <template #icon>
+            <CursorIcon />
+          </template>
           点选
         </t-button>
       </div>
@@ -89,7 +88,9 @@ const addReplacement = (): void => {
       <div class="subheading">
         <span>字段字符串替换</span>
         <t-button size="small" theme="default" variant="text" @click="addReplacement">
-          <template #icon><AddIcon /></template>
+          <template #icon>
+            <AddIcon />
+          </template>
           添加
         </t-button>
       </div>
@@ -98,12 +99,8 @@ const addReplacement = (): void => {
         <span>→</span>
         <t-input v-model="rule.to" placeholder="新字符串" />
         <t-tooltip content="删除替换规则" placement="top">
-          <t-button
-            theme="danger"
-            variant="text"
-            shape="square"
-            @click="model.replacements.splice(model.replacements.indexOf(rule), 1)"
-          >
+          <t-button theme="danger" variant="text" shape="square"
+            @click="model.replacements.splice(model.replacements.indexOf(rule), 1)">
             <DeleteIcon />
           </t-button>
         </t-tooltip>
@@ -130,10 +127,11 @@ const addReplacement = (): void => {
   min-width: 0;
   flex-direction: column;
   gap: 6px;
+
 }
 
-.field > span,
-.subheading > span {
+.field>span,
+.subheading>span {
   color: #536067;
   font-size: 10px;
   font-weight: 700;
@@ -181,7 +179,7 @@ const addReplacement = (): void => {
   margin-bottom: 7px;
 }
 
-.replacement-line + .replacement-line {
+.replacement-line+.replacement-line {
   margin-top: 7px;
 }
 
@@ -190,7 +188,7 @@ const addReplacement = (): void => {
   flex: 1;
 }
 
-.replacement-line > span {
+.replacement-line>span {
   color: #929da2;
 }
 

@@ -1,4 +1,5 @@
 export type SelectorType = 'css' | 'xpath'
+export type PaginationMode = 'url' | 'click'
 export type PageSource = 'list' | 'detail'
 export type ExtractionType = 'text' | 'html' | 'attribute'
 export type MappingMode =
@@ -14,8 +15,18 @@ export type MergeValueMode = 'page' | 'fixed' | 'system' | 'external-url'
 export type SystemValue = 'list-url' | 'detail-url' | 'collected-at'
 export type MatchMode = 'first' | 'all'
 export type XmlNodeKind = 'element' | 'attribute'
+export type ResourceAddressMode = 'absolute-replace' | 'prefix'
+export type ResourceKind = 'image' | 'audio' | 'video' | 'attachment' | 'other'
 export type RunStatus = 'idle' | 'preparing' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
-export type RunStage = 'preparing' | 'list' | 'detail' | 'writing' | 'completed' | 'cancelled' | 'failed'
+export type RunStage =
+  | 'preparing'
+  | 'list'
+  | 'detail'
+  | 'resource'
+  | 'writing'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
 
 export interface HeaderEntry {
   id: string
@@ -47,10 +58,12 @@ export interface DetailConfig {
 }
 
 export interface PaginationConfig {
+  mode: PaginationMode
   urlTemplate: string
   startPage: number
   step: number
   maxPages: number
+  nextButton: SelectorConfig
 }
 
 export interface RequestConfig {
@@ -66,6 +79,18 @@ export interface HtmlProcessingConfig {
   cleanHtml: boolean
   absolutizeResources: boolean
   customResourceAttributes: string[]
+}
+
+export interface ResourceDownloadConfig {
+  enabled: boolean
+  rootDirectory: string
+  urlPrefix: string
+}
+
+export interface ResourceConfig {
+  addressMode: ResourceAddressMode
+  urlPrefix: string
+  download: ResourceDownloadConfig
 }
 
 export interface OutputConfig {
@@ -133,6 +158,7 @@ export interface TaskConfig {
   pagination: PaginationConfig
   request: RequestConfig
   html: HtmlProcessingConfig
+  resources: ResourceConfig
   resourceReplacements: ReplacementRule[]
   output: OutputConfig
   xml: XmlTemplateConfig | null
@@ -178,6 +204,16 @@ export interface ExtractedRecord {
   detailUrl: string
   externalUrl: string
   values: Record<string, string>
+  resources?: ResourcePlan[]
+}
+
+export interface ResourcePlan {
+  normalizedUrl: string
+  sourceUrl: string
+  relativePath: string
+  localPath: string
+  xmlUrl: string
+  kind: ResourceKind
 }
 
 export interface RecordFailure {
@@ -199,6 +235,7 @@ export interface TestCollectionResult {
   failures: RecordFailure[]
   listItemCount: number
   xmlPreview: string
+  resourcePlans: ResourcePlan[]
   messages: string[]
 }
 
@@ -206,6 +243,12 @@ export interface RunCounters {
   discovered: number
   succeeded: number
   duplicated: number
+  skipped: number
+  failed: number
+}
+
+export interface ResourceCounters {
+  downloaded: number
   skipped: number
   failed: number
 }
@@ -221,6 +264,7 @@ export interface RunProgress {
   currentFile: string
   recordsInCurrentFile: number
   counters: RunCounters
+  resources: ResourceCounters
   message: string
 }
 
@@ -241,6 +285,7 @@ export interface RunResult {
   outputFiles: string[]
   errorLogPath: string
   counters: RunCounters
+  resources: ResourceCounters
   message: string
 }
 
@@ -262,6 +307,8 @@ export interface RunCheckpoint {
   outputFiles: string[]
   errorLogPath: string
   counters: RunCounters
+  resources: ResourceCounters
+  processedResourceUrls: string[]
 }
 
 export interface PreviewBounds {
@@ -309,6 +356,7 @@ export interface CollectorApi {
   duplicateTask: (id: string) => Promise<TaskConfig>
   deleteTask: (id: string) => Promise<boolean>
   chooseOutputDirectory: () => Promise<string>
+  chooseResourceDirectory: () => Promise<string>
   importXmlTemplate: () => Promise<XmlImportResult>
   inspectXmlTemplate: (content: string) => Promise<XmlTreeNode[]>
   selectXmlRecord: (

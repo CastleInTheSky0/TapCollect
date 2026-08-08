@@ -74,6 +74,47 @@ describe('preview selector resolution', () => {
     expect(date.matches.map((element) => element.textContent)).toEqual(['日期甲', '日期乙', '日期丙'])
   })
 
+  it('selects repeated records when the list range itself is clicked', () => {
+    const document = new JSDOM(`
+      <div id="content-area">
+        <span class="zi_left">
+          <div class="nr"><dl><dt><a href="/1">公告一</a></dt><dt>日期一</dt></dl><div class="cl"></div></div>
+          <div class="nr"><dl><dt><a href="/2">公告二</a></dt><dt>日期二</dt></dl><div class="cl"></div></div>
+          <div class="nr"><dl><dt><a href="/3">公告三</a></dt><dt>日期三</dt></dl><div class="cl"></div></div>
+          <div class="spacing"></div>
+          <ul class="pages"><li><a href="/page/1">1</a></li><li><a href="/page/2">2</a></li></ul>
+        </span>
+      </div>
+    `).window.document
+
+    const range = resolvePreviewSelection(document.querySelector('.zi_left')!, '')
+    const wrapper = resolvePreviewSelection(document.querySelector('#content-area')!, '')
+
+    expect(range.selector).toBe('#content-area > span.zi_left > div.nr')
+    expect(wrapper.selector).toBe(range.selector)
+    expect(range.matches.map((element) => element.querySelector('a')?.textContent)).toEqual([
+      '公告一',
+      '公告二',
+      '公告三'
+    ])
+    expect(wrapper.matches).toHaveLength(3)
+  })
+
+  it('selects direct list children when an ul or table body is clicked', () => {
+    const document = new JSDOM(`
+      <ul id="articles"><li><a href="/1">甲</a></li><li><a href="/2">乙</a></li></ul>
+      <table id="records"><tbody><tr><td>一</td></tr><tr><td>二</td></tr></tbody></table>
+    `).window.document
+
+    const list = resolvePreviewSelection(document.querySelector('#articles')!, '')
+    const tableBody = resolvePreviewSelection(document.querySelector('#records tbody')!, '')
+
+    expect(list.selector).toBe('#articles > li')
+    expect(list.matches).toHaveLength(2)
+    expect(tableBody.selector).toBe('#records > tbody > tr')
+    expect(tableBody.matches).toHaveLength(2)
+  })
+
   it('keeps document fields concise and falls back to an exact selector without repetition', () => {
     const detailDocument = new JSDOM(
       '<main><div id="divContent"><p>详情正文</p></div></main>'
@@ -99,7 +140,10 @@ describe('preview selector resolution', () => {
     ) as (target: Element, scopeSelector: string) => PreviewSelection
 
     const result = runtime(document.querySelectorAll('.ListItemDate')[2]!, '')
+    const rangeResult = runtime(document.querySelector('#gvMain tbody')!, '')
     expect(result.selector).toBe('#gvMain > tbody > tr')
     expect(result.matches).toHaveLength(3)
+    expect(rangeResult.selector).toBe('#gvMain > tbody > tr')
+    expect(rangeResult.matches).toHaveLength(3)
   })
 })

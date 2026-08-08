@@ -38,7 +38,7 @@ const shortDate = (value: string): string => {
       </div>
       <div class="brand-copy">
         <strong>TapCollect</strong>
-        <span>静态网页采集与 XML 输出</span>
+        <span>网页列表采集与 XML 输出</span>
       </div>
     </div>
 
@@ -122,7 +122,7 @@ const shortDate = (value: string): string => {
     <div v-else class="task-empty">
       <DataSearchIcon size="24px" />
       <strong>还没有任务</strong>
-      <p>从一个静态列表页地址开始。</p>
+      <p>从一个列表页地址开始。</p>
     </div>
 
     <div class="sidebar-note">

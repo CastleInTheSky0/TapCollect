@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { net } from 'electron'
 import type { RunLog, RunProgress, RunResult, TestCollectionResult } from '@shared/types'
 import { CollectorEngine, CollectorRunControl } from '@main/core/collector-engine'
+import type { DynamicPageProvider } from '@main/core/dynamic-page'
 import { HttpClient } from '@main/core/http-client'
 import type { TaskStore } from './task-store'
 
@@ -16,9 +17,16 @@ export class RunManager extends EventEmitter {
   private latestProgress: RunProgress | null = null
   private readonly engine: CollectorEngine
 
-  constructor(private readonly store: TaskStore) {
+  constructor(
+    private readonly store: TaskStore,
+    dynamicPageProvider: DynamicPageProvider | null = null
+  ) {
     super()
-    this.engine = new CollectorEngine(store, new HttpClient(net.fetch as typeof fetch))
+    this.engine = new CollectorEngine(
+      store,
+      new HttpClient(net.fetch as typeof fetch),
+      dynamicPageProvider
+    )
   }
 
   hasActiveRun(): boolean {

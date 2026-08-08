@@ -6,7 +6,19 @@ import vueParser from 'vue-eslint-parser'
 
 export default tseslint.config(
   {
-    ignores: ['node_modules', 'out', 'release', 'coverage', '.trellis', '.agents', '.codex']
+    ignores: [
+      'node_modules',
+      'out',
+      'output',
+      'release',
+      'coverage',
+      '.playwright-cli',
+      'playwright-report',
+      'test-results',
+      '.trellis',
+      '.agents',
+      '.codex'
+    ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

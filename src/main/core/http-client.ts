@@ -14,6 +14,13 @@ const FORBIDDEN_CUSTOM_HEADERS = new Set([
   'proxy-authorization'
 ])
 
+export const allowedCustomRequestHeaders = (
+  config: RequestConfig
+): Array<{ key: string; value: string }> =>
+  config.headers
+    .map((entry) => ({ key: entry.key.trim(), value: entry.value }))
+    .filter((entry) => entry.key && !FORBIDDEN_CUSTOM_HEADERS.has(entry.key.toLowerCase()))
+
 export interface FetchHtmlSuccess {
   kind: 'success'
   requestedUrl: string
@@ -44,6 +51,31 @@ export type FetchHtmlResult =
   | FetchHtmlSuccess
   | FetchHtmlNotFound
   | FetchHtmlExternalRedirect
+
+export interface FetchResourceSuccess {
+  kind: 'success'
+  requestedUrl: string
+  finalUrl: string
+  status: number
+  response: Response
+  retries: number
+}
+
+export type FetchResourceResult =
+  | FetchResourceSuccess
+  | FetchHtmlNotFound
+  | FetchHtmlExternalRedirect
+
+interface RawFetchSuccess {
+  kind: 'success'
+  requestedUrl: string
+  finalUrl: string
+  status: number
+  response: Response
+  retries: number
+}
+
+type RawFetchResult = RawFetchSuccess | FetchHtmlNotFound | FetchHtmlExternalRedirect
 
 export class HttpRequestError extends Error {
   readonly url: string
@@ -112,22 +144,28 @@ export const decodeHtml = (
   return { html: iconv.decode(buffer, encoding), encoding }
 }
 
-const buildHeaders = (config: RequestConfig): Headers => {
+const buildHeaders = (config: RequestConfig, accept: string): Headers => {
   const headers = new Headers({
     'user-agent': config.userAgent,
-    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    accept,
     'accept-language': 'zh-CN,zh;q=0.9,en;q=0.7'
   })
-  for (const entry of config.headers) {
-    const key = entry.key.trim()
-    if (!key || FORBIDDEN_CUSTOM_HEADERS.has(key.toLowerCase())) continue
-    headers.set(key, entry.value)
+  for (const entry of allowedCustomRequestHeaders(config)) {
+    headers.set(entry.key, entry.value)
   }
   return headers
 }
 
 const wait = async (milliseconds: number): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+}
+
+const discardResponseBody = async (response: Response): Promise<void> => {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // A failed discard must not replace the authoritative HTTP result.
+  }
 }
 
 export class HttpClient {
@@ -142,10 +180,57 @@ export class HttpClient {
     config: RequestConfig,
     allowedHostname = new URL(requestedUrl).hostname
   ): Promise<FetchHtmlResult> {
+    const result = await this.fetchResponse(
+      requestedUrl,
+      config,
+      allowedHostname,
+      'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    )
+    if (result.kind !== 'success') return result
+    try {
+      const buffer = Buffer.from(await result.response.arrayBuffer())
+      const decoded = decodeHtml(
+        buffer,
+        result.response.headers.get('content-type'),
+        config.manualEncoding
+      )
+      return {
+        kind: 'success',
+        requestedUrl,
+        finalUrl: result.finalUrl,
+        status: result.status,
+        html: decoded.html,
+        encoding: decoded.encoding,
+        retries: result.retries
+      }
+    } catch (error) {
+      throw new HttpRequestError(
+        error instanceof Error ? error.message : String(error),
+        result.finalUrl,
+        result.status,
+        result.retries
+      )
+    }
+  }
+
+  async fetchResource(
+    requestedUrl: string,
+    config: RequestConfig,
+    allowedHostname = new URL(requestedUrl).hostname
+  ): Promise<FetchResourceResult> {
+    return this.fetchResponse(requestedUrl, config, allowedHostname, '*/*')
+  }
+
+  private async fetchResponse(
+    requestedUrl: string,
+    config: RequestConfig,
+    allowedHostname: string,
+    accept: string
+  ): Promise<RawFetchResult> {
     let lastError: unknown
     for (let retry = 0; retry <= MAX_RETRIES; retry += 1) {
       try {
-        return await this.fetchAttempt(requestedUrl, config, allowedHostname, retry)
+        return await this.fetchAttempt(requestedUrl, config, allowedHostname, retry, accept)
       } catch (error) {
         lastError = error
         const retryable = error instanceof RetryableRequestError
@@ -165,8 +250,9 @@ export class HttpClient {
     requestedUrl: string,
     config: RequestConfig,
     allowedHostname: string,
-    retries: number
-  ): Promise<FetchHtmlResult> {
+    retries: number,
+    accept: string
+  ): Promise<RawFetchResult> {
     let currentUrl = requestedUrl
     const visited = new Set<string>()
 
@@ -181,7 +267,7 @@ export class HttpClient {
         response = await this.fetchImplementation(currentUrl, {
           method: 'GET',
           redirect: 'manual',
-          headers: buildHeaders(config),
+          headers: buildHeaders(config, accept),
           signal: AbortSignal.timeout(config.timeoutSeconds * 1_000)
         })
       } catch (error) {
@@ -192,10 +278,12 @@ export class HttpClient {
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
         if (!location) {
+          await discardResponseBody(response)
           throw new HttpRequestError('重定向响应缺少 Location', currentUrl, response.status, retries)
         }
         const target = new URL(location, currentUrl).toString()
         if (new URL(target).hostname.toLowerCase() !== allowedHostname.toLowerCase()) {
+          await discardResponseBody(response)
           return {
             kind: 'external-redirect',
             requestedUrl,
@@ -204,11 +292,13 @@ export class HttpClient {
             retries
           }
         }
+        await discardResponseBody(response)
         currentUrl = target
         continue
       }
 
       if (response.status === 404 || response.status === 410) {
+        await discardResponseBody(response)
         return {
           kind: 'not-found',
           requestedUrl,
@@ -219,9 +309,11 @@ export class HttpClient {
       }
 
       if (response.status >= 500 || RETRYABLE_STATUS.has(response.status)) {
+        await discardResponseBody(response)
         throw new RetryableRequestError(`服务器返回 ${response.status}`, response.status)
       }
       if (!response.ok) {
+        await discardResponseBody(response)
         throw new HttpRequestError(
           `请求返回不可处理的状态码 ${response.status}`,
           currentUrl,
@@ -230,15 +322,12 @@ export class HttpClient {
         )
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer())
-      const decoded = decodeHtml(buffer, response.headers.get('content-type'), config.manualEncoding)
       return {
         kind: 'success',
         requestedUrl,
         finalUrl: currentUrl,
         status: response.status,
-        html: decoded.html,
-        encoding: decoded.encoding,
+        response,
         retries
       }
     }

@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { DEFAULT_SETTINGS, isTaskRunnable, normalizeTaskConfig } from '@shared/defaults'
+import {
+  createEmptyResourceCounters,
+  DEFAULT_SETTINGS,
+  isTaskRunnable,
+  normalizeTaskConfig
+} from '@shared/defaults'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
 import type {
   AppSettings,
@@ -19,9 +24,14 @@ interface OutputManifest {
 type StoredCheckpoint = Omit<RunCheckpoint, 'pendingRecords'>
 type LegacyStoredCheckpoint = Omit<
   StoredCheckpoint,
-  'nextRuleIndex' | 'templatePagesVisited'
+  'nextRuleIndex' | 'templatePagesVisited' | 'resources' | 'processedResourceUrls'
 > &
-  Partial<Pick<StoredCheckpoint, 'nextRuleIndex' | 'templatePagesVisited'>>
+  Partial<
+    Pick<
+      StoredCheckpoint,
+      'nextRuleIndex' | 'templatePagesVisited' | 'resources' | 'processedResourceUrls'
+    >
+  >
 
 const validateId = (id: string): string => {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('任务 ID 非法')
@@ -170,11 +180,15 @@ export class TaskStore {
     validateId(taskId)
     const stored = await readJson<LegacyStoredCheckpoint | null>(this.checkpointPath(taskId), null)
     if (!stored) return null
-    const pendingRecords = await readNdjson<ExtractedRecord>(this.pendingPath(taskId))
+    const pendingRecords = (await readNdjson<ExtractedRecord>(this.pendingPath(taskId))).map(
+      (record) => ({ ...record, resources: record.resources ?? [] })
+    )
     return {
       ...stored,
       nextRuleIndex: stored.nextRuleIndex ?? 0,
       templatePagesVisited: stored.templatePagesVisited ?? stored.pagesVisited,
+      resources: stored.resources ?? createEmptyResourceCounters(),
+      processedResourceUrls: stored.processedResourceUrls ?? [],
       pendingRecords
     }
   }

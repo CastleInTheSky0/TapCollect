@@ -151,6 +151,69 @@ export function resolvePreviewSelection(
     return tag
   }
 
+  const repeatedChildrenWithin = (container: Element): PreviewSelection | null => {
+    const containerTag = container.tagName.toLowerCase()
+    if (containerTag === 'html' || containerTag === 'body') return null
+
+    let level: Element[] = [container]
+    const maxDepth = 2
+    for (let depth = 0; depth <= maxDepth && level.length; depth += 1) {
+      const candidates: Array<{
+        parent: Element
+        segment: string
+        score: number
+      }> = []
+
+      level.forEach((parent) => {
+        const children = Array.from(parent.children)
+        const seenSegments = new Set<string>()
+        children.forEach((child) => {
+          const segment = repeatedSegmentFor(child)
+          if (!segment || seenSegments.has(segment)) return
+          seenSegments.add(segment)
+
+          const matches = children.filter((sibling) => safeMatches(sibling, segment))
+          if (matches.length < 2) return
+          const signature = structureSignature(child)
+          if (matches.filter((match) => structureSignature(match) === signature).length < 2) {
+            return
+          }
+
+          const linkCount = matches.filter(
+            (match) => safeMatches(match, 'a[href]') || Boolean(match.querySelector('a[href]'))
+          ).length
+          const textCount = matches.filter((match) => Boolean((match.textContent || '').trim())).length
+          candidates.push({
+            parent,
+            segment,
+            score: linkCount * 4 + textCount * 2 + matches.length
+          })
+        })
+      })
+
+      candidates.sort((left, right) => right.score - left.score)
+      for (const candidate of candidates) {
+        const parentSelector = exactSelectorFor(candidate.parent, ownerDocument, false, true)
+        const selector = `${parentSelector} > ${candidate.segment}`
+        let matches: Element[] = []
+        try {
+          matches = Array.from(ownerDocument.querySelectorAll(selector))
+        } catch {
+          matches = []
+        }
+        if (matches.length > 1) return { selector, matches }
+      }
+
+      if (depth === maxDepth) break
+      level = level
+        .flatMap((parent) => Array.from(parent.children))
+        .filter((child) => !['script', 'style', 'template'].includes(child.tagName.toLowerCase()))
+        .slice(0, 200)
+    }
+
+    return null
+  }
+
   if (!scopeSelector) {
     let current: Element | null = target
     while (current && current !== ownerDocument.documentElement) {
@@ -169,6 +232,9 @@ export function resolvePreviewSelection(
       }
       current = current.parentElement
     }
+
+    const nestedSelection = repeatedChildrenWithin(target)
+    if (nestedSelection) return nestedSelection
 
     const selector = exactSelectorFor(target, ownerDocument, false, true)
     return { selector, matches: uniqueMatches(selector) }

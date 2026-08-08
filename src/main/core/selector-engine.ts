@@ -21,11 +21,37 @@ export const selectNodes = (
   return selectorType === 'css' ? selectCss(root, expression) : selectXPath(root, expression)
 }
 
-const nodeText = (node: Node): string => node.textContent ?? ''
+const SCRIPT_CONTENT_SELECTOR = 'script,noscript'
 
-const nodeHtml = (node: Node): string => {
-  if (node.nodeType === node.ELEMENT_NODE) return (node as Element).innerHTML
-  return nodeText(node)
+const isScriptContentNode = (node: Node): boolean => {
+  if (node.nodeType === node.ELEMENT_NODE) {
+    return (node as Element).matches(SCRIPT_CONTENT_SELECTOR)
+  }
+  return Boolean(node.parentElement?.closest(SCRIPT_CONTENT_SELECTOR))
+}
+
+const cloneWithoutScriptContent = (element: Element): Element => {
+  const clone = element.cloneNode(true) as Element
+  clone.querySelectorAll(SCRIPT_CONTENT_SELECTOR).forEach((child) => child.remove())
+  return clone
+}
+
+const nodeText = (node: Node, stripScriptContent: boolean): string => {
+  if (!stripScriptContent) return node.textContent ?? ''
+  if (isScriptContentNode(node)) return ''
+  if (node.nodeType === node.ELEMENT_NODE) {
+    return cloneWithoutScriptContent(node as Element).textContent ?? ''
+  }
+  return node.textContent ?? ''
+}
+
+const nodeHtml = (node: Node, stripScriptContent: boolean): string => {
+  if (stripScriptContent && isScriptContentNode(node)) return ''
+  if (node.nodeType === node.ELEMENT_NODE) {
+    const element = node as Element
+    return stripScriptContent ? cloneWithoutScriptContent(element).innerHTML : element.innerHTML
+  }
+  return nodeText(node, stripScriptContent)
 }
 
 const nodeAttribute = (node: Node, attribute: string): string => {
@@ -36,13 +62,17 @@ const nodeAttribute = (node: Node, attribute: string): string => {
   return ''
 }
 
-export const extractRawValue = (root: QueryRoot, mapping: PageExtractionConfig): string => {
+export const extractRawValue = (
+  root: QueryRoot,
+  mapping: PageExtractionConfig,
+  stripScriptContent = false
+): string => {
   const matches = selectNodes(root, mapping.selectorType, mapping.selector)
   const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
   const values = selected.map((node) => {
-    if (mapping.extraction === 'html') return nodeHtml(node)
+    if (mapping.extraction === 'html') return nodeHtml(node, stripScriptContent)
     if (mapping.extraction === 'attribute') return nodeAttribute(node, mapping.attribute)
-    return nodeText(node)
+    return nodeText(node, stripScriptContent)
   })
   return values.join(mapping.separator)
 }
