@@ -153,8 +153,8 @@ macOS 打包必须在 macOS 上执行。当前配置为两种架构分别生成 
 发布新版本时，先确保 `package.json` 的版本号与标签一致，再推送版本标签，例如：
 
 ```powershell
-git tag -a v0.2.0 -m "TapCollect v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "TapCollect v0.2.1"
+git push origin v0.2.1
 ```
 
 仓库的 `.gitignore` 已排除本地任务、检查点、运行清单、采集输出、导入模板、界面测试截图及开发工具状态目录。提交前仍建议执行 `git status --short`，确认清单中没有本地采集数据。

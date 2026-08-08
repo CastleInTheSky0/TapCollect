@@ -1,6 +1,6 @@
 {
   "name": "tapcollect",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "可配置的网页列表与详情信息采集、XML 模板映射和分批导出工具",
   "main": "./out/main/index.js",
   "author": {
