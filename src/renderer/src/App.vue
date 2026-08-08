@@ -18,6 +18,8 @@ import {
   FolderOpenIcon,
   InternetIcon,
   LinkIcon,
+  MenuFoldIcon,
+  MenuUnfoldIcon,
   PlayIcon,
   RefreshIcon,
   SaveIcon,
@@ -38,18 +40,22 @@ import type {
   RunLog,
   RunProgress,
   RunResult,
+  RunSessionItem,
+  RunSessionSnapshot,
   TaskConfig,
   TaskSummary,
   TestCollectionResult,
   XmlTreeNode
 } from '@shared/types'
 import FieldMappingEditor from './components/FieldMappingEditor.vue'
+import RunCenter from './components/RunCenter.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import {
   defaultPaneWidths,
   fitRunLogHeight,
   fitPaneWidths,
   maxRunLogHeight,
+  PANE_LAYOUT,
   resizeRunLogHeight,
   resizePaneWidths,
   RUN_LOG_LAYOUT,
@@ -73,7 +79,8 @@ const resourceKindLabels = {
 const tasks = ref<TaskSummary[]>([])
 const activeTask = ref<TaskConfig | null>(null)
 const savedTaskFingerprint = ref<string | null>(null)
-const settings = ref<AppSettings>({ defaultOutputDirectory: '' })
+const settings = ref<AppSettings>({ defaultOutputDirectory: '', maxConcurrentRuns: 3 })
+const appView = ref<'task' | 'run-center'>('task')
 const currentStep = ref(1)
 const busy = ref(false)
 const saving = ref(false)
@@ -98,18 +105,51 @@ const sidebarCollapsed = ref(false)
 const previewCollapsed = ref(false)
 const resizingPane = ref<ResizablePane | null>(null)
 
-const running = ref(false)
-const runProgress = ref<RunProgress | null>(null)
-const runLogs = ref<RunLog[]>([])
+const runSession = ref<RunSessionSnapshot>({
+  maxConcurrentRuns: 3,
+  activeCount: 0,
+  queuedCount: 0,
+  testingTaskId: '',
+  items: []
+})
+const selectedRunTaskId = ref('')
+const dismissedRunTaskIds = ref<Set<string>>(new Set())
+const runActionTaskId = ref('')
+const batchRunAction = ref('')
+const settingsSaving = ref(false)
 const runLogsElement = ref<HTMLElement | null>(null)
 const runLogHeight = ref(fitRunLogHeight(RUN_LOG_LAYOUT.defaultHeight, window.innerHeight))
 const runLogMaxHeight = ref(maxRunLogHeight(window.innerHeight))
-const runResult = ref<RunResult | null>(null)
 const resumePrompt = ref(false)
+const pendingRunTaskId = ref('')
 const pendingDeleteTaskId = ref('')
-const cancelPrompt = ref(false)
+const cancelPromptTaskId = ref('')
+const cancelAllPrompt = ref(false)
 
 const activeId = computed(() => activeTask.value?.id ?? '')
+const runItemMap = computed(() =>
+  new Map(runSession.value.items.map((item) => [item.taskId, item] as const))
+)
+const isRunItemLocked = (item: RunSessionItem | undefined): boolean =>
+  Boolean(
+    item && ['queued', 'preparing', 'running', 'pausing', 'paused'].includes(item.status)
+  )
+const activeTaskRunItem = computed(() => runItemMap.value.get(activeId.value))
+const activeTaskLocked = computed(
+  () =>
+    runSession.value.testingTaskId === activeId.value || isRunItemLocked(activeTaskRunItem.value)
+)
+const selectedRunItem = computed(() => runItemMap.value.get(selectedRunTaskId.value) ?? null)
+const runProgress = computed<RunProgress | null>(() => selectedRunItem.value?.progress ?? null)
+const runLogs = computed<RunLog[]>(() => selectedRunItem.value?.logs ?? [])
+const runResult = computed<RunResult | null>(() => selectedRunItem.value?.result ?? null)
+const selectedRunLocked = computed(() => isRunItemLocked(selectedRunItem.value ?? undefined))
+const showRunDrawer = computed(
+  () =>
+    appView.value === 'task' &&
+    Boolean(selectedRunItem.value) &&
+    !dismissedRunTaskIds.value.has(selectedRunItem.value?.taskId ?? '')
+)
 const configurationIssues = computed(() =>
   activeTask.value ? taskConfigurationIssues(activeTask.value) : []
 )
@@ -146,11 +186,11 @@ const fixedListPageCount = computed(
 )
 const paneVisibility = computed<PaneVisibility>(() => ({
   sidebar: !sidebarCollapsed.value,
-  preview: !previewCollapsed.value
+  preview: appView.value === 'task' && !previewCollapsed.value
 }))
 const appShellStyle = computed<Record<string, string>>(() => ({
-  '--sidebar-width': `${sidebarCollapsed.value ? 0 : paneWidths.value.sidebar}px`,
-  '--preview-width': `${previewCollapsed.value ? 0 : paneWidths.value.preview}px`
+  '--sidebar-width': `${sidebarCollapsed.value ? PANE_LAYOUT.sidebarCollapsedWidth : paneWidths.value.sidebar}px`,
+  '--preview-width': `${appView.value === 'run-center' || previewCollapsed.value ? 0 : paneWidths.value.preview}px`
 }))
 const unresolvedMappings = computed(
   () =>
@@ -251,7 +291,12 @@ const refreshTasks = async (): Promise<void> => {
 }
 
 const loadTask = async (id: string): Promise<void> => {
-  if (running.value || id === activeTask.value?.id) return
+  appView.value = 'task'
+  selectedRunTaskId.value = id
+  if (id === activeTask.value?.id) {
+    void nextTick(schedulePreviewBoundsUpdate)
+    return
+  }
   busy.value = true
   try {
     const task = await api.loadTask(id)
@@ -266,6 +311,7 @@ const loadTask = async (id: string): Promise<void> => {
     currentStep.value = 1
     xmlTree.value = task.xml ? await api.inspectXmlTemplate(task.xml.content) : []
     if (previewVisible.value && previewUrl.value) await api.previewNavigate(previewUrl.value)
+    void nextTick(schedulePreviewBoundsUpdate)
   } catch (error) {
     showError(error)
   } finally {
@@ -274,10 +320,11 @@ const loadTask = async (id: string): Promise<void> => {
 }
 
 const createNewTask = (): void => {
-  if (running.value) return
   const task = createTask(crypto.randomUUID())
   task.output.rootDirectory = settings.value.defaultOutputDirectory
   activeTask.value = task
+  appView.value = 'task'
+  selectedRunTaskId.value = task.id
   savedTaskFingerprint.value = null
   currentStep.value = 1
   xmlTree.value = []
@@ -287,10 +334,26 @@ const createNewTask = (): void => {
   testResult.value = null
   previewUrl.value = ''
   paginationDetectionLineIndex.value = -1
+  void nextTick(schedulePreviewBoundsUpdate)
+}
+
+const showRunCenter = (): void => {
+  appView.value = 'run-center'
+  if (!selectedRunTaskId.value || !runItemMap.value.has(selectedRunTaskId.value)) {
+    selectedRunTaskId.value =
+      runSession.value.items.find((item) =>
+        ['preparing', 'running', 'pausing', 'paused', 'queued'].includes(item.status)
+      )?.taskId ?? runSession.value.items[0]?.taskId ?? ''
+  }
+  schedulePreviewBoundsUpdate()
 }
 
 const saveCurrent = async (silent = false): Promise<TaskConfig | null> => {
   if (!activeTask.value) return null
+  if (activeTaskLocked.value) {
+    if (!silent) showWarning('当前任务正在运行、暂停、排队或测试，暂时不能保存配置')
+    return null
+  }
   saving.value = true
   try {
     synchronizeListPageMetadata(activeTask.value)
@@ -319,7 +382,6 @@ const saveCurrent = async (silent = false): Promise<TaskConfig | null> => {
 }
 
 const duplicateTask = async (id: string): Promise<void> => {
-  if (running.value) return
   try {
     const copy = await api.duplicateTask(id)
     await refreshTasks()
@@ -331,7 +393,11 @@ const duplicateTask = async (id: string): Promise<void> => {
 }
 
 const removeTask = (id: string): void => {
-  if (running.value) return
+  const item = runItemMap.value.get(id)
+  if (isRunItemLocked(item) || runSession.value.testingTaskId === id) {
+    showWarning('运行、暂停、排队或测试中的任务不能删除')
+    return
+  }
   pendingDeleteTaskId.value = id
 }
 
@@ -453,7 +519,10 @@ const saveDefaultOutputDirectory = async (): Promise<void> => {
     return
   }
   try {
-    settings.value = await api.saveSettings({ defaultOutputDirectory: path })
+    settings.value = await api.saveSettings({
+      ...settings.value,
+      defaultOutputDirectory: path
+    })
     showNotice('已设为新任务的全局默认输出目录')
   } catch (error) {
     showError(error)
@@ -490,7 +559,7 @@ const previewBounds = (): PreviewBounds | null => {
 
 const updatePreviewBounds = (): void => {
   if (!previewVisible.value) return
-  if (previewCollapsed.value) {
+  if (appView.value === 'run-center' || previewCollapsed.value) {
     void api.previewSetBounds({ x: window.innerWidth + 2, y: 0, width: 1, height: 1 })
     return
   }
@@ -812,6 +881,10 @@ const evaluateBaseSelector = async (target: BaseSelectorTarget): Promise<void> =
 const openDetailSample = async (next: boolean): Promise<void> => {
   const task = activeTask.value
   if (!task) return
+  if (activeTaskLocked.value) {
+    showWarning('当前任务正在运行、暂停、排队或测试，不能读取详情样例')
+    return
+  }
   const action: PreviewOpenAction = next ? 'detail-next' : 'detail-first'
   try {
     await runPreviewOpenAction(
@@ -902,6 +975,10 @@ const evaluateMapping = async (path: string, mergeValueId?: string): Promise<voi
 
 const runTest = async (): Promise<void> => {
   if (!activeTask.value || testing.value) return
+  if (activeTaskLocked.value) {
+    showWarning('当前任务正在运行、暂停、排队或测试，不能执行测试采集')
+    return
+  }
   testing.value = true
   testResult.value = null
   try {
@@ -917,7 +994,16 @@ const runTest = async (): Promise<void> => {
 }
 
 const requestRun = async (id?: string): Promise<void> => {
-  if (running.value) return
+  const requestedId = id ?? activeTask.value?.id ?? ''
+  const existing = runItemMap.value.get(requestedId)
+  if (existing?.status === 'paused') {
+    await resumeRun(requestedId)
+    return
+  }
+  if (isRunItemLocked(existing) || runSession.value.testingTaskId === requestedId) {
+    showWarning('该任务已经在运行、暂停、排队或测试中')
+    return
+  }
   if (id && id !== activeTask.value?.id) {
     await loadTask(id)
     if (activeTask.value?.id !== id) return
@@ -934,56 +1020,162 @@ const requestRun = async (id?: string): Promise<void> => {
     return
   }
   const checkpoint = await api.getCheckpoint(task.id)
+  pendingRunTaskId.value = task.id
   if (checkpoint) resumePrompt.value = true
   else await launchRun(false)
 }
 
 const launchRun = async (resume: boolean): Promise<void> => {
-  if (!activeTask.value) return
+  const taskId = pendingRunTaskId.value || activeTask.value?.id || ''
+  if (!taskId) return
   resumePrompt.value = false
-  await closePreview()
-  runLogs.value = []
-  runResult.value = null
-  runProgress.value = null
-  running.value = true
-  void api
-    .startRun(activeTask.value.id, resume)
-    .then((result) => {
-      runResult.value = result
-    })
-    .catch(showError)
-    .finally(async () => {
-      running.value = false
-      await refreshTasks()
-    })
+  pendingRunTaskId.value = ''
+  if (previewVisible.value) await closePreview()
+  selectedRunTaskId.value = taskId
+  dismissedRunTaskIds.value = new Set(
+    [...dismissedRunTaskIds.value].filter((candidate) => candidate !== taskId)
+  )
+  runActionTaskId.value = taskId
+  try {
+    const result = await api.startRun(taskId, resume)
+    if (result.status === 'queued') {
+      showNotice(`任务已加入等待队列${result.queuePosition ? `，当前排队第 ${result.queuePosition}` : ''}`)
+    } else {
+      showNotice(resume ? '任务已开始继续采集' : '任务已开始采集')
+    }
+    runSession.value = await api.getRunSession()
+    await refreshTasks()
+  } catch (error) {
+    showError(error)
+  } finally {
+    runActionTaskId.value = ''
+  }
 }
 
-const pauseRun = async (): Promise<void> => {
-  if (runProgress.value) await api.pauseRun(runProgress.value.runId)
+const pauseRun = async (taskId = selectedRunItem.value?.taskId ?? ''): Promise<void> => {
+  if (!taskId || runActionTaskId.value) return
+  runActionTaskId.value = taskId
+  try {
+    if (!(await api.pauseRun(taskId))) showWarning('当前任务暂时不能暂停')
+  } catch (error) {
+    showError(error)
+  } finally {
+    runActionTaskId.value = ''
+  }
 }
 
-const resumeRun = async (): Promise<void> => {
-  if (runProgress.value) await api.resumeRun(runProgress.value.runId)
+const resumeRun = async (taskId = selectedRunItem.value?.taskId ?? ''): Promise<void> => {
+  if (!taskId || runActionTaskId.value) return
+  selectedRunTaskId.value = taskId
+  runActionTaskId.value = taskId
+  try {
+    if (await api.resumeRun(taskId)) showNotice('任务已加入继续采集队列')
+    else showWarning('当前任务暂时不能继续')
+  } catch (error) {
+    showError(error)
+  } finally {
+    runActionTaskId.value = ''
+  }
 }
 
-const cancelRun = (): void => {
-  if (!runProgress.value) return
-  cancelPrompt.value = true
+const cancelRun = (taskId = selectedRunItem.value?.taskId ?? ''): void => {
+  if (!taskId) return
+  cancelPromptTaskId.value = taskId
 }
 
 const confirmCancelRun = async (): Promise<void> => {
-  if (!runProgress.value) return
-  await api.cancelRun(runProgress.value.runId)
-  cancelPrompt.value = false
+  const taskId = cancelPromptTaskId.value
+  if (!taskId) return
+  cancelPromptTaskId.value = ''
+  runActionTaskId.value = taskId
+  try {
+    if (!(await api.cancelRun(taskId))) showWarning('当前任务已经不能取消')
+  } catch (error) {
+    showError(error)
+  } finally {
+    runActionTaskId.value = ''
+  }
 }
 
-const openOutput = async (): Promise<void> => {
-  if (activeTask.value) await api.openOutputDirectory(activeTask.value.id)
+const pauseAllRuns = async (): Promise<void> => {
+  if (batchRunAction.value) return
+  batchRunAction.value = 'pause'
+  try {
+    if (!(await api.pauseAllRuns())) showWarning('当前没有可暂停的任务')
+  } catch (error) {
+    showError(error)
+  } finally {
+    batchRunAction.value = ''
+  }
 }
 
-const openErrorLog = async (): Promise<void> => {
-  if (activeTask.value && runResult.value?.errorLogPath) {
-    await api.openErrorLog(activeTask.value.id, runResult.value.errorLogPath)
+const resumeAllRuns = async (): Promise<void> => {
+  if (batchRunAction.value) return
+  batchRunAction.value = 'resume'
+  try {
+    if (!(await api.resumeAllRuns())) showWarning('当前没有已暂停的任务')
+  } catch (error) {
+    showError(error)
+  } finally {
+    batchRunAction.value = ''
+  }
+}
+
+const requestCancelAllRuns = (): void => {
+  cancelAllPrompt.value = true
+}
+
+const confirmCancelAllRuns = async (): Promise<void> => {
+  cancelAllPrompt.value = false
+  if (batchRunAction.value) return
+  batchRunAction.value = 'cancel'
+  try {
+    if (!(await api.cancelAllRuns())) showWarning('当前没有可取消的任务')
+  } catch (error) {
+    showError(error)
+  } finally {
+    batchRunAction.value = ''
+  }
+}
+
+const changeMaxConcurrentRuns = async (value: number): Promise<void> => {
+  if (settingsSaving.value || value === settings.value.maxConcurrentRuns) return
+  settingsSaving.value = true
+  try {
+    settings.value = await api.saveSettings({
+      ...settings.value,
+      maxConcurrentRuns: value
+    })
+    runSession.value = await api.getRunSession()
+    showNotice(`最大并发任务数已调整为 ${settings.value.maxConcurrentRuns}`)
+  } catch (error) {
+    showError(error)
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+const selectRunTask = (taskId: string): void => {
+  selectedRunTaskId.value = taskId
+  dismissedRunTaskIds.value = new Set(
+    [...dismissedRunTaskIds.value].filter((candidate) => candidate !== taskId)
+  )
+}
+
+const dismissRunDrawer = (): void => {
+  const taskId = selectedRunItem.value?.taskId
+  if (!taskId) return
+  dismissedRunTaskIds.value = new Set([...dismissedRunTaskIds.value, taskId])
+}
+
+const openOutput = async (taskId = selectedRunItem.value?.taskId ?? activeTask.value?.id ?? ''): Promise<void> => {
+  if (taskId) await api.openOutputDirectory(taskId)
+}
+
+const openErrorLog = async (taskId = selectedRunItem.value?.taskId ?? ''): Promise<void> => {
+  const item = runItemMap.value.get(taskId)
+  if (taskId && item?.result?.errorLogPath) {
+    await api.openErrorLog(taskId, item.result.errorLogPath)
   }
 }
 
@@ -991,10 +1183,49 @@ let resizeObserver: ResizeObserver | null = null
 let removeProgressListener = (): void => undefined
 let removeLogListener = (): void => undefined
 let removeFinishedListener = (): void => undefined
+let removeSessionListener = (): void => undefined
+
+const applyRunSession = (snapshot: RunSessionSnapshot): void => {
+  runSession.value = snapshot
+  settings.value.maxConcurrentRuns = snapshot.maxConcurrentRuns
+  if (!selectedRunTaskId.value && snapshot.items[0]) {
+    selectedRunTaskId.value = snapshot.items[0].taskId
+  }
+}
 
 onMounted(async () => {
+  removeProgressListener = api.onRunProgress((progress) => {
+    const item = runSession.value.items.find((candidate) => candidate.taskId === progress.taskId)
+    if (!item) return
+    item.runId = progress.runId
+    item.progress = progress
+    item.message = progress.message
+    if (progress.status !== 'idle') item.status = progress.status
+    dismissedRunTaskIds.value = new Set(
+      [...dismissedRunTaskIds.value].filter((taskId) => taskId !== progress.taskId)
+    )
+  })
+  removeLogListener = api.onRunLog((log) => {
+    const item = runSession.value.items.find((candidate) => candidate.taskId === log.taskId)
+    if (!item) return
+    item.logs.push(log)
+    if (item.logs.length > 500) item.logs.splice(0, item.logs.length - 500)
+    if (selectedRunTaskId.value === log.taskId) scrollRunLogsToEnd()
+  })
+  removeFinishedListener = api.onRunFinished((result) => {
+    const item = runSession.value.items.find((candidate) => candidate.taskId === result.taskId)
+    if (item) {
+      item.status = result.status
+      item.result = result
+      item.message = result.message
+      item.finishedAt = result.finishedAt
+    }
+    void refreshTasks()
+  })
+  removeSessionListener = api.onRunSession(applyRunSession)
   try {
     settings.value = await api.getSettings()
+    applyRunSession(await api.getRunSession())
     await refreshTasks()
     if (tasks.value[0]) await loadTask(tasks.value[0].id)
   } catch (error) {
@@ -1007,18 +1238,6 @@ onMounted(async () => {
   window.addEventListener('pointermove', handlePaneResize)
   window.addEventListener('pointerup', stopPaneResize)
   window.addEventListener('pointercancel', stopPaneResize)
-  removeProgressListener = api.onRunProgress((progress) => {
-    runProgress.value = progress
-  })
-  removeLogListener = api.onRunLog((log) => {
-    runLogs.value.push(log)
-    if (runLogs.value.length > 500) runLogs.value.splice(0, runLogs.value.length - 500)
-    scrollRunLogsToEnd()
-  })
-  removeFinishedListener = api.onRunFinished((result) => {
-    runResult.value = result
-    running.value = false
-  })
 })
 
 onBeforeUnmount(() => {
@@ -1034,6 +1253,7 @@ onBeforeUnmount(() => {
   removeProgressListener()
   removeLogListener()
   removeFinishedListener()
+  removeSessionListener()
   void api.previewClose()
 })
 </script>
@@ -1042,11 +1262,24 @@ onBeforeUnmount(() => {
   <main class="app-shell" :class="{
     'sidebar-collapsed': sidebarCollapsed,
     'preview-collapsed': previewCollapsed,
+    'run-center-view': appView === 'run-center',
     'pane-is-resizing': resizingPane
   }" :style="appShellStyle">
-    <TaskSidebar :aria-hidden="sidebarCollapsed" :inert="sidebarCollapsed" :tasks="tasks" :active-id="activeId"
-      :disabled="busy || saving || running" @select="loadTask" @create="createNewTask" @duplicate="duplicateTask"
-      @remove="removeTask" @run="requestRun" />
+    <TaskSidebar
+      :collapsed="sidebarCollapsed"
+      :tasks="tasks"
+      :active-id="activeId"
+      :view="appView"
+      :run-items="runSession.items"
+      :testing-task-id="runSession.testingTaskId"
+      :disabled="busy || saving"
+      @select="loadTask"
+      @show-run-center="showRunCenter"
+      @create="createNewTask"
+      @duplicate="duplicateTask"
+      @remove="removeTask"
+      @run="requestRun"
+    />
 
     <div class="pane-divider sidebar-divider" role="separator" aria-label="调整任务栏宽度" aria-orientation="vertical"
       tabindex="0" @pointerdown="startPaneResize('sidebar', $event)"
@@ -1054,33 +1287,55 @@ onBeforeUnmount(() => {
       <t-tooltip :content="sidebarCollapsed ? '展开任务栏' : '折叠任务栏'" placement="right">
         <t-button class="pane-toggle" theme="default" variant="outline" shape="square" size="small" @pointerdown.stop
           @click.stop="toggleSidebarPane">
-          <ChevronRightIcon v-if="sidebarCollapsed" />
-          <ChevronLeftIcon v-else />
+          <MenuUnfoldIcon v-if="sidebarCollapsed" />
+          <MenuFoldIcon v-else />
         </t-button>
       </t-tooltip>
     </div>
 
-    <section class="workspace">
-      <header class="workspace-header">
+    <section class="workspace" :class="{ 'configuration-locked': activeTaskLocked }">
+      <RunCenter
+        v-if="appView === 'run-center'"
+        :snapshot="runSession"
+        :selected-task-id="selectedRunTaskId"
+        :action-task-id="runActionTaskId"
+        :batch-action="batchRunAction"
+        :settings-saving="settingsSaving"
+        @select="selectRunTask"
+        @pause="pauseRun"
+        @resume="resumeRun"
+        @cancel="cancelRun"
+        @pause-all="pauseAllRuns"
+        @resume-all="resumeAllRuns"
+        @cancel-all="requestCancelAllRuns"
+        @change-concurrency="changeMaxConcurrentRuns"
+        @create="createNewTask"
+        @open-output="openOutput"
+        @open-error="openErrorLog"
+      />
+      <header v-if="appView === 'task'" class="workspace-header">
         <div class="workspace-title">
           <span class="context-label">任务配置</span>
           <strong>{{ activeTask?.name || '尚未选择任务' }}</strong>
         </div>
         <div class="header-actions">
+          <t-tag v-if="activeTaskLocked" theme="warning" variant="light">
+            {{ runSession.testingTaskId === activeId ? '测试中，配置只读' : '任务活动中，配置只读' }}
+          </t-tag>
           <t-tag v-if="activeTask" :theme="hasUnsavedChanges ? 'warning' : 'success'" variant="light">
             {{ hasUnsavedChanges ? '有未保存修改' : '草稿已保存' }}
           </t-tag>
           <t-tag v-if="activeTask" :theme="runnable ? 'success' : 'warning'" variant="light">
             {{ runnable ? '配置完整' : '配置未完成' }}
           </t-tag>
-          <t-button theme="default" variant="outline" :loading="saving" :disabled="!activeTask || busy || running"
+          <t-button theme="default" variant="outline" :loading="saving" :disabled="!activeTask || busy || activeTaskLocked"
             @click="saveCurrent(false)">
             <template #icon>
               <SaveIcon />
             </template>
             保存草稿
           </t-button>
-          <t-button theme="primary" :disabled="!activeTask || busy || saving || running" @click="requestRun()">
+          <t-button theme="primary" :disabled="!activeTask || busy || saving || activeTaskLocked" @click="requestRun()">
             <template #icon>
               <PlayIcon />
             </template>
@@ -1089,12 +1344,12 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <template v-if="activeTask">
-        <t-steps :current="currentStep" class="wizard-nav" :readonly="false" separator="line" @change="selectStep">
+      <template v-if="appView === 'task' && activeTask">
+        <t-steps :current="currentStep" class="wizard-nav" :readonly="activeTaskLocked" :inert="activeTaskLocked" separator="line" @change="selectStep">
           <t-step-item v-for="(label, index) in steps" :key="label" :value="index + 1" :title="label" />
         </t-steps>
 
-        <div class="step-scroll">
+        <div class="step-scroll" :inert="activeTaskLocked">
           <Transition name="step" mode="out-in">
             <section :key="currentStep" class="step-content">
               <template v-if="currentStep === 1">
@@ -1181,12 +1436,18 @@ onBeforeUnmount(() => {
                     </t-select>
                     <t-input v-model="activeTask.listItem.selector" class="code-input" :spell-check="false"
                       placeholder="例如 .ListItem" />
-                    <t-button theme="default" variant="outline" @click="evaluateBaseSelector('list-item')">
-                      <SearchIcon />
-                    </t-button>
-                    <t-button theme="primary" variant="outline" @click="pickBaseSelector('list-item')">
-                      <CursorIcon />
-                    </t-button>
+                    <t-tooltip content="验证" placement="top">
+                      <t-button aria-label="验证列表项选择器" theme="default" variant="outline"
+                        @click="evaluateBaseSelector('list-item')">
+                        <SearchIcon />
+                      </t-button>
+                    </t-tooltip>
+                    <t-tooltip content="点选" placement="top">
+                      <t-button aria-label="点选列表项容器" theme="primary" variant="outline"
+                        @click="pickBaseSelector('list-item')">
+                        <CursorIcon />
+                      </t-button>
+                    </t-tooltip>
                   </div>
                 </div>
                 <div v-if="!isClickPagination" class="section-line">
@@ -1250,12 +1511,18 @@ onBeforeUnmount(() => {
                     </t-select>
                     <t-input v-model="activeTask.pagination.nextButton.selector" class="code-input"
                       :spell-check="false" placeholder="例如 .next-page" />
-                    <t-button theme="default" variant="outline" @click="evaluateBaseSelector('next-button')">
-                      <SearchIcon />
-                    </t-button>
-                    <t-button theme="primary" variant="outline" @click="pickBaseSelector('next-button')">
-                      <CursorIcon />
-                    </t-button>
+                    <t-tooltip content="验证" placement="top">
+                      <t-button aria-label="验证下一页按钮选择器" theme="default" variant="outline"
+                        @click="evaluateBaseSelector('next-button')">
+                        <SearchIcon />
+                      </t-button>
+                    </t-tooltip>
+                    <t-tooltip content="点选" placement="top">
+                      <t-button aria-label="点选下一页按钮" theme="primary" variant="outline"
+                        @click="pickBaseSelector('next-button')">
+                        <CursorIcon />
+                      </t-button>
+                    </t-tooltip>
                   </div>
                   <div class="form-grid compact">
                     <div class="field">
@@ -1293,12 +1560,18 @@ onBeforeUnmount(() => {
                     <t-input v-model="activeTask.detail.link.selector" class="code-input" :spell-check="false"
                       placeholder="例如 a.title" />
                     <t-input v-model="activeTask.detail.linkAttribute" class="code-input" placeholder="href" />
-                    <t-button theme="default" variant="outline" @click="evaluateBaseSelector('detail-link')">
-                      <SearchIcon />
-                    </t-button>
-                    <t-button theme="primary" variant="outline" @click="pickBaseSelector('detail-link')">
-                      <CursorIcon />
-                    </t-button>
+                    <t-tooltip content="验证" placement="top">
+                      <t-button aria-label="验证详情链接选择器" theme="default" variant="outline"
+                        @click="evaluateBaseSelector('detail-link')">
+                        <SearchIcon />
+                      </t-button>
+                    </t-tooltip>
+                    <t-tooltip content="点选" placement="top">
+                      <t-button aria-label="点选详情链接" theme="primary" variant="outline"
+                        @click="pickBaseSelector('detail-link')">
+                        <CursorIcon />
+                      </t-button>
+                    </t-tooltip>
                   </div>
                   <div class="host-rule">
                     <LinkIcon />
@@ -1586,14 +1859,14 @@ onBeforeUnmount(() => {
 
                 <div class="test-actions">
                   <div><strong>测试采集</strong><span>读取当前列表页，并处理前 3 条记录。</span></div>
-                  <t-button theme="default" variant="outline" :loading="testing" :disabled="!activeTask.xml"
+                  <t-button theme="default" variant="outline" :loading="testing" :disabled="!activeTask.xml || activeTaskLocked"
                     @click="runTest">
                     <template #icon>
                       <RefreshIcon />
                     </template>
                     执行测试
                   </t-button>
-                  <t-button theme="primary" :disabled="busy || saving || running" @click="requestRun()">
+                  <t-button theme="primary" :disabled="busy || saving || activeTaskLocked" @click="requestRun()">
                     <template #icon>
                       <PlayIcon />
                     </template>
@@ -1647,7 +1920,7 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
 
-        <footer class="wizard-footer">
+        <footer class="wizard-footer" :inert="activeTaskLocked">
           <t-button theme="default" variant="text" :disabled="currentStep === 1" @click="currentStep -= 1">
             <template #icon>
               <ChevronLeftIcon />
@@ -1663,7 +1936,7 @@ onBeforeUnmount(() => {
         </footer>
       </template>
 
-      <div v-else class="welcome-empty">
+      <div v-else-if="appView === 'task'" class="welcome-empty">
         <FileCodeIcon size="42px" />
         <span>网页 → XML</span>
         <h1>创建第一个采集任务</h1>
@@ -1678,7 +1951,7 @@ onBeforeUnmount(() => {
     </section>
 
     <div class="pane-divider preview-divider" role="separator" aria-label="调整网页预览宽度" aria-orientation="vertical"
-      tabindex="0" @pointerdown="startPaneResize('preview', $event)"
+      :aria-hidden="appView === 'run-center'" :inert="appView === 'run-center'" :tabindex="appView === 'run-center' ? -1 : 0" @pointerdown="startPaneResize('preview', $event)"
       @keydown="resizePaneWithKeyboard('preview', $event)">
       <t-tooltip :content="previewCollapsed ? '展开网页预览' : '折叠网页预览'" placement="left">
         <t-button class="pane-toggle" theme="default" variant="outline" shape="square" size="small" @pointerdown.stop
@@ -1689,7 +1962,7 @@ onBeforeUnmount(() => {
       </t-tooltip>
     </div>
 
-    <aside class="preview-pane" :aria-hidden="previewCollapsed" :inert="previewCollapsed">
+    <aside class="preview-pane" :aria-hidden="previewCollapsed || appView === 'run-center'" :inert="previewCollapsed || appView === 'run-center'">
       <header class="preview-header">
         <div><span>网页预览</span><strong>{{ pickingLabel || previewStatus }}</strong></div>
         <t-tooltip v-if="previewVisible" content="关闭预览" placement="left">
@@ -1750,14 +2023,13 @@ onBeforeUnmount(() => {
       </footer>
     </aside>
 
-    <section v-if="running || runProgress || runResult" class="run-drawer">
+    <section v-if="showRunDrawer" class="run-drawer">
       <header>
         <div>
-          <span>采集运行</span>
-          <strong>{{ runProgress?.message || runResult?.message || '正在准备…' }}</strong>
+          <span>{{ selectedRunItem?.taskName || '采集运行' }}</span>
+          <strong>{{ runProgress?.message || runResult?.message || selectedRunItem?.message || '正在准备…' }}</strong>
         </div>
-        <t-button v-if="!running && runResult" theme="default" variant="text" shape="square"
-          @click="runProgress = null; runResult = null; runLogs = []">
+        <t-button theme="default" variant="text" shape="square" @click="dismissRunDrawer">
           <CloseIcon />
         </t-button>
       </header>
@@ -1782,7 +2054,7 @@ onBeforeUnmount(() => {
           <div><span>资源失败</span><strong>{{ runProgress?.resources.failed ?? runResult?.resources.failed ?? 0
           }}</strong></div>
         </div>
-        <div class="run-current"><span>{{ runProgress?.currentUrl || runResult?.outputFiles.at(-1) || '等待任务开始' }}</span>
+        <div class="run-current"><span>{{ runProgress?.currentUrl || runResult?.outputFiles.at(-1) || selectedRunItem?.message || '等待任务开始' }}</span>
         </div>
         <div class="run-log-panel" :style="{ height: `${runLogHeight}px` }">
           <div
@@ -1814,21 +2086,38 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="run-controls">
-          <template v-if="running">
-            <t-button v-if="runProgress?.status !== 'paused'" theme="default" variant="outline" @click="pauseRun">
+          <template v-if="selectedRunLocked">
+            <t-button
+              v-if="selectedRunItem && ['preparing', 'running'].includes(selectedRunItem.status)"
+              theme="default"
+              variant="outline"
+              :loading="runActionTaskId === selectedRunItem.taskId"
+              @click="pauseRun()"
+            >
               暂停
             </t-button>
-            <t-button v-else theme="primary" @click="resumeRun">继续</t-button>
-            <t-button theme="danger" variant="outline" @click="cancelRun">取消</t-button>
+            <t-button
+              v-else-if="selectedRunItem?.status === 'paused'"
+              theme="primary"
+              :loading="runActionTaskId === selectedRunItem.taskId"
+              @click="resumeRun()"
+            >继续</t-button>
+            <t-button
+              theme="danger"
+              variant="outline"
+              :disabled="selectedRunItem?.status === 'pausing'"
+              :loading="runActionTaskId === selectedRunItem?.taskId"
+              @click="cancelRun()"
+            >取消</t-button>
           </template>
           <template v-else>
-            <t-button theme="primary" @click="openOutput">
+            <t-button theme="primary" @click="openOutput()">
               <template #icon>
                 <FolderOpenIcon />
               </template>
               打开输出目录
             </t-button>
-            <t-button theme="default" variant="outline" :disabled="!runResult?.errorLogPath" @click="openErrorLog">
+            <t-button theme="default" variant="outline" :disabled="!runResult?.errorLogPath" @click="openErrorLog()">
               打开错误日志
             </t-button>
           </template>
@@ -1855,11 +2144,21 @@ onBeforeUnmount(() => {
       </div>
     </t-dialog>
 
-    <t-dialog v-model:visible="cancelPrompt" header="取消当前采集？" theme="warning" :footer="false" width="440px">
-      <p class="dialog-copy">取消后会把当前有效记录写成最后一个 XML，并清除本次检查点。</p>
+    <t-dialog :visible="Boolean(cancelPromptTaskId)" header="取消这个任务？" theme="warning" :footer="false" width="440px"
+      @close="cancelPromptTaskId = ''">
+      <p class="dialog-copy">运行或暂停中的任务会写出当前有效记录并清除检查点；尚未启动的排队任务只会移出队列。</p>
       <div class="dialog-actions">
-        <t-button theme="default" variant="text" @click="cancelPrompt = false">继续采集</t-button>
+        <t-button theme="default" variant="text" @click="cancelPromptTaskId = ''">返回</t-button>
         <t-button theme="danger" variant="outline" @click="confirmCancelRun">确认取消</t-button>
+      </div>
+    </t-dialog>
+
+    <t-dialog v-model:visible="cancelAllPrompt" header="取消全部采集任务？" theme="danger" :footer="false" width="460px"
+      :close-on-overlay-click="false">
+      <p class="dialog-copy">确认后会取消所有运行中和暂停中的任务，并清空等待队列。各任务会按当前安全进度处理检查点和有效记录。</p>
+      <div class="dialog-actions">
+        <t-button theme="default" variant="text" @click="cancelAllPrompt = false">返回</t-button>
+        <t-button theme="danger" @click="confirmCancelAllRuns">确认全部取消</t-button>
       </div>
     </t-dialog>
   </main>

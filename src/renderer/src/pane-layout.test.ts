@@ -55,6 +55,16 @@ describe('resizable pane layout', () => {
     )
   })
 
+  it('reserves the collapsed TDesign navigation rail while fitting the preview', () => {
+    const visibility = { sidebar: false, preview: true }
+    const fitted = fitPaneWidths({ sidebar: 246, preview: 900 }, 1_180, visibility)
+
+    expect(fitted.preview).toBe(616)
+    expect(workspaceWidthForPaneLayout(1_180, fitted, visibility)).toBe(
+      PANE_LAYOUT.workspaceMin
+    )
+  })
+
   it('resizes the bottom log upward while keeping it usable at the minimum window height', () => {
     expect(resizeRunLogHeight(176, -120, 720)).toBe(296)
     expect(resizeRunLogHeight(176, 500, 720)).toBe(RUN_LOG_LAYOUT.minHeight)

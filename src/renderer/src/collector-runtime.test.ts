@@ -11,11 +11,13 @@ describe('collector renderer runtime', () => {
     expect(
       hasCollectorRuntime({
         getSettings: async () => ({}),
+        getRunSession: async () => ({}),
         listTasks: async () => [],
         chooseResourceDirectory: async () => '',
         onRunProgress: () => () => undefined,
         onRunLog: () => () => undefined,
-        onRunFinished: () => () => undefined
+        onRunFinished: () => () => undefined,
+        onRunSession: () => () => undefined
       })
     ).toBe(true)
   })

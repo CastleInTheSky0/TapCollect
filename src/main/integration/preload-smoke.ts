@@ -12,6 +12,8 @@ interface PreloadSmokeResult {
   hasCollector: boolean
   hasRunSubscription: boolean
   settingsDirectory: string
+  maxConcurrentRuns: number
+  runSessionCapacity: number
   initialTaskCount: number
   savedTaskCount: number
   uiReady: boolean
@@ -69,6 +71,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
     const store = new TaskStore(dataRoot)
     await store.initialize()
     const runManager = new RunManager(store)
+    await runManager.initialize()
     preview = new PreviewService(window)
     registerIpcHandlers(window, store, runManager, preview)
 
@@ -84,6 +87,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
             hasCollector: false,
             hasRunSubscription: false,
             settingsDirectory: '',
+            maxConcurrentRuns: -1,
+            runSessionCapacity: -1,
             initialTaskCount: -1,
             savedTaskCount: -1,
             uiReady: false,
@@ -92,7 +97,9 @@ const run = async (): Promise<PreloadSmokeResult> => {
           }
         }
         const unsubscribe = api.onRunProgress(() => undefined)
+        const unsubscribeSession = api.onRunSession(() => undefined)
         const settings = await api.getSettings()
+        const runSession = await api.getRunSession()
         const initialTasks = await api.listTasks()
         const createButton = [...document.querySelectorAll('button')].find((button) =>
           button.textContent?.includes('新建任务')
@@ -134,8 +141,11 @@ const run = async (): Promise<PreloadSmokeResult> => {
 
         const result = {
           hasCollector: typeof api.getSettings === 'function',
-          hasRunSubscription: typeof unsubscribe === 'function',
+          hasRunSubscription:
+            typeof unsubscribe === 'function' && typeof unsubscribeSession === 'function',
           settingsDirectory: settings.defaultOutputDirectory,
+          maxConcurrentRuns: settings.maxConcurrentRuns,
+          runSessionCapacity: runSession.maxConcurrentRuns,
           initialTaskCount: initialTasks.length,
           savedTaskCount: savedTasks.length,
           uiReady: Boolean(createButton),
@@ -143,6 +153,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
           saveTaskWorks: savedTasks.some((task) => task.name === 'Preload Smoke')
         }
         unsubscribe()
+        unsubscribeSession()
         return result
       })()
     `)) as Omit<PreloadSmokeResult, 'consoleErrors'>
@@ -164,6 +175,8 @@ const main = async (): Promise<void> => {
       !result.hasCollector ||
       !result.hasRunSubscription ||
       result.settingsDirectory !== '' ||
+      result.maxConcurrentRuns !== 3 ||
+      result.runSessionCapacity !== 3 ||
       result.initialTaskCount !== 0 ||
       result.savedTaskCount !== 1 ||
       !result.uiReady ||

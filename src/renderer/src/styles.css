@@ -81,21 +81,32 @@ body.pane-resizing * {
 }
 
 .app-shell {
-  --pane-divider-size: 10px;
+  --sidebar-divider-size: 10px;
+  --preview-divider-size: 10px;
 
   display: grid;
   width: 100%;
   height: 100%;
   grid-template-columns:
     var(--sidebar-width, 246px)
-    var(--pane-divider-size)
+    var(--sidebar-divider-size)
     minmax(0, 1fr)
-    var(--pane-divider-size)
+    var(--preview-divider-size)
     var(--preview-width, 570px);
   grid-template-rows: minmax(0, 1fr);
   background: #eef1f1;
   animation: app-in 220ms ease both;
   transition: grid-template-columns 170ms ease;
+}
+
+.app-shell.run-center-view {
+  --preview-divider-size: 0px;
+}
+
+.run-center-view .preview-divider,
+.run-center-view .preview-pane {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-shell.pane-is-resizing {
@@ -149,7 +160,15 @@ body.pane-resizing * {
 }
 
 .sidebar-divider .pane-toggle {
-  left: calc(50% + 8px);
+  top: 34px;
+  left: calc(100% + 25px);
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+  border-color: transparent !important;
+  background: var(--accent-soft) !important;
+  box-shadow: none;
+  opacity: 1;
 }
 
 .preview-divider .pane-toggle {
@@ -173,7 +192,6 @@ body.pane-resizing * {
   transition: opacity 140ms ease;
 }
 
-.sidebar-collapsed .task-sidebar,
 .preview-collapsed .preview-pane {
   opacity: 0;
   pointer-events: none;
@@ -189,15 +207,23 @@ body.pane-resizing * {
   background: var(--surface);
 }
 
+.configuration-locked .step-scroll {
+  background: #fbfcfc;
+}
+
 .workspace-header {
   display: flex;
   min-height: 68px;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 22px;
+  padding: 0 22px 0 66px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
+}
+
+.run-center-view .run-center-header {
+  padding-left: 72px;
 }
 
 .workspace-title {
@@ -1136,7 +1162,7 @@ body.pane-resizing * {
   z-index: 50;
   right: 0;
   bottom: 0;
-  left: calc(var(--sidebar-width, 246px) + var(--pane-divider-size));
+  left: calc(var(--sidebar-width, 246px) + var(--sidebar-divider-size));
   border-top: 1px solid #c9d3d4;
   background: rgba(250, 252, 252, 0.985);
   box-shadow: 0 -14px 40px rgba(22, 38, 43, 0.15);
@@ -1434,7 +1460,11 @@ body.run-log-resizing * {
     width: calc(100% - 34px);
   }
 
-  .workspace-header,
+  .workspace-header {
+    padding-right: 16px;
+    padding-left: 66px;
+  }
+
   .wizard-footer {
     padding-right: 16px;
     padding-left: 16px;

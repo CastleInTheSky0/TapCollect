@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CollectorApi, RunLog, RunProgress, RunResult } from '@shared/types'
+import type {
+  CollectorApi,
+  RunLog,
+  RunProgress,
+  RunResult,
+  RunSessionSnapshot
+} from '@shared/types'
 import { IPC_CHANNELS } from '@shared/ipc-channels'
 
 const eventSubscription = <T>(channel: string, listener: (payload: T) => void): (() => void) => {
@@ -27,10 +33,14 @@ const api: CollectorApi = {
   getDetailSamples: (task) => ipcRenderer.invoke(IPC_CHANNELS.getDetailSamples, task),
   testTask: (task) => ipcRenderer.invoke(IPC_CHANNELS.testTask, task),
   getCheckpoint: (taskId) => ipcRenderer.invoke(IPC_CHANNELS.getCheckpoint, taskId),
+  getRunSession: () => ipcRenderer.invoke(IPC_CHANNELS.getRunSession),
   startRun: (taskId, resume) => ipcRenderer.invoke(IPC_CHANNELS.startRun, taskId, resume),
-  pauseRun: (runId) => ipcRenderer.invoke(IPC_CHANNELS.pauseRun, runId),
-  resumeRun: (runId) => ipcRenderer.invoke(IPC_CHANNELS.resumeRun, runId),
-  cancelRun: (runId) => ipcRenderer.invoke(IPC_CHANNELS.cancelRun, runId),
+  pauseRun: (taskId) => ipcRenderer.invoke(IPC_CHANNELS.pauseRun, taskId),
+  resumeRun: (taskId) => ipcRenderer.invoke(IPC_CHANNELS.resumeRun, taskId),
+  cancelRun: (taskId) => ipcRenderer.invoke(IPC_CHANNELS.cancelRun, taskId),
+  pauseAllRuns: () => ipcRenderer.invoke(IPC_CHANNELS.pauseAllRuns),
+  resumeAllRuns: () => ipcRenderer.invoke(IPC_CHANNELS.resumeAllRuns),
+  cancelAllRuns: () => ipcRenderer.invoke(IPC_CHANNELS.cancelAllRuns),
   openOutputDirectory: (taskId) =>
     ipcRenderer.invoke(IPC_CHANNELS.openOutputDirectory, taskId),
   openErrorLog: (taskId, path) =>
@@ -43,7 +53,9 @@ const api: CollectorApi = {
   previewEvaluate: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewEvaluate, request),
   onRunProgress: (listener) => eventSubscription<RunProgress>(IPC_CHANNELS.runProgress, listener),
   onRunLog: (listener) => eventSubscription<RunLog>(IPC_CHANNELS.runLog, listener),
-  onRunFinished: (listener) => eventSubscription<RunResult>(IPC_CHANNELS.runFinished, listener)
+  onRunFinished: (listener) => eventSubscription<RunResult>(IPC_CHANNELS.runFinished, listener),
+  onRunSession: (listener) =>
+    eventSubscription<RunSessionSnapshot>(IPC_CHANNELS.runSession, listener)
 }
 
 contextBridge.exposeInMainWorld('collector', api)

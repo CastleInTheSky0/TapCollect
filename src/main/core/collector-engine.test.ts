@@ -103,6 +103,63 @@ afterEach(async () => {
 })
 
 describe('CollectorEngine', () => {
+  it('pauses only after committing the current page and resumes without losing records', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-safe-pause-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-safe-pause', root)
+    task.listPageRules = [
+      'https://example.com/first.htm',
+      'https://example.com/second.htm'
+    ]
+    task.output.recordsPerFile = 200
+    const control = new CollectorRunControl()
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => {
+      if (url.endsWith('/first.htm')) control.pause()
+      const title = url.endsWith('/first.htm') ? '第一条' : '第二条'
+      return {
+        kind: 'success',
+        requestedUrl: url,
+        finalUrl: url,
+        status: 200,
+        html: `<div class="item"><span class="title">${title}</span></div>`,
+        encoding: 'utf-8',
+        retries: 0
+      }
+    })
+    const store = new TaskStore(join(root, 'data'))
+    const engine = new CollectorEngine(store, { fetchHtml } as unknown as HttpClient)
+
+    const paused = await engine.run(task, null, control, {
+      progress: () => undefined,
+      log: () => undefined
+    })
+    const checkpoint = await store.getCheckpoint(task.id)
+
+    expect(paused.status).toBe('paused')
+    expect(checkpoint).toMatchObject({
+      nextRuleIndex: 1,
+      pagesVisited: 1,
+      nextSequence: 1,
+      seenKeys: ['第一条'],
+      counters: { discovered: 1, succeeded: 1, skipped: 0, failed: 0 }
+    })
+    expect(checkpoint?.pendingRecords.map((record) => record.values.title)).toEqual(['第一条'])
+
+    const resumed = await engine.run(task, checkpoint, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+    expect(resumed.status).toBe('completed')
+    expect(resumed.counters).toMatchObject({ discovered: 2, succeeded: 2, skipped: 0, failed: 0 })
+    expect(fetchHtml.mock.calls.map(([url]) => url)).toEqual([
+      'https://example.com/first.htm',
+      'https://example.com/second.htm'
+    ])
+    const xml = await readOutputXml(resumed.outputFiles[0]!, 'utf-8')
+    expect(xml).toContain('第一条')
+    expect(xml).toContain('第二条')
+  })
+
   it('keeps list order when detail requests complete out of order and splits XML batches', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-run-'))
     temporaryDirectories.push(root)

@@ -15,10 +15,14 @@ export const IPC_CHANNELS = {
   getDetailSamples: 'collector:detail-samples',
   testTask: 'collector:test',
   getCheckpoint: 'collector:get-checkpoint',
+  getRunSession: 'collector:get-run-session',
   startRun: 'collector:start',
   pauseRun: 'collector:pause',
   resumeRun: 'collector:resume',
   cancelRun: 'collector:cancel',
+  pauseAllRuns: 'collector:pause-all',
+  resumeAllRuns: 'collector:resume-all',
+  cancelAllRuns: 'collector:cancel-all',
   openOutputDirectory: 'shell:open-output',
   openErrorLog: 'shell:open-error-log',
   previewOpen: 'preview:open',
@@ -29,5 +33,6 @@ export const IPC_CHANNELS = {
   previewEvaluate: 'preview:evaluate',
   runProgress: 'collector:progress',
   runLog: 'collector:log',
-  runFinished: 'collector:finished'
+  runFinished: 'collector:finished',
+  runSession: 'collector:session'
 } as const

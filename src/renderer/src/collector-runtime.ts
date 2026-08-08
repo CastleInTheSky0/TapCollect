@@ -2,11 +2,13 @@ import type { CollectorApi } from '@shared/types'
 
 export const COLLECTOR_RUNTIME_METHODS = [
   'getSettings',
+  'getRunSession',
   'listTasks',
   'chooseResourceDirectory',
   'onRunProgress',
   'onRunLog',
-  'onRunFinished'
+  'onRunFinished',
+  'onRunSession'
 ] as const satisfies ReadonlyArray<keyof CollectorApi>
 
 export const hasCollectorRuntime = (value: unknown): value is CollectorApi => {

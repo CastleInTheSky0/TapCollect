@@ -111,8 +111,20 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
 })
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  defaultOutputDirectory: ''
+  defaultOutputDirectory: '',
+  maxConcurrentRuns: 3
 }
+
+export const normalizeMaxConcurrentRuns = (value: unknown): number => {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return DEFAULT_SETTINGS.maxConcurrentRuns
+  return Math.min(5, Math.max(1, Math.round(numeric)))
+}
+
+export const normalizeAppSettings = (settings: Partial<AppSettings> | null): AppSettings => ({
+  defaultOutputDirectory: settings?.defaultOutputDirectory?.trim() ?? '',
+  maxConcurrentRuns: normalizeMaxConcurrentRuns(settings?.maxConcurrentRuns)
+})
 
 export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
   const pagination = {

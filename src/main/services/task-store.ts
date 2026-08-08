@@ -5,6 +5,7 @@ import {
   createEmptyResourceCounters,
   DEFAULT_SETTINGS,
   isTaskRunnable,
+  normalizeAppSettings,
   normalizeTaskConfig
 } from '@shared/defaults'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
@@ -95,11 +96,13 @@ export class TaskStore {
   }
 
   async getSettings(): Promise<AppSettings> {
-    return readJson(this.settingsPath, { ...DEFAULT_SETTINGS })
+    return normalizeAppSettings(
+      await readJson<Partial<AppSettings>>(this.settingsPath, { ...DEFAULT_SETTINGS })
+    )
   }
 
   async saveSettings(settings: AppSettings): Promise<AppSettings> {
-    const normalized = { defaultOutputDirectory: settings.defaultOutputDirectory.trim() }
+    const normalized = normalizeAppSettings(settings)
     await atomicWrite(this.settingsPath, JSON.stringify(normalized, null, 2))
     return normalized
   }

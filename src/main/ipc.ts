@@ -37,14 +37,26 @@ export const registerIpcHandlers = (
   preview: PreviewService
 ): void => {
   ipcMain.handle(IPC_CHANNELS.getSettings, () => store.getSettings())
-  ipcMain.handle(IPC_CHANNELS.saveSettings, (_event, settings: AppSettings) =>
-    store.saveSettings(settings)
-  )
+  ipcMain.handle(IPC_CHANNELS.saveSettings, async (_event, settings: AppSettings) => {
+    const saved = await store.saveSettings(settings)
+    runManager.setMaxConcurrentRuns(saved.maxConcurrentRuns)
+    return saved
+  })
   ipcMain.handle(IPC_CHANNELS.listTasks, () => store.listTasks())
   ipcMain.handle(IPC_CHANNELS.loadTask, (_event, id: string) => store.loadTask(id))
-  ipcMain.handle(IPC_CHANNELS.saveTask, (_event, task: TaskConfig) => store.saveTask(task))
+  ipcMain.handle(IPC_CHANNELS.saveTask, (_event, task: TaskConfig) => {
+    if (runManager.isTaskMutationLocked(task.id)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能保存配置')
+    }
+    return store.saveTask(task)
+  })
   ipcMain.handle(IPC_CHANNELS.duplicateTask, (_event, id: string) => store.duplicateTask(id))
-  ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, id: string) => store.deleteTask(id))
+  ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, id: string) => {
+    if (runManager.isTaskMutationLocked(id)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能删除')
+    }
+    return store.deleteTask(id)
+  })
   ipcMain.handle(IPC_CHANNELS.chooseOutputDirectory, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: '选择 XML 输出根目录',
@@ -98,21 +110,32 @@ export const registerIpcHandlers = (
     detectPaginationParameters(url)
   )
   ipcMain.handle(IPC_CHANNELS.getDetailSamples, async (_event, task: TaskConfig) => {
+    if (runManager.isTaskMutationLocked(task.id)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能读取详情样例')
+    }
     const saved = await store.saveTask(task)
     return runManager.getDetailSamples(saved.id)
   })
-  ipcMain.handle(IPC_CHANNELS.testTask, (_event, task: TaskConfig) =>
-    store.saveTask(task).then((saved) => runManager.testTask(saved.id))
-  )
+  ipcMain.handle(IPC_CHANNELS.testTask, async (_event, task: TaskConfig) => {
+    if (runManager.isTaskMutationLocked(task.id)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能执行测试采集')
+    }
+    const saved = await store.saveTask(task)
+    return runManager.testTask(saved.id)
+  })
   ipcMain.handle(IPC_CHANNELS.getCheckpoint, (_event, taskId: string) =>
     store.getCheckpoint(taskId)
   )
+  ipcMain.handle(IPC_CHANNELS.getRunSession, () => runManager.getSessionSnapshot())
   ipcMain.handle(IPC_CHANNELS.startRun, (_event, taskId: string, resume: boolean) =>
     runManager.start(taskId, resume)
   )
-  ipcMain.handle(IPC_CHANNELS.pauseRun, (_event, runId: string) => runManager.pause(runId))
-  ipcMain.handle(IPC_CHANNELS.resumeRun, (_event, runId: string) => runManager.resume(runId))
-  ipcMain.handle(IPC_CHANNELS.cancelRun, (_event, runId: string) => runManager.cancel(runId))
+  ipcMain.handle(IPC_CHANNELS.pauseRun, (_event, taskId: string) => runManager.pause(taskId))
+  ipcMain.handle(IPC_CHANNELS.resumeRun, (_event, taskId: string) => runManager.resume(taskId))
+  ipcMain.handle(IPC_CHANNELS.cancelRun, (_event, taskId: string) => runManager.cancel(taskId))
+  ipcMain.handle(IPC_CHANNELS.pauseAllRuns, () => runManager.pauseAll())
+  ipcMain.handle(IPC_CHANNELS.resumeAllRuns, () => runManager.resumeAll())
+  ipcMain.handle(IPC_CHANNELS.cancelAllRuns, () => runManager.cancelAll())
   ipcMain.handle(IPC_CHANNELS.openOutputDirectory, async (_event, taskId: string) => {
     const task = await store.loadTask(taskId)
     if (!task) return false
@@ -157,9 +180,13 @@ export const registerIpcHandlers = (
   const removeFinished = runManager.onFinished((result) =>
     window.webContents.send(IPC_CHANNELS.runFinished, result)
   )
+  const removeSession = runManager.onSession((snapshot) =>
+    window.webContents.send(IPC_CHANNELS.runSession, snapshot)
+  )
   window.once('closed', () => {
     removeProgress()
     removeLog()
     removeFinished()
+    removeSession()
   })
 }

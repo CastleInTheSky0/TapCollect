@@ -13,6 +13,7 @@ export interface PaneVisibility {
 export const PANE_LAYOUT = {
   dividerSize: 10,
   workspaceMin: 480,
+  sidebarCollapsedWidth: 64,
   sidebarMin: 188,
   sidebarMax: 340,
   previewMin: 360,
@@ -69,7 +70,11 @@ export const fitPaneWidths = (
   let preview = visibility.preview
     ? clamp(widths.preview, PANE_LAYOUT.previewMin, PANE_LAYOUT.previewMax)
     : 0
-  let overflow = Math.max(0, sidebar + preview - availableForSidePanes(viewportWidth))
+  const collapsedSidebarWidth = visibility.sidebar ? 0 : PANE_LAYOUT.sidebarCollapsedWidth
+  let overflow = Math.max(
+    0,
+    sidebar + collapsedSidebarWidth + preview - availableForSidePanes(viewportWidth)
+  )
 
   if (visibility.sidebar && overflow) {
     const reduction = Math.min(overflow, Math.max(0, sidebar - PANE_LAYOUT.sidebarMin))
@@ -109,7 +114,7 @@ export const resizePaneWidths = (
         : 0
       : visibility.sidebar
         ? widths.sidebar
-        : 0
+        : PANE_LAYOUT.sidebarCollapsedWidth
   const available = Math.max(0, availableForSidePanes(viewportWidth) - otherWidth)
 
   if (pane === 'sidebar') {
@@ -135,5 +140,5 @@ export const workspaceWidthForPaneLayout = (
 ): number =>
   viewportWidth -
   PANE_LAYOUT.dividerSize * 2 -
-  (visibility.sidebar ? widths.sidebar : 0) -
+  (visibility.sidebar ? widths.sidebar : PANE_LAYOUT.sidebarCollapsedWidth) -
   (visibility.preview ? widths.preview : 0)

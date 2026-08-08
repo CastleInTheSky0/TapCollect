@@ -40,18 +40,22 @@ const addReplacement = (): void => {
       <span>选择器</span>
       <div class="inline-control">
         <t-input v-model="model.selector" class="code-input" :spell-check="false" placeholder="例如 .title 或 .//h1" />
-        <t-button theme="default" variant="outline" @click="$emit('evaluate')">
-          <template #icon>
-            <SearchIcon />
-          </template>
-          验证
-        </t-button>
-        <t-button theme="primary" variant="outline" @click="$emit('pick')">
-          <template #icon>
-            <CursorIcon />
-          </template>
-          点选
-        </t-button>
+        <t-tooltip content="验证" placement="top">
+          <t-button theme="default" variant="outline" @click="$emit('evaluate')">
+            <template #icon>
+              <SearchIcon />
+            </template>
+            验证
+          </t-button>
+        </t-tooltip>
+        <t-tooltip content="点选" placement="top">
+          <t-button theme="primary" variant="outline" @click="$emit('pick')">
+            <template #icon>
+              <CursorIcon />
+            </template>
+            点选
+          </t-button>
+        </t-tooltip>
       </div>
     </div>
     <div class="field">

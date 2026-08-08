@@ -17,7 +17,16 @@ export type MatchMode = 'first' | 'all'
 export type XmlNodeKind = 'element' | 'attribute'
 export type ResourceAddressMode = 'absolute-replace' | 'prefix'
 export type ResourceKind = 'image' | 'audio' | 'video' | 'attachment' | 'other'
-export type RunStatus = 'idle' | 'preparing' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
+export type RunStatus =
+  | 'idle'
+  | 'queued'
+  | 'preparing'
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
 export type RunStage =
   | 'preparing'
   | 'list'
@@ -270,6 +279,7 @@ export interface RunProgress {
 
 export interface RunLog {
   runId: string
+  taskId: string
   level: 'info' | 'warning' | 'error' | 'success'
   time: string
   message: string
@@ -286,6 +296,44 @@ export interface RunResult {
   errorLogPath: string
   counters: RunCounters
   resources: ResourceCounters
+  message: string
+}
+
+export type RunSessionStatus = Exclude<RunStatus, 'idle'>
+export type RunQueueReason = '' | 'capacity' | 'output-lock'
+
+export interface RunSessionItem {
+  taskId: string
+  taskName: string
+  runId: string
+  status: RunSessionStatus
+  resume: boolean
+  queuePosition: number
+  queueReason: RunQueueReason
+  queuedAt: string
+  startedAt: string
+  pausedAt: string
+  finishedAt: string
+  message: string
+  progress: RunProgress | null
+  result: RunResult | null
+  logs: RunLog[]
+}
+
+export interface RunSessionSnapshot {
+  maxConcurrentRuns: number
+  activeCount: number
+  queuedCount: number
+  testingTaskId: string
+  items: RunSessionItem[]
+}
+
+export interface StartRunResult {
+  accepted: boolean
+  taskId: string
+  runId: string
+  status: Extract<RunSessionStatus, 'queued' | 'preparing' | 'running'>
+  queuePosition: number
   message: string
 }
 
@@ -345,6 +393,7 @@ export interface PreviewEvaluateResult {
 
 export interface AppSettings {
   defaultOutputDirectory: string
+  maxConcurrentRuns: number
 }
 
 export interface CollectorApi {
@@ -368,10 +417,14 @@ export interface CollectorApi {
   getDetailSamples: (task: TaskConfig) => Promise<string[]>
   testTask: (task: TaskConfig) => Promise<TestCollectionResult>
   getCheckpoint: (taskId: string) => Promise<RunCheckpoint | null>
-  startRun: (taskId: string, resume: boolean) => Promise<RunResult>
-  pauseRun: (runId: string) => Promise<boolean>
-  resumeRun: (runId: string) => Promise<boolean>
-  cancelRun: (runId: string) => Promise<boolean>
+  getRunSession: () => Promise<RunSessionSnapshot>
+  startRun: (taskId: string, resume: boolean) => Promise<StartRunResult>
+  pauseRun: (taskId: string) => Promise<boolean>
+  resumeRun: (taskId: string) => Promise<boolean>
+  cancelRun: (taskId: string) => Promise<boolean>
+  pauseAllRuns: () => Promise<boolean>
+  resumeAllRuns: () => Promise<boolean>
+  cancelAllRuns: () => Promise<boolean>
   openOutputDirectory: (taskId: string) => Promise<boolean>
   openErrorLog: (taskId: string, path: string) => Promise<boolean>
   previewOpen: (url: string, bounds: PreviewBounds) => Promise<boolean>
@@ -383,4 +436,5 @@ export interface CollectorApi {
   onRunProgress: (listener: (progress: RunProgress) => void) => () => void
   onRunLog: (listener: (log: RunLog) => void) => () => void
   onRunFinished: (listener: (result: RunResult) => void) => () => void
+  onRunSession: (listener: (snapshot: RunSessionSnapshot) => void) => () => void
 }

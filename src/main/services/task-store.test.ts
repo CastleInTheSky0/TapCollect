@@ -18,6 +18,29 @@ afterEach(async () => {
 })
 
 describe('TaskStore', () => {
+  it('migrates legacy settings and clamps the formal task concurrency limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-store-settings-'))
+    temporaryDirectories.push(root)
+    await mkdir(root, { recursive: true })
+    await writeFile(
+      join(root, 'settings.json'),
+      JSON.stringify({ defaultOutputDirectory: ' D:/output ' }),
+      'utf8'
+    )
+    const store = new TaskStore(root)
+
+    await expect(store.getSettings()).resolves.toEqual({
+      defaultOutputDirectory: 'D:/output',
+      maxConcurrentRuns: 3
+    })
+    await expect(
+      store.saveSettings({ defaultOutputDirectory: ' D:/next ', maxConcurrentRuns: 99 })
+    ).resolves.toEqual({
+      defaultOutputDirectory: 'D:/next',
+      maxConcurrentRuns: 5
+    })
+  })
+
   it('preserves ordered multiline list-page rules across save and reload', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-store-rules-'))
     temporaryDirectories.push(root)

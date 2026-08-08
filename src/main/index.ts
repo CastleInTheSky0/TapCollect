@@ -47,6 +47,7 @@ const createWindow = async (): Promise<void> => {
   const store = new TaskStore(dataDirectory.rootDirectory)
   await store.initialize()
   const runManager = new RunManager(store, new ElectronDynamicPageProvider(window))
+  await runManager.initialize()
   const preview = new PreviewService(window)
   registerIpcHandlers(window, store, runManager, preview)
 

@@ -1,153 +1,319 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import {
   AddIcon,
-  CheckCircleFilledIcon,
   CopyIcon,
   DataSearchIcon,
   DeleteIcon,
-  PlayIcon
+  FileIcon,
+  PlayIcon,
+  TaskIcon,
+  ViewModuleIcon
 } from 'tdesign-icons-vue-next'
-import type { TaskSummary } from '@shared/types'
+import type { RunSessionItem, TaskSummary } from '@shared/types'
 import appIconUrl from '../assets/tapcollect-icon.png'
 
-defineProps<{
+const props = defineProps<{
   tasks: TaskSummary[]
   activeId: string
+  view: 'task' | 'run-center'
+  runItems: RunSessionItem[]
+  testingTaskId: string
   disabled: boolean
+  collapsed: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   select: [id: string]
+  showRunCenter: []
   create: []
   duplicate: [id: string]
   remove: [id: string]
   run: [id: string]
 }>()
 
+const tasksExpanded = ref(true)
+const runItemMap = computed(() =>
+  new Map(props.runItems.map((item) => [item.taskId, item] as const))
+)
+const sessionActivityCount = computed(() =>
+  props.runItems.filter((item) =>
+    ['queued', 'preparing', 'running', 'pausing', 'paused'].includes(item.status)
+  ).length
+)
+const menuValue = computed(() => {
+  if (props.view === 'run-center') return 'run-center'
+  return props.activeId ? `task:${props.activeId}` : 'tasks'
+})
+const expandedMenuValues = computed(() => (tasksExpanded.value ? ['tasks'] : []))
+
+const taskMenuValue = (taskId: string): string => `task:${taskId}`
+
+const handleMenuChange = (value: string | number): void => {
+  const key = String(value)
+  if (key === 'create') {
+    emit('create')
+    return
+  }
+  if (key === 'run-center') {
+    emit('showRunCenter')
+    return
+  }
+  if (key.startsWith('task:')) emit('select', key.slice(5))
+}
+
+const handleMenuExpand = (values: Array<string | number>): void => {
+  if (props.collapsed) return
+  tasksExpanded.value = values.map(String).includes('tasks')
+}
+
 const shortDate = (value: string): string => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { hour12: false })
 }
+
+const statusLabel = (taskId: string): string => {
+  if (props.testingTaskId === taskId) return '测试中'
+  const item = runItemMap.value.get(taskId)
+  if (!item) return ''
+  if (item.status === 'queued') return `排队 ${item.queuePosition}`
+  return {
+    preparing: '准备中',
+    running: '运行中',
+    pausing: '暂停中',
+    paused: '已暂停',
+    completed: '已完成',
+    cancelled: '已取消',
+    failed: '失败'
+  }[item.status]
+}
+
+const statusTheme = (taskId: string): 'default' | 'primary' | 'success' | 'warning' | 'danger' => {
+  if (props.testingTaskId === taskId) return 'primary'
+  const status = runItemMap.value.get(taskId)?.status
+  if (status === 'running' || status === 'preparing') return 'primary'
+  if (status === 'completed') return 'success'
+  if (status === 'failed' || status === 'cancelled') return 'danger'
+  if (status === 'queued' || status === 'paused' || status === 'pausing') return 'warning'
+  return 'default'
+}
+
+const taskLocked = (taskId: string): boolean => {
+  if (props.testingTaskId === taskId) return true
+  const status = runItemMap.value.get(taskId)?.status
+  return Boolean(status && ['queued', 'preparing', 'running', 'pausing', 'paused'].includes(status))
+}
+
+const runDisabled = (taskId: string): boolean => {
+  const status = runItemMap.value.get(taskId)?.status
+  return (
+    props.disabled ||
+    props.testingTaskId === taskId ||
+    Boolean(status && status !== 'paused' && taskLocked(taskId))
+  )
+}
 </script>
 
 <template>
-  <aside class="task-sidebar">
-    <div class="brand-block">
-      <div class="brand-mark" aria-hidden="true">
-        <img :src="appIconUrl" alt="" />
-      </div>
-      <div class="brand-copy">
-        <strong>TapCollect</strong>
-        <span>网页列表采集与 XML 输出</span>
-      </div>
-    </div>
-
-    <t-button
-      class="new-task"
-      theme="default"
-      variant="outline"
-      block
-      :disabled="disabled"
-      @click="$emit('create')"
+  <aside class="task-sidebar" :class="{ collapsed }">
+    <t-menu
+      class="task-menu"
+      theme="light"
+      :collapsed="collapsed"
+      :width="['100%', '64px']"
+      :value="menuValue"
+      :expanded="expandedMenuValues"
+      expand-type="normal"
+      @change="handleMenuChange"
+      @expand="handleMenuExpand"
     >
-      <template #icon><AddIcon /></template>
-      新建采集任务
-    </t-button>
-
-    <div class="task-list-heading">
-      <span>采集任务</span>
-      <span>{{ tasks.length }}</span>
-    </div>
-
-    <div v-if="tasks.length" class="task-list">
-      <article
-        v-for="item in tasks"
-        :key="item.id"
-        class="task-row"
-        :class="{ active: item.id === activeId }"
-        tabindex="0"
-        @click="$emit('select', item.id)"
-        @keydown.enter="$emit('select', item.id)"
-      >
-        <div class="task-row-main">
-          <div class="task-title-line">
-            <strong>{{ item.name }}</strong>
-            <t-tag v-if="item.hasCheckpoint" size="small" theme="warning" variant="light">
-              可续采
-            </t-tag>
+      <template #logo>
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">
+            <img :src="appIconUrl" alt="" />
           </div>
-          <p>{{ item.listUrl || '尚未填写列表地址' }}</p>
-          <time>{{ shortDate(item.updatedAt) }}</time>
+          <div class="brand-copy">
+            <strong>TapCollect</strong>
+            <span>网页列表采集与 XML 输出</span>
+          </div>
         </div>
-        <div class="task-actions">
-          <t-tooltip content="运行任务" placement="top">
-            <t-button
-              theme="primary"
-              variant="text"
-              shape="square"
-              size="small"
-              :disabled="disabled"
-              @click.stop="$emit('run', item.id)"
-            >
-              <PlayIcon />
-            </t-button>
-          </t-tooltip>
-          <t-tooltip content="复制任务" placement="top">
-            <t-button
-              theme="default"
-              variant="text"
-              shape="square"
-              size="small"
-              :disabled="disabled"
-              @click.stop="$emit('duplicate', item.id)"
-            >
-              <CopyIcon />
-            </t-button>
-          </t-tooltip>
-          <t-tooltip content="删除任务" placement="top">
-            <t-button
-              theme="danger"
-              variant="text"
-              shape="square"
-              size="small"
-              :disabled="disabled"
-              @click.stop="$emit('remove', item.id)"
-            >
-              <DeleteIcon />
-            </t-button>
-          </t-tooltip>
-        </div>
-      </article>
-    </div>
-    <div v-else class="task-empty">
-      <DataSearchIcon size="24px" />
-      <strong>还没有任务</strong>
-      <p>从一个列表页地址开始。</p>
-    </div>
+      </template>
 
-    <div class="sidebar-note">
-      <CheckCircleFilledIcon size="13px" />
-      <span>本地单任务运行 · 数据保存在本机</span>
-    </div>
+      <t-menu-item value="create" class="primary-menu-item" :disabled="disabled">
+        <template #icon><AddIcon /></template>
+        新建采集任务
+      </t-menu-item>
+
+      <t-submenu
+        value="tasks"
+        class="tasks-submenu"
+        :popup-props="{ overlayClassName: 'task-sidebar-popup' }"
+      >
+        <template #icon><TaskIcon /></template>
+        <template #title>
+          <span class="menu-label">
+            <span>任务管理</span>
+            <span class="menu-count">{{ tasks.length }}</span>
+          </span>
+        </template>
+
+        <t-menu-item
+          v-for="item in tasks"
+          :key="item.id"
+          :value="taskMenuValue(item.id)"
+          class="task-menu-item"
+        >
+          <template #icon><FileIcon /></template>
+          <span class="task-entry-shell">
+            <button type="button" class="task-row-main" @click.stop="emit('select', item.id)">
+              <span class="task-copy">
+                <span class="task-title-line">
+                  <strong>{{ item.name }}</strong>
+                  <t-tag
+                    v-if="statusLabel(item.id)"
+                    size="small"
+                    :theme="statusTheme(item.id)"
+                    variant="light"
+                  >
+                    {{ statusLabel(item.id) }}
+                  </t-tag>
+                  <t-tag
+                    v-else-if="item.hasCheckpoint"
+                    size="small"
+                    theme="warning"
+                    variant="light"
+                  >
+                    可续采
+                  </t-tag>
+                </span>
+                <small>{{ item.listUrl || '尚未填写列表地址' }}</small>
+                <time>{{ shortDate(item.updatedAt) }}</time>
+              </span>
+            </button>
+            <span class="task-actions">
+              <t-tooltip
+                :content="runItemMap.get(item.id)?.status === 'paused' ? '继续任务' : '运行任务'"
+                placement="top"
+              >
+                <t-button
+                  theme="primary"
+                  variant="text"
+                  shape="square"
+                  size="small"
+                  :disabled="runDisabled(item.id)"
+                  @click.stop="emit('run', item.id)"
+                >
+                  <template #icon><PlayIcon size="18px" /></template>
+                </t-button>
+              </t-tooltip>
+              <t-tooltip content="复制任务" placement="top">
+                <t-button
+                  theme="default"
+                  variant="text"
+                  shape="square"
+                  size="small"
+                  :disabled="disabled"
+                  @click.stop="emit('duplicate', item.id)"
+                >
+                  <template #icon><CopyIcon size="18px" /></template>
+                </t-button>
+              </t-tooltip>
+              <t-tooltip content="删除任务" placement="top">
+                <t-button
+                  theme="danger"
+                  variant="text"
+                  shape="square"
+                  size="small"
+                  :disabled="disabled || taskLocked(item.id)"
+                  @click.stop="emit('remove', item.id)"
+                >
+                  <template #icon><DeleteIcon size="18px" /></template>
+                </t-button>
+              </t-tooltip>
+            </span>
+          </span>
+        </t-menu-item>
+
+        <t-menu-item v-if="tasks.length === 0" value="empty" class="task-empty-item" disabled>
+          <template #icon><DataSearchIcon /></template>
+          <span class="task-empty">
+            <strong>还没有任务</strong>
+            <small>从一个列表页地址开始。</small>
+          </span>
+        </t-menu-item>
+      </t-submenu>
+
+      <t-menu-item value="run-center" class="primary-menu-item">
+        <template #icon><ViewModuleIcon /></template>
+        <span class="menu-label">
+          <span>运行中心</span>
+          <span v-if="sessionActivityCount" class="menu-count active-count">
+            {{ sessionActivityCount }}
+          </span>
+        </span>
+      </t-menu-item>
+
+      <template #operations>
+        <t-tooltip content="本地多任务运行 · 数据保存在本机" placement="right">
+          <div class="sidebar-note">
+            <span class="status-dot" />
+            <span v-if="!collapsed">本地多任务运行 · 数据保存在本机</span>
+          </div>
+        </t-tooltip>
+      </template>
+    </t-menu>
   </aside>
 </template>
 
 <style scoped>
 .task-sidebar {
-  display: flex;
   min-height: 0;
   min-width: 0;
-  flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--line);
   background: var(--sidebar-surface);
 }
 
+.task-menu {
+  height: 100%;
+  background: var(--sidebar-surface);
+  --td-brand-color: var(--accent);
+  --td-brand-color-light: #e9f4f4;
+}
+
+.task-menu :deep(.t-default-menu__inner),
+.task-menu :deep(.t-menu) {
+  background: var(--sidebar-surface);
+}
+
+.task-menu :deep(.t-menu__logo > *) {
+  margin-left: 0;
+}
+
+.task-menu :deep(.t-menu) {
+  padding: 10px 8px;
+}
+
+.task-menu :deep(.t-menu__item) {
+  border-radius: 8px;
+}
+
+.task-menu :deep(.primary-menu-item.t-menu__item) {
+  min-height: 42px;
+}
+
+.task-menu :deep(.tasks-submenu > .t-menu__sub .task-menu-item) {
+  padding-left: 44px;
+}
+
 .brand-block {
   display: flex;
+  width: 100%;
+  height: 64px;
   align-items: center;
   gap: 11px;
-  padding: 20px 16px 17px;
+  padding: 0 13px;
+  overflow: hidden;
 }
 
 .brand-mark {
@@ -158,7 +324,6 @@ const shortDate = (value: string): string => {
   place-items: center;
   overflow: hidden;
   border-radius: 10px;
-  background: transparent;
   box-shadow: 0 7px 18px rgba(24, 34, 42, 0.14);
 }
 
@@ -179,6 +344,7 @@ const shortDate = (value: string): string => {
 
 .brand-copy strong {
   overflow: hidden;
+  color: var(--ink);
   font-size: 14px;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
@@ -191,55 +357,92 @@ const shortDate = (value: string): string => {
   font-size: 10px;
 }
 
-.new-task {
-  width: calc(100% - 28px);
-  margin: 3px 14px 20px;
+.collapsed .brand-block {
+  justify-content: center;
+  padding: 0;
 }
 
-.task-list-heading {
+.collapsed .brand-copy {
+  display: none;
+}
+
+.menu-label {
   display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
   justify-content: space-between;
-  padding: 0 17px 8px;
-  color: #7a8490;
-  font-size: 10px;
+  gap: 8px;
+}
+
+.menu-count {
+  display: grid;
+  width: auto;
+  min-width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: #dde8e9;
+  color: #52666b;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.task-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 0 8px 14px;
+.active-count {
+  background: var(--accent);
+  color: #fff;
 }
 
-.task-row {
+:global(.task-menu-item.t-menu__item) {
+  height: auto;
+  min-height: 68px;
+  align-items: stretch;
+  line-height: normal;
+  padding-top: 2px;
+  padding-right: 2px;
+  padding-bottom: 2px;
+}
+
+:global(.task-menu-item.t-menu__item > .t-icon) {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+:global(.task-menu-item.t-menu__item > .t-menu__content) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  line-height: normal;
+}
+
+.task-entry-shell {
   position: relative;
   display: flex;
   min-width: 0;
-  gap: 7px;
-  margin-bottom: 3px;
-  padding: 11px 9px 11px 11px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  outline: none;
-  cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-}
-
-.task-row:hover,
-.task-row:focus-visible {
-  border-color: #d7dde0;
-  background: rgba(255, 255, 255, 0.66);
-}
-
-.task-row.active {
-  border-color: #cbdcdf;
-  background: #fff;
-  box-shadow: inset 3px 0 0 var(--accent), 0 4px 14px rgba(25, 42, 50, 0.06);
-  transform: translateX(1px);
+  flex: 1;
+  align-items: stretch;
 }
 
 .task-row-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  padding: 8px 3px 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.task-copy {
+  display: block;
   min-width: 0;
   flex: 1;
 }
@@ -248,13 +451,14 @@ const shortDate = (value: string): string => {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .task-title-line strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  color: var(--ink);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -262,36 +466,50 @@ const shortDate = (value: string): string => {
 .task-title-line :deep(.t-tag) {
   height: 18px;
   flex: 0 0 auto;
-  padding: 0 5px;
-  font-size: 9px;
+  padding: 0 4px;
+  font-size: 8px;
 }
 
-.task-row p {
+.task-copy > small,
+.task-copy > time {
+  display: block;
   overflow: hidden;
-  margin: 5px 0 4px;
-  color: var(--muted);
-  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-row time {
-  color: #9aa2aa;
-  font-size: 9px;
+.task-copy > small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.task-copy > time {
+  margin-top: 3px;
+  color: #99a3a7;
+  font-size: 8px;
 }
 
 .task-actions {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 1;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  padding-left: 8px;
+  background: linear-gradient(90deg, rgba(233, 244, 244, 0), #e9f4f4 10px);
   opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
   transition: opacity 120ms ease;
 }
 
-.task-row:hover .task-actions,
-.task-row:focus-within .task-actions,
-.task-row.active .task-actions {
+:global(.task-menu-item:hover .task-actions),
+:global(.task-menu-item:focus-within .task-actions) {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .task-actions :deep(.t-button) {
@@ -301,38 +519,58 @@ const shortDate = (value: string): string => {
   padding: 0;
 }
 
+.task-actions :deep(.t-button .t-icon) {
+  margin-right: 0;
+}
+
+:global(.task-empty-item.t-menu__item) {
+  height: auto;
+  min-height: 66px;
+  align-items: center;
+}
+
 .task-empty {
   display: flex;
-  margin: 22px 18px;
-  align-items: flex-start;
+  min-width: 0;
   flex-direction: column;
   color: #97a0aa;
 }
 
 .task-empty strong {
-  margin-top: 10px;
   color: #58636c;
-  font-size: 12px;
+  font-size: 10px;
 }
 
-.task-empty p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 10px;
+.task-empty small {
+  margin-top: 3px;
+  font-size: 9px;
 }
 
 .sidebar-note {
   display: flex;
+  min-height: 34px;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  margin-top: auto;
-  padding: 14px 17px;
-  border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 9px;
 }
 
-.sidebar-note :deep(svg) {
-  color: var(--success);
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(40, 151, 96, 0.09);
+}
+
+:global(.task-sidebar-popup) {
+  min-width: 280px !important;
+  max-width: 340px;
+}
+
+:global(.task-sidebar-popup .task-menu-item.t-menu__item) {
+  padding-left: 12px;
 }
 </style>

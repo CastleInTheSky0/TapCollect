@@ -38,6 +38,19 @@ export interface CollectorEvents {
   log: (log: RunLog) => void
 }
 
+export type CollectorRunResult =
+  | RunResult
+  | (Omit<RunResult, 'status'> & {
+      status: 'paused'
+    })
+
+class CollectorRunSuspendedError extends Error {
+  constructor() {
+    super('任务已暂停')
+    this.name = 'CollectorRunSuspendedError'
+  }
+}
+
 interface CandidateOutcome {
   record: ExtractedRecord | null
   failures: RecordFailure[]
@@ -59,8 +72,7 @@ const cloneCheckpoint = (checkpoint: RunCheckpoint): RunCheckpoint =>
   JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint
 
 export class CollectorRunControl {
-  private state: 'running' | 'paused' | 'cancelled' = 'running'
-  private waiters: Array<(shouldContinue: boolean) => void> = []
+  private state: 'running' | 'suspend-requested' | 'cancelled' = 'running'
   private latestCheckpoint: RunCheckpoint | null = null
 
   setCheckpoint(checkpoint: RunCheckpoint): void {
@@ -73,42 +85,30 @@ export class CollectorRunControl {
 
   pause(): boolean {
     if (this.state !== 'running') return false
-    this.state = 'paused'
+    this.state = 'suspend-requested'
     return true
   }
 
   resume(): boolean {
-    if (this.state !== 'paused') return false
+    if (this.state !== 'suspend-requested') return false
     this.state = 'running'
-    this.releaseWaiters(true)
     return true
   }
 
   cancel(): boolean {
     if (this.state === 'cancelled') return false
     this.state = 'cancelled'
-    this.releaseWaiters(false)
     return true
   }
 
   isPaused(): boolean {
-    return this.state === 'paused'
+    return this.state === 'suspend-requested'
   }
 
   isCancelled(): boolean {
     return this.state === 'cancelled'
   }
 
-  async waitUntilRunnable(): Promise<boolean> {
-    if (this.state === 'cancelled') return false
-    if (this.state === 'running') return true
-    return new Promise<boolean>((resolve) => this.waiters.push(resolve))
-  }
-
-  private releaseWaiters(shouldContinue: boolean): void {
-    const waiters = this.waiters.splice(0)
-    waiters.forEach((resolve) => resolve(shouldContinue))
-  }
 }
 
 const orderedConcurrentMap = async <T, R>(
@@ -279,7 +279,7 @@ export class CollectorEngine {
     resumeCheckpoint: RunCheckpoint | null,
     control: CollectorRunControl,
     events: CollectorEvents
-  ): Promise<RunResult> {
+  ): Promise<CollectorRunResult> {
     if (!isTaskRunnable(task) || !task.xml) throw new Error('任务配置尚未完成，不能运行')
     const listPages = analyzeTaskListPageRules(task)
     const pageRules = listPages.rules
@@ -318,7 +318,13 @@ export class CollectorEngine {
     let terminalMessage = '采集完成'
 
     const emitLog = (level: RunLog['level'], message: string): void => {
-      events.log({ runId: checkpoint.runId, level, time: new Date().toISOString(), message })
+      events.log({
+        runId: checkpoint.runId,
+        taskId: task.id,
+        level,
+        time: new Date().toISOString(),
+        message
+      })
     }
     const emitProgress = (status: RunProgress['status'], stage: RunProgress['stage'], message: string): void => {
       events.progress({
@@ -341,15 +347,7 @@ export class CollectorEngine {
       control.setCheckpoint(checkpoint)
       if (control.isCancelled()) return false
       if (!control.isPaused()) return true
-      await this.store.saveCheckpoint(checkpoint)
-      emitProgress('paused', 'list', '任务已暂停，当前批次保存在检查点中')
-      emitLog('warning', '任务已暂停')
-      const shouldContinue = await control.waitUntilRunnable()
-      if (shouldContinue) {
-        emitProgress('running', 'list', '继续采集')
-        emitLog('info', '任务继续运行')
-      }
-      return shouldContinue
+      throw new CollectorRunSuspendedError()
     }
 
     const appendFailure = async (failure: RecordFailure): Promise<void> => {
@@ -575,6 +573,12 @@ export class CollectorEngine {
     )
 
     try {
+      if (!(await synchronize())) {
+        await flushLastBatch()
+        await this.store.clearCheckpoint(task.id)
+        emitProgress('cancelled', 'cancelled', '任务已取消，当前有效记录已写出')
+        return this.buildResult(checkpoint, 'cancelled', '任务已取消，已保留采集结果')
+      }
       if (task.pagination.mode === 'click') {
         if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持动态分页')
         currentUrl = listPages.firstUrl
@@ -799,6 +803,12 @@ export class CollectorEngine {
     } catch (error) {
       control.setCheckpoint(checkpoint)
       await this.store.saveCheckpoint(checkpoint)
+      if (error instanceof CollectorRunSuspendedError) {
+        const message = '任务已暂停，当前安全进度已保存'
+        emitProgress('paused', 'list', message)
+        emitLog('warning', message)
+        return this.buildResult(checkpoint, 'paused', message)
+      }
       const message = error instanceof Error ? error.message : String(error)
       const retries = error instanceof HttpRequestError ? error.retries : 0
       try {
@@ -853,12 +863,6 @@ export class CollectorEngine {
   ): Promise<CandidateOutcome> {
     if (control?.isCancelled()) {
       return { record: null, failures: [], counter: 'skipped', matchCounts: {} }
-    }
-    if (control?.isPaused()) {
-      const shouldContinue = await control.waitUntilRunnable()
-      if (!shouldContinue) {
-        return { record: null, failures: [], counter: 'skipped', matchCounts: {} }
-      }
     }
     if (!task.detail.enabled || candidate.externalUrl) {
       return this.finalizeRecord(task, candidate, candidateToRecord(candidate), {})
@@ -952,9 +956,9 @@ export class CollectorEngine {
 
   private buildResult(
     checkpoint: RunCheckpoint,
-    status: RunResult['status'],
+    status: CollectorRunResult['status'],
     message: string
-  ): RunResult {
+  ): CollectorRunResult {
     return {
       runId: checkpoint.runId,
       taskId: checkpoint.taskId,
