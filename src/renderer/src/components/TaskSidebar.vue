@@ -526,19 +526,39 @@ const runDisabled = (taskId: string): boolean => {
 :global(.task-empty-item.t-menu__item) {
   height: auto;
   min-height: 66px;
-  align-items: center;
+  align-items: stretch;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  line-height: normal;
+}
+
+:global(.task-empty-item.t-menu__item > .t-icon) {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+:global(.task-empty-item.t-menu__item > .t-menu__content) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  line-height: normal;
 }
 
 .task-empty {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
+  padding: 8px 3px 8px 0;
   color: #97a0aa;
+  line-height: normal;
 }
 
 .task-empty strong {
+  min-height: 20px;
   color: #58636c;
   font-size: 10px;
+  line-height: 20px;
 }
 
 .task-empty small {

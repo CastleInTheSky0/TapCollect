@@ -1,4 +1,12 @@
-import type { CollectorApi } from '@shared/types'
+import type { CollectorApi, RunSessionItem } from '@shared/types'
+
+const LOCKED_RUN_STATUSES = new Set<RunSessionItem['status']>([
+  'queued',
+  'preparing',
+  'running',
+  'pausing',
+  'paused'
+])
 
 export const COLLECTOR_RUNTIME_METHODS = [
   'getSettings',
@@ -16,3 +24,13 @@ export const hasCollectorRuntime = (value: unknown): value is CollectorApi => {
   const candidate = value as Partial<Record<keyof CollectorApi, unknown>>
   return COLLECTOR_RUNTIME_METHODS.every((method) => typeof candidate[method] === 'function')
 }
+
+export const isRunItemLocked = (
+  item: Pick<RunSessionItem, 'status'> | null | undefined
+): boolean => Boolean(item && LOCKED_RUN_STATUSES.has(item.status))
+
+export const isTaskActivityLocked = (
+  taskId: string,
+  testingTaskId: string,
+  item: Pick<RunSessionItem, 'status'> | null | undefined
+): boolean => Boolean(taskId) && (testingTaskId === taskId || isRunItemLocked(item))

@@ -40,7 +40,6 @@ import type {
   RunLog,
   RunProgress,
   RunResult,
-  RunSessionItem,
   RunSessionSnapshot,
   TaskConfig,
   TaskSummary,
@@ -50,6 +49,7 @@ import type {
 import FieldMappingEditor from './components/FieldMappingEditor.vue'
 import RunCenter from './components/RunCenter.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
+import { isRunItemLocked, isTaskActivityLocked } from './collector-runtime'
 import {
   defaultPaneWidths,
   fitRunLogHeight,
@@ -130,14 +130,14 @@ const activeId = computed(() => activeTask.value?.id ?? '')
 const runItemMap = computed(() =>
   new Map(runSession.value.items.map((item) => [item.taskId, item] as const))
 )
-const isRunItemLocked = (item: RunSessionItem | undefined): boolean =>
-  Boolean(
-    item && ['queued', 'preparing', 'running', 'pausing', 'paused'].includes(item.status)
-  )
 const activeTaskRunItem = computed(() => runItemMap.value.get(activeId.value))
 const activeTaskLocked = computed(
   () =>
-    runSession.value.testingTaskId === activeId.value || isRunItemLocked(activeTaskRunItem.value)
+    isTaskActivityLocked(
+      activeId.value,
+      runSession.value.testingTaskId,
+      activeTaskRunItem.value
+    )
 )
 const selectedRunItem = computed(() => runItemMap.value.get(selectedRunTaskId.value) ?? null)
 const runProgress = computed<RunProgress | null>(() => selectedRunItem.value?.progress ?? null)
@@ -1319,7 +1319,7 @@ onBeforeUnmount(() => {
           <strong>{{ activeTask?.name || '尚未选择任务' }}</strong>
         </div>
         <div class="header-actions">
-          <t-tag v-if="activeTaskLocked" theme="warning" variant="light">
+          <t-tag v-if="activeTask && activeTaskLocked" theme="warning" variant="light">
             {{ runSession.testingTaskId === activeId ? '测试中，配置只读' : '任务活动中，配置只读' }}
           </t-tag>
           <t-tag v-if="activeTask" :theme="hasUnsavedChanges ? 'warning' : 'success'" variant="light">
