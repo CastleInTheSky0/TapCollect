@@ -1,5 +1,4 @@
 import { createApp } from 'vue'
-import TDesign from 'tdesign-vue-next'
 import 'tdesign-vue-next/es/style/index.css'
 import App from './App.vue'
 import { hasCollectorRuntime } from './collector-runtime'
@@ -35,5 +34,5 @@ if (!hasCollectorRuntime(window.collector)) {
   shell.append(card)
   root.replaceChildren(shell)
 } else {
-  createApp(App).use(TDesign).mount(root)
+  createApp(App).mount(root)
 }

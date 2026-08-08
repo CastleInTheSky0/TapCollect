@@ -6,7 +6,7 @@ import {
   onMounted,
   ref
 } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import MessagePlugin from 'tdesign-vue-next/es/message/plugin'
 import {
   AddIcon,
   ChevronLeftIcon,

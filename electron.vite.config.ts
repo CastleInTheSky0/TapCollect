@@ -1,6 +1,8 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
+import Components from 'unplugin-vue-components/vite'
+import { TDesignResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig({
   main: {
@@ -50,6 +52,12 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [vue()]
+    plugins: [
+      vue(),
+      Components({
+        dts: false,
+        resolvers: [TDesignResolver({ library: 'vue-next' })]
+      })
+    ]
   }
 })
