@@ -23,7 +23,7 @@ import {
   SaveIcon,
   SearchIcon
 } from 'tdesign-icons-vue-next'
-import { createTask, isTaskRunnable } from '@shared/defaults'
+import { createTask, taskConfigurationIssues } from '@shared/defaults'
 import {
   analyzeTaskListPageRules,
   firstTaskListPageUrl
@@ -57,7 +57,8 @@ import {
   type PaneWidths,
   type ResizablePane
 } from './pane-layout'
-import { snapshotTaskForIpc } from './task-ipc'
+import { runPreviewOpenGuard, type PreviewOpenAction } from './preview-open-guard'
+import { snapshotTaskForIpc, taskDraftFingerprint } from './task-ipc'
 
 const api = window.collector
 const steps = ['基本信息', '列表与分页', '详情页', 'XML 映射', '输出与测试']
@@ -71,6 +72,7 @@ const resourceKindLabels = {
 
 const tasks = ref<TaskSummary[]>([])
 const activeTask = ref<TaskConfig | null>(null)
+const savedTaskFingerprint = ref<string | null>(null)
 const settings = ref<AppSettings>({ defaultOutputDirectory: '' })
 const currentStep = ref(1)
 const busy = ref(false)
@@ -88,6 +90,8 @@ const previewSurface = ref<HTMLElement | null>(null)
 const previewUrl = ref('')
 const previewVisible = ref(false)
 const previewStatus = ref('尚未打开预览')
+const previewOpenAction = ref<PreviewOpenAction | null>(null)
+const previewOpening = computed(() => previewOpenAction.value !== null)
 const pickingLabel = ref('')
 const paneWidths = ref<PaneWidths>(defaultPaneWidths(window.innerWidth))
 const sidebarCollapsed = ref(false)
@@ -106,7 +110,17 @@ const pendingDeleteTaskId = ref('')
 const cancelPrompt = ref(false)
 
 const activeId = computed(() => activeTask.value?.id ?? '')
-const runnable = computed(() => Boolean(activeTask.value && isTaskRunnable(activeTask.value)))
+const configurationIssues = computed(() =>
+  activeTask.value ? taskConfigurationIssues(activeTask.value) : []
+)
+const runnable = computed(() => Boolean(activeTask.value && configurationIssues.value.length === 0))
+const hasUnsavedChanges = computed(() => {
+  if (!activeTask.value) return false
+  return (
+    savedTaskFingerprint.value === null ||
+    taskDraftFingerprint(activeTask.value) !== savedTaskFingerprint.value
+  )
+})
 const synchronizeListPageMetadata = (task: TaskConfig): void => {
   const analysis = analyzeTaskListPageRules(task)
   task.listUrl = analysis.firstUrl
@@ -200,7 +214,7 @@ const flatXmlTree = computed(() => {
 const messageFromError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
-const showFeedback = (theme: 'success' | 'error', content: string): void => {
+const showFeedback = (theme: 'success' | 'warning' | 'error', content: string): void => {
   MessagePlugin.closeAll()
   void MessagePlugin(theme, {
     closeBtn: true,
@@ -218,6 +232,15 @@ const showNotice = (message: string): void => {
   showFeedback('success', message)
 }
 
+const showWarning = (message: string): void => {
+  showFeedback('warning', message)
+}
+
+const formatConfigurationIssues = (intro: string, issues: string[]): string =>
+  `${intro}（${issues.length} 项）：${issues
+    .map((issue, index) => `${index + 1}. ${issue}`)
+    .join('；')}`
+
 const selectStep = (value: string | number): void => {
   const next = Number(value)
   if (Number.isInteger(next) && next >= 1 && next <= steps.length) currentStep.value = next
@@ -234,6 +257,7 @@ const loadTask = async (id: string): Promise<void> => {
     const task = await api.loadTask(id)
     if (!task) throw new Error('找不到任务配置')
     activeTask.value = task
+    savedTaskFingerprint.value = taskDraftFingerprint(task)
     previewUrl.value = firstTaskListPageUrl(task)
     paginationSuggestions.value = []
     detailSamples.value = []
@@ -254,6 +278,7 @@ const createNewTask = (): void => {
   const task = createTask(crypto.randomUUID())
   task.output.rootDirectory = settings.value.defaultOutputDirectory
   activeTask.value = task
+  savedTaskFingerprint.value = null
   currentStep.value = 1
   xmlTree.value = []
   paginationSuggestions.value = []
@@ -274,8 +299,16 @@ const saveCurrent = async (silent = false): Promise<TaskConfig | null> => {
     }
     const saved = await api.saveTask(snapshotTaskForIpc(activeTask.value))
     activeTask.value = saved
+    savedTaskFingerprint.value = taskDraftFingerprint(saved)
     await refreshTasks()
-    if (!silent) showNotice('任务已保存')
+    if (!silent) {
+      const issues = taskConfigurationIssues(saved)
+      if (issues.length > 0) {
+        showWarning(formatConfigurationIssues('草稿已保存，但还有配置未完成', issues))
+      } else {
+        showNotice('任务已保存')
+      }
+    }
     return saved
   } catch (error) {
     showError(error)
@@ -307,7 +340,10 @@ const confirmRemoveTask = async (): Promise<void> => {
   if (!id) return
   try {
     await api.deleteTask(id)
-    if (activeTask.value?.id === id) activeTask.value = null
+    if (activeTask.value?.id === id) {
+      activeTask.value = null
+      savedTaskFingerprint.value = null
+    }
     await refreshTasks()
     pendingDeleteTaskId.value = ''
     showNotice('任务配置已删除')
@@ -608,6 +644,34 @@ const handleWindowResize = (): void => {
   schedulePreviewBoundsUpdate()
 }
 
+const runPreviewOpenAction = async (
+  action: PreviewOpenAction,
+  status: string,
+  operation: () => Promise<void>
+): Promise<boolean> => {
+  if (previewOpenAction.value) {
+    previewStatus.value = '网页正在打开，请稍候…'
+    return false
+  }
+  previewStatus.value = status
+  return runPreviewOpenGuard(previewOpenAction, action, operation)
+}
+
+const loadPreviewUrl = async (value: string): Promise<void> => {
+  try {
+    await expandPreviewPane()
+    previewVisible.value = true
+    await nextTick()
+    const bounds = previewBounds()
+    if (!bounds) throw new Error('无法确定网页预览区域，请调整窗口后重试')
+    await api.previewOpen(value, bounds)
+    previewUrl.value = value
+  } catch (error) {
+    previewVisible.value = false
+    throw error
+  }
+}
+
 const openPreview = async (): Promise<void> => {
   const value =
     previewUrl.value.trim() || (activeTask.value ? firstTaskListPageUrl(activeTask.value) : '')
@@ -616,27 +680,48 @@ const openPreview = async (): Promise<void> => {
     return
   }
   try {
-    await expandPreviewPane()
-    previewVisible.value = true
-    await nextTick()
-    const bounds = previewBounds()
-    if (!bounds) return
-    await api.previewOpen(value, bounds)
-    previewUrl.value = value
-    previewStatus.value = '预览已加载，可点选或验证选择器'
+    await runPreviewOpenAction('address', '正在打开网页预览，请稍候…', async () => {
+      await loadPreviewUrl(value)
+      previewStatus.value = '预览已加载，可点选或验证选择器'
+    })
   } catch (error) {
-    previewVisible.value = false
+    previewStatus.value = '预览打开失败，可修改地址后重试'
+    showError(error)
+  }
+}
+
+const openConfiguredListPreview = async (
+  action: Extract<PreviewOpenAction, 'step-list' | 'placeholder-list'>
+): Promise<void> => {
+  const value = activeTask.value ? firstTaskListPageUrl(activeTask.value) : ''
+  if (!value) {
+    showError(new Error('请先填写列表页面 URL'))
+    return
+  }
+  previewUrl.value = value
+  try {
+    await runPreviewOpenAction(action, '正在打开列表页预览，请稍候…', async () => {
+      await loadPreviewUrl(value)
+      previewStatus.value = '预览已加载，可点选或验证选择器'
+    })
+  } catch (error) {
+    previewStatus.value = '列表页预览打开失败，请检查地址或网络后重试'
     showError(error)
   }
 }
 
 const closePreview = async (): Promise<void> => {
+  if (previewOpening.value) return
   await api.previewClose()
   previewVisible.value = false
   previewStatus.value = '预览已关闭'
 }
 
 const ensurePreview = async (): Promise<boolean> => {
+  if (previewOpening.value) {
+    previewStatus.value = '网页正在打开，请稍候…'
+    return false
+  }
   if (!previewVisible.value) await openPreview()
   return previewVisible.value
 }
@@ -725,23 +810,35 @@ const evaluateBaseSelector = async (target: BaseSelectorTarget): Promise<void> =
 }
 
 const openDetailSample = async (next: boolean): Promise<void> => {
-  if (!activeTask.value) return
+  const task = activeTask.value
+  if (!task) return
+  const action: PreviewOpenAction = next ? 'detail-next' : 'detail-first'
   try {
-    if (!next || !detailSamples.value.length) {
-      detailSamples.value = await api.getDetailSamples(snapshotTaskForIpc(activeTask.value))
-      detailSampleIndex.value = -1
-    }
-    if (!detailSamples.value.length) {
-      showNotice('当前列表页没有找到可访问的站内详情样例')
-      return
-    }
-    detailSampleIndex.value = next
-      ? (detailSampleIndex.value + 1) % detailSamples.value.length
-      : 0
-    previewUrl.value = detailSamples.value[detailSampleIndex.value] ?? detailSamples.value[0] ?? ''
-    await openPreview()
-    previewStatus.value = `详情样例 ${detailSampleIndex.value + 1} / ${detailSamples.value.length}`
+    await runPreviewOpenAction(
+      action,
+      next ? '正在打开下一条详情样例，请稍候…' : '正在获取并打开第一条有效详情，请稍候…',
+      async () => {
+        if (!next || !detailSamples.value.length) {
+          detailSamples.value = await api.getDetailSamples(snapshotTaskForIpc(task))
+          detailSampleIndex.value = -1
+        }
+        if (!detailSamples.value.length) {
+          previewStatus.value = '当前列表页没有找到可访问的站内详情样例'
+          showNotice('当前列表页没有找到可访问的站内详情样例')
+          return
+        }
+        detailSampleIndex.value = next
+          ? (detailSampleIndex.value + 1) % detailSamples.value.length
+          : 0
+        const value =
+          detailSamples.value[detailSampleIndex.value] ?? detailSamples.value[0] ?? ''
+        previewUrl.value = value
+        await loadPreviewUrl(value)
+        previewStatus.value = `详情样例 ${detailSampleIndex.value + 1} / ${detailSamples.value.length}`
+      }
+    )
   } catch (error) {
+    previewStatus.value = '详情样例打开失败，请检查地址或网络后重试'
     showError(error)
   }
 }
@@ -821,14 +918,22 @@ const runTest = async (): Promise<void> => {
 
 const requestRun = async (id?: string): Promise<void> => {
   if (running.value) return
-  if (id && id !== activeTask.value?.id) await loadTask(id)
-  const saved = await saveCurrent(true)
-  if (!saved) return
-  if (!isTaskRunnable(saved)) {
-    showError(new Error('任务尚未配置完整，请处理所有 XML 字段并检查必填设置'))
+  if (id && id !== activeTask.value?.id) {
+    await loadTask(id)
+    if (activeTask.value?.id !== id) return
+  }
+  const task = activeTask.value
+  if (!task) return
+  if (hasUnsavedChanges.value) {
+    showWarning('当前配置尚未保存，请先点击“保存草稿”，再开始正式采集')
     return
   }
-  const checkpoint = await api.getCheckpoint(saved.id)
+  const issues = taskConfigurationIssues(task)
+  if (issues.length > 0) {
+    showWarning(formatConfigurationIssues('任务配置尚未完成，无法开始正式采集', issues))
+    return
+  }
+  const checkpoint = await api.getCheckpoint(task.id)
   if (checkpoint) resumePrompt.value = true
   else await launchRun(false)
 }
@@ -940,7 +1045,7 @@ onBeforeUnmount(() => {
     'pane-is-resizing': resizingPane
   }" :style="appShellStyle">
     <TaskSidebar :aria-hidden="sidebarCollapsed" :inert="sidebarCollapsed" :tasks="tasks" :active-id="activeId"
-      :disabled="busy || running" @select="loadTask" @create="createNewTask" @duplicate="duplicateTask"
+      :disabled="busy || saving || running" @select="loadTask" @create="createNewTask" @duplicate="duplicateTask"
       @remove="removeTask" @run="requestRun" />
 
     <div class="pane-divider sidebar-divider" role="separator" aria-label="调整任务栏宽度" aria-orientation="vertical"
@@ -962,17 +1067,20 @@ onBeforeUnmount(() => {
           <strong>{{ activeTask?.name || '尚未选择任务' }}</strong>
         </div>
         <div class="header-actions">
+          <t-tag v-if="activeTask" :theme="hasUnsavedChanges ? 'warning' : 'success'" variant="light">
+            {{ hasUnsavedChanges ? '有未保存修改' : '草稿已保存' }}
+          </t-tag>
           <t-tag v-if="activeTask" :theme="runnable ? 'success' : 'warning'" variant="light">
             {{ runnable ? '配置完整' : '配置未完成' }}
           </t-tag>
-          <t-button theme="default" variant="outline" :loading="saving" :disabled="!activeTask || running"
+          <t-button theme="default" variant="outline" :loading="saving" :disabled="!activeTask || busy || running"
             @click="saveCurrent(false)">
             <template #icon>
               <SaveIcon />
             </template>
             保存草稿
           </t-button>
-          <t-button theme="primary" :disabled="!runnable || running" @click="requestRun()">
+          <t-button theme="primary" :disabled="!activeTask || busy || saving || running" @click="requestRun()">
             <template #icon>
               <PlayIcon />
             </template>
@@ -1007,8 +1115,13 @@ onBeforeUnmount(() => {
                       <t-textarea v-model="listPageRulesText" :autosize="{ minRows: 3, maxRows: 8 }"
                         :spell-check="false"
                         :placeholder="isClickPagination ? '只填写一个动态列表初始 URL' : '固定地址或包含 {page} 的模板，每行一条'" />
-                      <t-button theme="default" variant="outline"
-                        @click="previewUrl = firstTaskListPageUrl(activeTask); openPreview()">
+                      <t-button
+                        theme="default"
+                        variant="outline"
+                        :disabled="previewOpening"
+                        :loading="previewOpenAction === 'step-list'"
+                        @click="openConfiguredListPreview('step-list')"
+                      >
                         <template #icon>
                           <InternetIcon />
                         </template>
@@ -1194,14 +1307,27 @@ onBeforeUnmount(() => {
                     <t-tag theme="primary" variant="light">{{ listHostname }}</t-tag>
                   </div>
                   <div class="sample-actions">
-                    <t-button size="small" theme="default" variant="outline" @click="openDetailSample(false)">
+                    <t-button
+                      size="small"
+                      theme="default"
+                      variant="outline"
+                      :disabled="previewOpening"
+                      :loading="previewOpenAction === 'detail-first'"
+                      @click="openDetailSample(false)"
+                    >
                       <template #icon>
                         <InternetIcon />
                       </template>
                       打开第一条有效详情
                     </t-button>
-                    <t-button size="small" theme="default" variant="outline" :disabled="!detailSamples.length"
-                      @click="openDetailSample(true)">
+                    <t-button
+                      size="small"
+                      theme="default"
+                      variant="outline"
+                      :disabled="previewOpening || !detailSamples.length"
+                      :loading="previewOpenAction === 'detail-next'"
+                      @click="openDetailSample(true)"
+                    >
                       下一条样例
                       <template #suffix>
                         <ChevronRightIcon />
@@ -1467,7 +1593,7 @@ onBeforeUnmount(() => {
                     </template>
                     执行测试
                   </t-button>
-                  <t-button theme="primary" :disabled="!runnable || running" @click="requestRun()">
+                  <t-button theme="primary" :disabled="busy || saving || running" @click="requestRun()">
                     <template #icon>
                       <PlayIcon />
                     </template>
@@ -1567,26 +1693,51 @@ onBeforeUnmount(() => {
       <header class="preview-header">
         <div><span>网页预览</span><strong>{{ pickingLabel || previewStatus }}</strong></div>
         <t-tooltip v-if="previewVisible" content="关闭预览" placement="left">
-          <t-button theme="default" variant="text" shape="square" @click="closePreview">
+          <t-button
+            theme="default"
+            variant="text"
+            shape="square"
+            :disabled="previewOpening"
+            @click="closePreview"
+          >
             <CloseIcon />
           </t-button>
         </t-tooltip>
       </header>
       <div class="preview-address">
-        <t-input v-model="previewUrl" :spell-check="false" placeholder="输入 HTTP/HTTPS 地址" @enter="openPreview">
+        <t-input
+          v-model="previewUrl"
+          :spell-check="false"
+          :disabled="previewOpening"
+          placeholder="输入 HTTP/HTTPS 地址"
+          @enter="openPreview"
+        >
           <template #prefix-icon>
             <InternetIcon />
           </template>
         </t-input>
-        <t-button theme="primary" @click="openPreview">前往</t-button>
+        <t-button
+          theme="primary"
+          :disabled="previewOpening"
+          :loading="previewOpenAction === 'address'"
+          @click="openPreview"
+        >
+          前往
+        </t-button>
       </div>
       <div ref="previewSurface" class="preview-surface" :class="{ active: previewVisible }">
         <div class="preview-placeholder">
           <div class="browser-glyph"><span /><span /><span /></div>
           <strong>{{ previewVisible ? '正在加载网页预览…' : '隔离网页预览' }}</strong>
           <p>远程网页无法访问 Node.js 或本地文件。<br />打开列表页后可直接点选元素。</p>
-          <t-button v-if="!previewVisible && activeTask && firstTaskListPageUrl(activeTask)" theme="default"
-            variant="outline" @click="previewUrl = firstTaskListPageUrl(activeTask); openPreview()">
+          <t-button
+            v-if="!previewVisible && activeTask && firstTaskListPageUrl(activeTask)"
+            theme="default"
+            variant="outline"
+            :disabled="previewOpening"
+            :loading="previewOpenAction === 'placeholder-list'"
+            @click="openConfiguredListPreview('placeholder-list')"
+          >
             <template #icon>
               <InternetIcon />
             </template>

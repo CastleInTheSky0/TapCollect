@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { createFieldMapping, createTask } from '@shared/defaults'
 import { createMergeValue } from '@shared/field-mapping'
-import { snapshotTaskForIpc } from './task-ipc'
+import { snapshotTaskForIpc, taskDraftFingerprint } from './task-ipc'
 
 describe('snapshotTaskForIpc', () => {
   it('converts a Vue reactive task into an Electron-cloneable JSON value', () => {
@@ -69,5 +69,27 @@ describe('snapshotTaskForIpc', () => {
       to: '新值'
     })
     expect(() => structuredClone(snapshot)).not.toThrow()
+  })
+})
+
+describe('taskDraftFingerprint', () => {
+  it('is stable for equal task JSON and changes after a nested edit', () => {
+    const task = createTask('fingerprint-task')
+    const equalTask = createTask('fingerprint-task')
+
+    expect(taskDraftFingerprint(task)).toBe(taskDraftFingerprint(equalTask))
+
+    task.pagination.maxPages = 12
+
+    expect(taskDraftFingerprint(task)).not.toBe(taskDraftFingerprint(equalTask))
+  })
+
+  it('tracks edits made through a Vue reactive task', () => {
+    const task = reactive(createTask('reactive-fingerprint-task'))
+    const savedFingerprint = taskDraftFingerprint(task)
+
+    task.resources.download.rootDirectory = 'D:/downloaded-resources'
+
+    expect(taskDraftFingerprint(task)).not.toBe(savedFingerprint)
   })
 })

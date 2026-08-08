@@ -86,7 +86,7 @@ const shortDate = (value: string): string => {
               variant="text"
               shape="square"
               size="small"
-              :disabled="disabled || !item.runnable"
+              :disabled="disabled"
               @click.stop="$emit('run', item.id)"
             >
               <PlayIcon />

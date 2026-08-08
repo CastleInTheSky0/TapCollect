@@ -163,47 +163,92 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
   }
 }
 
-export const isTaskRunnable = (task: TaskConfig): boolean => {
+export const taskConfigurationIssues = (task: TaskConfig): string[] => {
+  const issues: string[] = []
   const listPages = analyzeTaskListPageRules(task)
-  if (!task.name.trim() || !task.listItem.selector.trim()) return false
-  if (listPages.errors.length > 0 || listPages.rules.length === 0) return false
-  if (task.pagination.mode === 'click' && !task.pagination.nextButton.selector.trim()) return false
-  if (!task.output.rootDirectory.trim() || !task.xml?.recordPath) return false
-  if (task.resources.download.enabled) {
-    if (!task.resources.download.rootDirectory.trim()) return false
-    if (!isValidResourceUrlPrefix(task.resources.download.urlPrefix)) return false
-  } else if (
-    task.resources.addressMode === 'prefix' &&
-    !isValidResourceUrlPrefix(task.resources.urlPrefix)
-  ) {
-    return false
+
+  if (!task.name.trim()) issues.push('请填写任务名称')
+  if (listPages.errors.length > 0) {
+    issues.push(...listPages.errors.map((error) => `列表页面 URL/分页：${error}`))
+  } else if (listPages.rules.length === 0) {
+    issues.push('请至少填写一个列表页面 URL')
   }
-  if (task.detail.enabled && !task.detail.link.selector.trim()) return false
-  if (
-    !task.detail.enabled &&
-    (!task.dedupeFieldPath.trim() ||
-      !task.xml.fields.some((field) => field.path === task.dedupeFieldPath))
-  ) {
-    return false
+  if (!task.listItem.selector.trim()) issues.push('请配置列表项范围选择器')
+  if (task.pagination.mode === 'click' && !task.pagination.nextButton.selector.trim()) {
+    issues.push('请配置动态分页的“下一页按钮”选择器')
   }
+  if (task.detail.enabled && !task.detail.link.selector.trim()) {
+    issues.push('请配置详情链接选择器')
+  }
+  if (!task.detail.enabled) {
+    if (!task.dedupeFieldPath.trim()) {
+      issues.push('关闭详情采集后，请选择去重字段')
+    } else if (
+      task.xml &&
+      !task.xml.fields.some((field) => field.path === task.dedupeFieldPath)
+    ) {
+      issues.push(`去重字段“${task.dedupeFieldPath}”不在当前 XML 模板中，请重新选择`)
+    }
+  }
+
+  if (!task.xml) {
+    issues.push('请导入 XML 模板')
+  } else {
+    if (!task.xml.recordPath.trim()) issues.push('请在 XML 模板中选择记录节点')
+    const unresolvedFieldPaths = task.xml.fields
+      .filter((field) => {
+        const mapping = task.xml?.mappings.find(
+          (candidate) => candidate.fieldPath === field.path
+        )
+        return !mapping || !isFieldMappingConfigured(mapping)
+      })
+      .map((field) => field.path)
+    if (unresolvedFieldPaths.length > 0) {
+      issues.push(`请完成 XML 字段映射：${unresolvedFieldPaths.join('、')}`)
+    }
+  }
+
+  if (!task.output.rootDirectory.trim()) issues.push('请选择采集输出目录')
   if (
     !Number.isInteger(task.output.recordsPerFile) ||
     task.output.recordsPerFile < 1 ||
     task.output.recordsPerFile > 200
   ) {
-    return false
+    issues.push('每个 XML 文件的记录数必须是 1–200 的整数')
   }
-  if (task.request.timeoutSeconds < 5 || task.request.timeoutSeconds > 120) return false
+
+  if (task.resources.download.enabled) {
+    if (!task.resources.download.rootDirectory.trim()) issues.push('请选择资源下载目录')
+    if (!isValidResourceUrlPrefix(task.resources.download.urlPrefix)) {
+      issues.push('请填写有效的资源下载替换前缀（/路径或 HTTP/HTTPS 地址）')
+    }
+  } else if (
+    task.resources.addressMode === 'prefix' &&
+    !isValidResourceUrlPrefix(task.resources.urlPrefix)
+  ) {
+    issues.push('请填写有效的自定义资源路径前缀（/路径或 HTTP/HTTPS 地址）')
+  }
+
+  if (
+    !Number.isFinite(task.request.timeoutSeconds) ||
+    task.request.timeoutSeconds < 5 ||
+    task.request.timeoutSeconds > 120
+  ) {
+    issues.push('请求超时时间必须在 5–120 秒之间')
+  }
   if (
     !Number.isInteger(task.request.detailConcurrency) ||
     task.request.detailConcurrency < 1 ||
     task.request.detailConcurrency > 5
   ) {
-    return false
+    issues.push('详情并发数必须是 1–5 的整数')
   }
-  if (!Number.isFinite(task.request.delayMs) || task.request.delayMs < 0) return false
-  return task.xml.fields.every((field) => {
-    const mapping = task.xml?.mappings.find((candidate) => candidate.fieldPath === field.path)
-    return Boolean(mapping && isFieldMappingConfigured(mapping))
-  })
+  if (!Number.isFinite(task.request.delayMs) || task.request.delayMs < 0) {
+    issues.push('请求间隔必须是大于或等于 0 的数值')
+  }
+
+  return issues
 }
+
+export const isTaskRunnable = (task: TaskConfig): boolean =>
+  taskConfigurationIssues(task).length === 0
