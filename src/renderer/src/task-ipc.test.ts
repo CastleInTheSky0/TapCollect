@@ -104,7 +104,7 @@ describe('snapshotTaskForIpc', () => {
 describe('taskDraftFingerprint', () => {
   it('is stable for equal task JSON and changes after a nested edit', () => {
     const task = createTask('fingerprint-task')
-    const equalTask = createTask('fingerprint-task')
+    const equalTask = structuredClone(task)
 
     expect(taskDraftFingerprint(task)).toBe(taskDraftFingerprint(equalTask))
 

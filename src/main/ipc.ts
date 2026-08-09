@@ -52,12 +52,7 @@ export const registerIpcHandlers = (
     return store.saveTask(task)
   })
   ipcMain.handle(IPC_CHANNELS.duplicateTask, (_event, id: string) => store.duplicateTask(id))
-  ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, id: string) => {
-    if (runManager.isTaskMutationLocked(id)) {
-      throw new Error('运行、暂停、排队或测试中的任务不能删除')
-    }
-    return store.deleteTask(id)
-  })
+  ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, id: string) => runManager.deleteTask(id))
   ipcMain.handle(IPC_CHANNELS.chooseOutputDirectory, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: '选择采集输出根目录',

@@ -16,9 +16,11 @@ interface PreloadSmokeResult {
   runSessionCapacity: number
   initialTaskCount: number
   savedTaskCount: number
+  finalTaskCount: number
   uiReady: boolean
   createTaskWorks: boolean
   saveTaskWorks: boolean
+  deleteTaskWorks: boolean
   consoleErrors: string[]
 }
 
@@ -91,9 +93,11 @@ const run = async (): Promise<PreloadSmokeResult> => {
             runSessionCapacity: -1,
             initialTaskCount: -1,
             savedTaskCount: -1,
+            finalTaskCount: -1,
             uiReady: false,
             createTaskWorks: false,
-            saveTaskWorks: false
+            saveTaskWorks: false,
+            deleteTaskWorks: false
           }
         }
         const unsubscribe = api.onRunProgress(() => undefined)
@@ -139,6 +143,10 @@ const run = async (): Promise<PreloadSmokeResult> => {
           if (savedTasks.some((task) => task.name === 'Preload Smoke')) break
         }
 
+        const savedTask = savedTasks.find((task) => task.name === 'Preload Smoke')
+        if (savedTask) await api.deleteTask(savedTask.id)
+        const finalTasks = await api.listTasks()
+
         const result = {
           hasCollector: typeof api.getSettings === 'function',
           hasRunSubscription:
@@ -148,9 +156,11 @@ const run = async (): Promise<PreloadSmokeResult> => {
           runSessionCapacity: runSession.maxConcurrentRuns,
           initialTaskCount: initialTasks.length,
           savedTaskCount: savedTasks.length,
+          finalTaskCount: finalTasks.length,
           uiReady: Boolean(createButton),
           createTaskWorks,
-          saveTaskWorks: savedTasks.some((task) => task.name === 'Preload Smoke')
+          saveTaskWorks: Boolean(savedTask),
+          deleteTaskWorks: Boolean(savedTask) && !finalTasks.some((task) => task.id === savedTask.id)
         }
         unsubscribe()
         unsubscribeSession()
@@ -179,9 +189,11 @@ const main = async (): Promise<void> => {
       result.runSessionCapacity !== 3 ||
       result.initialTaskCount !== 0 ||
       result.savedTaskCount !== 1 ||
+      result.finalTaskCount !== 0 ||
       !result.uiReady ||
       !result.createTaskWorks ||
       !result.saveTaskWorks ||
+      !result.deleteTaskWorks ||
       result.consoleErrors.some((message) =>
         /onRunProgress|Cannot read properties of undefined|Uncaught/i.test(message)
       )

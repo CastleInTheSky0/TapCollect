@@ -79,6 +79,7 @@ export class RunManager extends EventEmitter {
   private readonly queue: string[] = []
   private readonly outputLocks = new Map<string, string>()
   private readonly startingTaskIds = new Set<string>()
+  private readonly deletingTaskIds = new Set<string>()
   private readonly engine: CollectorEngineLike
   private maxConcurrentRuns = 3
   private testingTaskId = ''
@@ -120,7 +121,34 @@ export class RunManager extends EventEmitter {
   }
 
   isTaskMutationLocked(taskId: string): boolean {
-    return this.testingTaskId === taskId || this.isTaskLocked(taskId)
+    return (
+      this.deletingTaskIds.has(taskId) ||
+      this.testingTaskId === taskId ||
+      this.isTaskLocked(taskId)
+    )
+  }
+
+  async deleteTask(taskId: string): Promise<boolean> {
+    if (this.isTaskMutationLocked(taskId)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能删除')
+    }
+
+    this.deletingTaskIds.add(taskId)
+    try {
+      const deleted = await this.store.deleteTask(taskId)
+      if (!deleted) return false
+
+      const managed = this.runs.get(taskId)
+      if (managed) {
+        this.removeFromQueue(taskId)
+        this.releaseOutputLock(managed)
+        this.runs.delete(taskId)
+        this.emitSession()
+      }
+      return true
+    } finally {
+      this.deletingTaskIds.delete(taskId)
+    }
   }
 
   getSessionSnapshot(): RunSessionSnapshot {
@@ -152,6 +180,7 @@ export class RunManager extends EventEmitter {
 
   async start(taskId: string, resume: boolean): Promise<StartRunResult> {
     if (this.shuttingDown) throw new Error('应用正在退出，不能开始新任务')
+    if (this.deletingTaskIds.has(taskId)) throw new Error('该任务正在删除')
     if (this.testingTaskId === taskId) throw new Error('该任务正在执行测试采集')
     if (this.isTaskLocked(taskId)) throw new Error('该任务已经在运行、暂停或排队中')
 
@@ -382,6 +411,7 @@ export class RunManager extends EventEmitter {
     operation: (task: TaskConfig) => Promise<T>
   ): Promise<T> {
     if (this.testingTaskId) throw new Error('已有测试采集正在执行，请等待完成')
+    if (this.deletingTaskIds.has(taskId)) throw new Error('该任务正在删除')
     if (this.isTaskLocked(taskId)) throw new Error('运行、暂停或排队中的任务不能执行测试')
     this.testingTaskId = taskId
     this.emitSession()

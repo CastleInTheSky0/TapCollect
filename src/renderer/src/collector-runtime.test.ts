@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   hasCollectorRuntime,
   isRunItemLocked,
-  isTaskActivityLocked
+  isTaskActivityLocked,
+  resolveRunTaskSelection
 } from './collector-runtime'
 
 describe('collector renderer runtime', () => {
@@ -36,5 +37,28 @@ describe('collector renderer runtime', () => {
     expect(isTaskActivityLocked('task-a', '', { status: 'completed' })).toBe(false)
     expect(isRunItemLocked({ status: 'paused' })).toBe(true)
     expect(isRunItemLocked({ status: 'failed' })).toBe(false)
+  })
+
+  it('falls back to a remaining active run when the selected run record is removed', () => {
+    const previousItems = [
+      { taskId: 'deleted-task', status: 'completed' as const },
+      { taskId: 'running-task', status: 'running' as const }
+    ]
+    const nextItems = [
+      { taskId: 'finished-task', status: 'completed' as const },
+      { taskId: 'running-task', status: 'running' as const }
+    ]
+
+    expect(resolveRunTaskSelection('deleted-task', previousItems, nextItems)).toBe('running-task')
+    expect(resolveRunTaskSelection('running-task', previousItems, nextItems)).toBe('running-task')
+  })
+
+  it('keeps an idle task selection outside the run center and clears an empty session', () => {
+    const items = [{ taskId: 'finished-task', status: 'completed' as const }]
+
+    expect(resolveRunTaskSelection('idle-task', items, items)).toBe('idle-task')
+    expect(resolveRunTaskSelection('idle-task', items, items, true)).toBe('finished-task')
+    expect(resolveRunTaskSelection('deleted-task', items, [])).toBe('deleted-task')
+    expect(resolveRunTaskSelection('finished-task', items, [])).toBe('')
   })
 })

@@ -52,7 +52,11 @@ import type {
 import FieldMappingEditor from './components/FieldMappingEditor.vue'
 import RunCenter from './components/RunCenter.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
-import { isRunItemLocked, isTaskActivityLocked } from './collector-runtime'
+import {
+  isRunItemLocked,
+  isTaskActivityLocked,
+  resolveRunTaskSelection
+} from './collector-runtime'
 import {
   defaultPaneWidths,
   fitRunLogHeight,
@@ -348,12 +352,12 @@ const createNewTask = (): void => {
 
 const showRunCenter = (): void => {
   appView.value = 'run-center'
-  if (!selectedRunTaskId.value || !runItemMap.value.has(selectedRunTaskId.value)) {
-    selectedRunTaskId.value =
-      runSession.value.items.find((item) =>
-        ['preparing', 'running', 'pausing', 'paused', 'queued'].includes(item.status)
-      )?.taskId ?? runSession.value.items[0]?.taskId ?? ''
-  }
+  selectedRunTaskId.value = resolveRunTaskSelection(
+    selectedRunTaskId.value,
+    runSession.value.items,
+    runSession.value.items,
+    true
+  )
   schedulePreviewBoundsUpdate()
 }
 
@@ -415,13 +419,17 @@ const confirmRemoveTask = async (): Promise<void> => {
   if (!id) return
   try {
     await api.deleteTask(id)
+    applyRunSession(await api.getRunSession(), selectedRunTaskId.value === id)
     if (activeTask.value?.id === id) {
       activeTask.value = null
       savedTaskFingerprint.value = null
     }
+    dismissedRunTaskIds.value = new Set(
+      [...dismissedRunTaskIds.value].filter((taskId) => taskId !== id)
+    )
     await refreshTasks()
     pendingDeleteTaskId.value = ''
-    showNotice('任务配置已删除')
+    showNotice('任务配置和运行中心记录已删除，采集输出文件已保留')
   } catch (error) {
     showError(error)
   }
@@ -1212,12 +1220,18 @@ let removeLogListener = (): void => undefined
 let removeFinishedListener = (): void => undefined
 let removeSessionListener = (): void => undefined
 
-const applyRunSession = (snapshot: RunSessionSnapshot): void => {
+const applyRunSession = (
+  snapshot: RunSessionSnapshot,
+  requireSessionItem = false
+): void => {
+  selectedRunTaskId.value = resolveRunTaskSelection(
+    selectedRunTaskId.value,
+    runSession.value.items,
+    snapshot.items,
+    requireSessionItem
+  )
   runSession.value = snapshot
   settings.value.maxConcurrentRuns = snapshot.maxConcurrentRuns
-  if (!selectedRunTaskId.value && snapshot.items[0]) {
-    selectedRunTaskId.value = snapshot.items[0].taskId
-  }
 }
 
 onMounted(async () => {
@@ -2221,7 +2235,7 @@ onBeforeUnmount(() => {
 
     <t-dialog :visible="Boolean(pendingDeleteTaskId)" header="删除任务配置？" theme="danger" :footer="false" width="440px"
       @close="pendingDeleteTaskId = ''">
-      <p class="dialog-copy">任务配置会从本机删除，已经生成的输出文件不会被删除。</p>
+      <p class="dialog-copy">任务配置和运行中心记录会从本机删除；已经生成的 XML、表格、附件及其他采集输出文件不会被删除。</p>
       <div class="dialog-actions">
         <t-button theme="default" variant="text" @click="pendingDeleteTaskId = ''">取消</t-button>
         <t-button theme="danger" @click="confirmRemoveTask">删除任务</t-button>

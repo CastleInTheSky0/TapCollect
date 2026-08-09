@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createEmptyCounters,
   createEmptyResourceCounters,
@@ -11,6 +11,7 @@ import type {
   RunCheckpoint,
   RunProgress,
   RunResult,
+  RunSessionSnapshot,
   TaskConfig,
   TestCollectionResult
 } from '@shared/types'
@@ -194,6 +195,7 @@ class FakeCollectorEngine {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })))
 })
 
@@ -371,6 +373,9 @@ describe('RunManager', () => {
       testingTaskId: 'test-task'
     })
     await expect(manager.start('test-task', false)).rejects.toThrow('正在执行测试采集')
+    await expect(manager.deleteTask('test-task')).rejects.toThrow(
+      '运行、暂停、排队或测试中的任务不能删除'
+    )
 
     engine.completeTest()
     await testPromise
@@ -395,5 +400,68 @@ describe('RunManager', () => {
     }
     engine.completeTest()
     await firstTest
+  })
+
+  it('removes a completed task from the session while keeping collected output files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-delete-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    await store.initialize()
+    await store.saveTask(runnableTask('task-a', root))
+    const outputFile = join(root, 'exports', 'task-a', 'existing.xml')
+    await mkdir(join(root, 'exports', 'task-a'), { recursive: true })
+    await writeFile(outputFile, '<records/>', 'utf8')
+    const engine = new FakeCollectorEngine(store)
+    const manager = new RunManager(store, null, engine)
+    await manager.initialize()
+
+    await manager.start('task-a', false)
+    await expect(manager.deleteTask('task-a')).rejects.toThrow(
+      '运行、暂停、排队或测试中的任务不能删除'
+    )
+    expect(await store.loadTask('task-a')).not.toBeNull()
+
+    engine.complete('task-a')
+    await flushTasks()
+    expect(manager.getSessionSnapshot().items).toHaveLength(1)
+
+    const emittedSnapshots: RunSessionSnapshot[] = []
+    const unsubscribe = manager.onSession((snapshot) => emittedSnapshots.push(snapshot))
+    await expect(manager.deleteTask('task-a')).resolves.toBe(true)
+    unsubscribe()
+
+    expect(await store.loadTask('task-a')).toBeNull()
+    expect(manager.getSessionSnapshot().items).toEqual([])
+    expect(emittedSnapshots.at(-1)?.items).toEqual([])
+    expect(await readFile(outputFile, 'utf8')).toBe('<records/>')
+  })
+
+  it('reserves a task while its deletion is waiting on storage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-delete-race-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    await store.initialize()
+    await store.saveTask(runnableTask('task-a', root))
+    const engine = new FakeCollectorEngine(store)
+    const manager = new RunManager(store, null, engine)
+    await manager.initialize()
+
+    const originalDeleteTask = store.deleteTask.bind(store)
+    let releaseDeletion = (): void => undefined
+    const deletionGate = new Promise<void>((resolve) => {
+      releaseDeletion = resolve
+    })
+    vi.spyOn(store, 'deleteTask').mockImplementation(async (taskId) => {
+      await deletionGate
+      return originalDeleteTask(taskId)
+    })
+
+    const deletion = manager.deleteTask('task-a')
+    await expect(manager.start('task-a', false)).rejects.toThrow('该任务正在删除')
+    await expect(manager.testTask('task-a')).rejects.toThrow('该任务正在删除')
+    releaseDeletion()
+
+    await expect(deletion).resolves.toBe(true)
+    expect(await store.loadTask('task-a')).toBeNull()
   })
 })
