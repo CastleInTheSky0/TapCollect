@@ -9,6 +9,7 @@ export const IPC_CHANNELS = {
   chooseOutputDirectory: 'dialogs:output-directory',
   chooseResourceDirectory: 'dialogs:resource-directory',
   importXmlTemplate: 'xml:import-template',
+  importSpreadsheetTemplate: 'spreadsheet:import-template',
   inspectXmlTemplate: 'xml:inspect-template',
   selectXmlRecord: 'xml:select-record',
   detectPaginationParameters: 'pagination:detect',

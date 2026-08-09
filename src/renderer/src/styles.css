@@ -648,6 +648,32 @@ body.pane-resizing * {
   border-bottom: 1px solid var(--line);
 }
 
+.output-format-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9f9;
+}
+
+.output-format-picker strong,
+.output-format-picker span {
+  display: block;
+}
+
+.output-format-picker strong {
+  font-size: 12px;
+}
+
+.output-format-picker span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .template-toolbar strong,
 .template-toolbar span {
   display: block;
@@ -667,6 +693,13 @@ body.pane-resizing * {
   display: grid;
   min-height: 430px;
   grid-template-columns: 190px minmax(0, 1fr);
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.spreadsheet-workbench {
   margin-top: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;

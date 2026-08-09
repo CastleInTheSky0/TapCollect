@@ -16,6 +16,7 @@ import {
 import { cleanTextValue, extractRawValue, selectNodes } from './selector-engine'
 import { hasSameHostname, resolveHttpUrl } from './url-utils'
 import { pageValueEntries } from './field-values'
+import { taskOutputFields, taskOutputMappings } from '@shared/output-template'
 
 export interface ListCandidate {
   sequence: number
@@ -38,7 +39,9 @@ export interface ExtractListPageResult {
 }
 
 const requiredPageMappings = (task: TaskConfig, source: 'list' | 'detail'): FieldMapping[] =>
-  task.xml?.mappings.filter((mapping) => mapping.mode === 'page' && mapping.pageSource === source) ?? []
+  taskOutputMappings(task).filter(
+    (mapping) => mapping.mode === 'page' && mapping.pageSource === source
+  )
 
 const applyFieldCleanup = (value: string, mapping: PageExtractionConfig): string => {
   if (mapping.extraction !== 'html') return cleanTextValue(value, mapping)
@@ -131,7 +134,7 @@ const extractDetailHref = (item: Element, task: TaskConfig): string => {
 
 const initialValues = (task: TaskConfig): Record<string, string> => {
   const values: Record<string, string> = {}
-  for (const field of task.xml?.fields ?? []) values[field.path] = ''
+  for (const field of taskOutputFields(task)) values[field.path] = ''
   return values
 }
 

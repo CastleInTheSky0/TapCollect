@@ -16,6 +16,7 @@ import {
   isTaskRunnable
 } from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
+import { taskOutputTemplate } from '@shared/output-template'
 import { renderXmlBatch } from './xml-template'
 import {
   candidateToRecord,
@@ -29,7 +30,7 @@ import { HttpClient, HttpRequestError } from './http-client'
 import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
 import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
 import { missingRequiredMergeFields, resolveFieldValue } from './field-values'
-import { XmlOutputSession } from '@main/services/output-writer'
+import { createOutputSession } from '@main/services/output-writer'
 import { ResourceDownloader } from '@main/services/resource-downloader'
 import type { TaskStore } from '@main/services/task-store'
 
@@ -140,8 +141,9 @@ const missingFailures = (
   fields.map((field) => createRecordFailure(candidate, stage, '必填字段没有采集到值', field))
 
 const resolveListOnlyDedupeValue = (task: TaskConfig, candidate: ListCandidate): string => {
-  const field = task.xml?.fields.find((definition) => definition.path === task.dedupeFieldPath)
-  const mapping = task.xml?.mappings.find((entry) => entry.fieldPath === task.dedupeFieldPath)
+  const template = taskOutputTemplate(task)
+  const field = template?.fields.find((definition) => definition.path === task.dedupeFieldPath)
+  const mapping = template?.mappings.find((entry) => entry.fieldPath === task.dedupeFieldPath)
   if (!field || !mapping) return ''
   return resolveFieldValue(mapping, field, candidateToRecord(candidate))
 }
@@ -211,7 +213,8 @@ export class CollectorEngine {
   }
 
   async testTask(task: TaskConfig): Promise<TestCollectionResult> {
-    if (!task.xml) throw new Error('请先导入 XML 模板并配置记录节点')
+    const outputTemplate = taskOutputTemplate(task)
+    if (!outputTemplate) throw new Error('请先导入并配置输出模板')
     const response = await this.loadInitialListPage(task)
     if (!response) throw new Error('测试列表页未返回可采集的 HTML')
     const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
@@ -238,8 +241,10 @@ export class CollectorEngine {
 
     const rows = records.map((record) => {
       const row: Record<string, string> = {}
-      for (const field of task.xml?.fields ?? []) {
-        const mapping = task.xml?.mappings.find((candidate) => candidate.fieldPath === field.path)
+      for (const field of outputTemplate.fields) {
+        const mapping = outputTemplate.mappings.find(
+          (candidate) => candidate.fieldPath === field.path
+        )
         if (!mapping || mapping.mode === 'unconfigured') {
           row[field.path] = ''
         } else {
@@ -261,7 +266,10 @@ export class CollectorEngine {
       matchCounts,
       failures,
       listItemCount: page.itemCount,
-      xmlPreview: records.length > 0 ? renderXmlBatch(task.xml, records) : '',
+      xmlPreview:
+        task.output.format === 'xml' && task.xml && records.length > 0
+          ? renderXmlBatch(task.xml, records)
+          : '',
       resourcePlans,
       messages: [
         `列表项匹配 ${page.itemCount} 条`,
@@ -280,7 +288,9 @@ export class CollectorEngine {
     control: CollectorRunControl,
     events: CollectorEvents
   ): Promise<CollectorRunResult> {
-    if (!isTaskRunnable(task) || !task.xml) throw new Error('任务配置尚未完成，不能运行')
+    if (!isTaskRunnable(task) || !taskOutputTemplate(task)) {
+      throw new Error('任务配置尚未完成，不能运行')
+    }
     const listPages = analyzeTaskListPageRules(task)
     const pageRules = listPages.rules
 
@@ -307,7 +317,12 @@ export class CollectorEngine {
       processedResourceUrls: []
     }
     const freshRun = resumeCheckpoint === null
-    const output = new XmlOutputSession(task, this.store, checkpoint.runStamp, checkpoint.errorLogPath)
+    const output = createOutputSession(
+      task,
+      this.store,
+      checkpoint.runStamp,
+      checkpoint.errorLogPath
+    )
     await output.prepare(freshRun)
     checkpoint.errorLogPath = output.errorLogPath
     control.setCheckpoint(checkpoint)

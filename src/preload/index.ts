@@ -25,6 +25,8 @@ const api: CollectorApi = {
   chooseOutputDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chooseOutputDirectory),
   chooseResourceDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chooseResourceDirectory),
   importXmlTemplate: () => ipcRenderer.invoke(IPC_CHANNELS.importXmlTemplate),
+  importSpreadsheetTemplate: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.importSpreadsheetTemplate),
   inspectXmlTemplate: (content) => ipcRenderer.invoke(IPC_CHANNELS.inspectXmlTemplate, content),
   selectXmlRecord: (content, fileName, recordPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.selectXmlRecord, content, fileName, recordPath),

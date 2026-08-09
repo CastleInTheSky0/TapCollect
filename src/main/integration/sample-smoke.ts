@@ -7,6 +7,7 @@ import { analyzeTaskListPageRules } from '@shared/list-page-rules'
 import { CollectorEngine, CollectorRunControl } from '@main/core/collector-engine'
 import { HttpClient } from '@main/core/http-client'
 import { validateXmlOutput } from '@main/core/xml-template'
+import { readSpreadsheetCell } from '@main/core/spreadsheet-template'
 import { TaskStore } from '@main/services/task-store'
 import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
 
@@ -71,7 +72,7 @@ const run = async (): Promise<void> => {
     if (tested.listItemCount === 0 || tested.records.length === 0) {
       throw new Error('本地任务未采集到列表或详情记录')
     }
-    validateXmlOutput(tested.xmlPreview)
+    if (task.output.format === 'xml') validateXmlOutput(tested.xmlPreview)
 
     const result = await engine.run(task, null, new CollectorRunControl(), {
       progress: () => undefined,
@@ -90,7 +91,16 @@ const run = async (): Promise<void> => {
     }
 
     for (const outputFile of result.outputFiles) {
-      validateXmlOutput(await readFile(outputFile, 'utf8'))
+      if (task.output.format === 'xml') {
+        validateXmlOutput(await readFile(outputFile, 'utf8'))
+        continue
+      }
+      const template = task.spreadsheet
+      const firstField = template?.fields[0]
+      if (!template || !firstField) throw new Error('表格任务缺少模板字段')
+      if (!readSpreadsheetCell(await readFile(outputFile), template.sheetName, `${firstField.column}2`)) {
+        throw new Error(`表格输出没有记录行：${outputFile}`)
+      }
     }
 
     process.stdout.write(
@@ -102,6 +112,7 @@ const run = async (): Promise<void> => {
           pagesVisited: result.pagesVisited,
           outputRecords: result.counters.succeeded,
           outputFiles: result.outputFiles.length,
+          outputFormat: task.output.format,
           xmlEncoding: task.xml?.encoding ?? ''
         },
         null,

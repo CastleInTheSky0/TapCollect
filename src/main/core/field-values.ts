@@ -1,4 +1,5 @@
 import { mergePageValueKey } from '@shared/field-mapping'
+import { taskOutputMappings, taskOutputTemplate } from '@shared/output-template'
 import type {
   ExtractedRecord,
   FieldMapping,
@@ -6,7 +7,7 @@ import type {
   PageExtractionConfig,
   PageSource,
   TaskConfig,
-  XmlFieldDefinition
+  OutputFieldDefinition
 } from '@shared/types'
 
 export interface PageValueEntry {
@@ -18,7 +19,7 @@ export interface PageValueEntry {
 
 export const pageValueEntries = (task: TaskConfig, source: PageSource): PageValueEntry[] => {
   const entries: PageValueEntry[] = []
-  for (const mapping of task.xml?.mappings ?? []) {
+  for (const mapping of taskOutputMappings(task)) {
     if (mapping.mode === 'page' && mapping.pageSource === source) {
       entries.push({
         fieldPath: mapping.fieldPath,
@@ -63,7 +64,7 @@ const mergeValue = (
 
 export const resolveFieldValue = (
   mapping: FieldMapping,
-  definition: XmlFieldDefinition,
+  definition: OutputFieldDefinition,
   record: ExtractedRecord
 ): string => {
   if (mapping.mode === 'unconfigured') throw new Error(`字段 ${definition.path} 尚未配置`)
@@ -91,12 +92,13 @@ export const missingRequiredMergeFields = (
   task: TaskConfig,
   record: ExtractedRecord
 ): string[] => {
-  if (!task.xml) return []
-  return task.xml.mappings
+  const template = taskOutputTemplate(task)
+  if (!template) return []
+  return template.mappings
     .filter((mapping) => mapping.mode === 'merge' && mapping.required)
     .filter((mapping) => !ignoresExternalDetailRequirement(mapping, record))
     .filter((mapping) => {
-      const definition = task.xml?.fields.find((field) => field.path === mapping.fieldPath)
+      const definition = template.fields.find((field) => field.path === mapping.fieldPath)
       return !definition || !resolveFieldValue(mapping, definition, record).trim()
     })
     .map((mapping) => mapping.fieldPath)

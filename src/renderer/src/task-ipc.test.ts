@@ -41,6 +41,28 @@ describe('snapshotTaskForIpc', () => {
       mappings: [mapping],
       importedAt: '2026-08-07T00:00:00.000Z'
     }
+    task.spreadsheet = {
+      fileName: 'sample.xlsx',
+      contentBase64: 'UEsDBAoAAAAA',
+      format: 'xlsx',
+      sheetName: '数据',
+      fields: [
+        {
+          path: 'A',
+          name: '正文',
+          column: 'A',
+          columnIndex: 0,
+          sampleValue: '模板示例'
+        }
+      ],
+      mappings: [
+        {
+          ...mapping,
+          fieldPath: 'A'
+        }
+      ],
+      importedAt: '2026-08-09T00:00:00.000Z'
+    }
 
     expect(() => structuredClone(task)).toThrow()
 
@@ -68,6 +90,13 @@ describe('snapshotTaskForIpc', () => {
       from: '旧值',
       to: '新值'
     })
+    expect(snapshot.spreadsheet).toMatchObject({
+      fileName: 'sample.xlsx',
+      contentBase64: 'UEsDBAoAAAAA',
+      format: 'xlsx',
+      sheetName: '数据'
+    })
+    expect(snapshot.spreadsheet).not.toBe(task.spreadsheet)
     expect(() => structuredClone(snapshot)).not.toThrow()
   })
 })

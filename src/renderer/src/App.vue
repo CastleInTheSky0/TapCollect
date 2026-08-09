@@ -15,6 +15,7 @@ import {
   CursorIcon,
   DeleteIcon,
   FileCodeIcon,
+  FileExcelIcon,
   FolderOpenIcon,
   InternetIcon,
   LinkIcon,
@@ -31,9 +32,11 @@ import {
   firstTaskListPageUrl
 } from '@shared/list-page-rules'
 import { isFieldMappingConfigured } from '@shared/field-mapping'
+import { taskOutputTemplate } from '@shared/output-template'
 import type {
   AppSettings,
   FieldMapping,
+  OutputFieldDefinition,
   PageExtractionConfig,
   PaginationParameter,
   PreviewBounds,
@@ -67,7 +70,7 @@ import { runPreviewOpenGuard, type PreviewOpenAction } from './preview-open-guar
 import { snapshotTaskForIpc, taskDraftFingerprint } from './task-ipc'
 
 const api = window.collector
-const steps = ['基本信息', '列表与分页', '详情页', 'XML 映射', '输出与测试']
+const steps = ['基本信息', '列表与分页', '详情页', '模板映射', '输出与测试']
 const resourceKindLabels = {
   image: '图片',
   audio: '音频',
@@ -192,10 +195,14 @@ const appShellStyle = computed<Record<string, string>>(() => ({
   '--sidebar-width': `${sidebarCollapsed.value ? PANE_LAYOUT.sidebarCollapsedWidth : paneWidths.value.sidebar}px`,
   '--preview-width': `${appView.value === 'run-center' || previewCollapsed.value ? 0 : paneWidths.value.preview}px`
 }))
+const activeOutputTemplate = computed(() =>
+  activeTask.value ? taskOutputTemplate(activeTask.value) : null
+)
 const unresolvedMappings = computed(
   () =>
-    activeTask.value?.xml?.mappings.filter((mapping) => !isFieldMappingConfigured(mapping)).length ??
-    0
+    activeOutputTemplate.value?.mappings.filter(
+      (mapping) => !isFieldMappingConfigured(mapping)
+    ).length ?? 0
 )
 const testMatchSummaries = computed(() =>
   Object.entries(testResult.value?.matchCounts ?? {}).map(([path, counts]) => ({
@@ -210,11 +217,13 @@ const testTableData = computed(() =>
     ...row
   }))
 )
+const outputFieldLabel = (field: OutputFieldDefinition): string =>
+  'column' in field ? `${field.name}（${String(field.column)} 列）` : field.path
 const testTableColumns = computed(() => [
   { colKey: '__index', title: '#', width: 54, fixed: 'left' as const },
-  ...(activeTask.value?.xml?.fields ?? []).map((field) => ({
+  ...(activeOutputTemplate.value?.fields ?? []).map((field) => ({
     colKey: field.path,
-    title: field.path,
+    title: outputFieldLabel(field),
     width: 210,
     ellipsis: true
   }))
@@ -234,7 +243,7 @@ const testResourceTableColumns = [
   { colKey: 'kind', title: '类型', width: 82 },
   { colKey: 'sourceUrl', title: '原始地址', width: 280, ellipsis: true },
   { colKey: 'localPath', title: '本地目标', width: 280, ellipsis: true },
-  { colKey: 'xmlUrl', title: 'XML 地址', width: 240, ellipsis: true }
+  { colKey: 'xmlUrl', title: '写入地址', width: 240, ellipsis: true }
 ]
 const listHostname = computed(() => {
   return listPageRuleAnalysis.value?.hostname || 'URL 尚未有效'
@@ -468,6 +477,24 @@ const importXml = async (): Promise<void> => {
   } catch (error) {
     showError(error)
   }
+}
+
+const importSpreadsheet = async (): Promise<void> => {
+  if (!activeTask.value) return
+  try {
+    const result = await api.importSpreadsheetTemplate()
+    if (result.cancelled || !result.template) return
+    activeTask.value.spreadsheet = result.template
+    activeTask.value.output.format = 'spreadsheet'
+    testResult.value = null
+    showNotice(`表格模板已导入，共识别 ${result.template.fields.length} 列`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+const changeOutputFormat = (): void => {
+  testResult.value = null
 }
 
 const selectRecordNode = async (node: XmlTreeNode): Promise<void> => {
@@ -917,7 +944,7 @@ const openDetailSample = async (next: boolean): Promise<void> => {
 }
 
 const mappingByPath = (path: string): FieldMapping | undefined =>
-  activeTask.value?.xml?.mappings.find((mapping) => mapping.fieldPath === path)
+  activeOutputTemplate.value?.mappings.find((mapping) => mapping.fieldPath === path)
 
 const pageMappingByPath = (
   path: string,
@@ -1547,7 +1574,7 @@ onBeforeUnmount(() => {
                   <p>站内链接会请求详情；不同完整 hostname 的链接保留为外链，不访问目标页面。</p>
                 </div>
                 <div class="switch-line">
-                  <span><strong>启用详情页采集</strong><small>关闭后只采列表字段，并选择一个 XML 字段作为去重键。</small></span>
+                  <span><strong>启用详情页采集</strong><small>关闭后只采列表字段，并选择一个输出字段作为去重键。</small></span>
                   <t-switch v-model="activeTask.detail.enabled" />
                 </div>
                 <div v-if="activeTask.detail.enabled" class="section-line">
@@ -1614,9 +1641,9 @@ onBeforeUnmount(() => {
                 <div v-else class="section-line">
                   <div class="field">
                     <span>本次运行去重字段</span>
-                    <t-select v-model="activeTask.dedupeFieldPath" placeholder="请选择 XML 字段">
-                      <t-option v-for="field in activeTask.xml?.fields || []" :key="field.path" :value="field.path"
-                        :label="field.path" />
+                    <t-select v-model="activeTask.dedupeFieldPath" placeholder="请选择输出字段">
+                      <t-option v-for="field in activeOutputTemplate?.fields || []" :key="field.path"
+                        :value="field.path" :label="outputFieldLabel(field)" />
                     </t-select>
                   </div>
                 </div>
@@ -1629,58 +1656,114 @@ onBeforeUnmount(() => {
               <template v-else-if="currentStep === 4">
                 <div class="step-heading mapping-heading">
                   <span>04 / 05</span>
-                  <h1>XML 模板与字段映射</h1>
-                  <p>字段清单完全来自模板。工具不会根据字段名猜测 title、text 或日期含义。</p>
+                  <h1>输出模板与字段映射</h1>
+                  <p>选择 XML 或 Excel 表格。字段清单完全来自模板，不根据字段名自动猜测采集含义。</p>
                 </div>
-                <div class="template-toolbar">
-                  <div>
-                    <strong>{{ activeTask.xml?.fileName || '尚未导入模板' }}</strong>
-                    <span v-if="activeTask.xml?.recordPath">
-                      记录节点 {{ activeTask.xml.recordPath }} · {{ activeTask.xml.encoding }}
-                    </span>
-                    <span v-else>导入完整合法 XML 后选择一条示例记录节点</span>
-                  </div>
-                  <t-button theme="default" variant="outline" @click="importXml">
-                    <template #icon>
-                      <FileCodeIcon />
-                    </template>
-                    {{ activeTask.xml ? '重新导入' : '导入 XML 模板' }}
-                  </t-button>
+                <div class="output-format-picker">
+                  <div><strong>导出格式</strong><span>一个任务选择一种输出格式</span></div>
+                  <t-radio-group v-model="activeTask.output.format" variant="default-filled"
+                    @change="changeOutputFormat">
+                    <t-radio-button value="xml">XML</t-radio-button>
+                    <t-radio-button value="spreadsheet">Excel 表格</t-radio-button>
+                  </t-radio-group>
                 </div>
 
-                <div v-if="activeTask.xml" class="xml-workbench">
-                  <aside class="xml-tree">
-                    <div class="pane-label">XML 树</div>
-                    <t-button v-for="entry in flatXmlTree" :key="entry.node.path" theme="default" variant="text" block
-                      :class="{ selected: activeTask.xml.recordPath === entry.node.path }"
-                      :style="{ paddingLeft: `${10 + entry.depth * 14}px` }" @click="selectRecordNode(entry.node)">
-                      <span>{{ entry.node.kind === 'attribute' ? '@' : '‹›' }}</span>
-                      {{ entry.node.name }}
-                    </t-button>
-                  </aside>
-                  <div class="mapping-pane">
-                    <div class="mapping-pane-head">
-                      <div><strong>字段处理</strong><span>每个字段必须明确选择一种处理方式</span></div>
-                      <t-tag :theme="unresolvedMappings === 0 ? 'success' : 'warning'" variant="light">
-                        {{ unresolvedMappings ? `${unresolvedMappings} 项待配置` : '全部已配置' }}
-                      </t-tag>
+                <template v-if="activeTask.output.format === 'xml'">
+                  <div class="template-toolbar">
+                    <div>
+                      <strong>{{ activeTask.xml?.fileName || '尚未导入模板' }}</strong>
+                      <span v-if="activeTask.xml?.recordPath">
+                        记录节点 {{ activeTask.xml.recordPath }} · {{ activeTask.xml.encoding }}
+                      </span>
+                      <span v-else>导入完整合法 XML 后选择一条示例记录节点</span>
                     </div>
-                    <FieldMappingEditor v-if="activeTask.xml.recordPath" v-model="activeTask.xml" @pick="pickMapping"
-                      @evaluate="evaluateMapping" />
-                    <div v-else class="mapping-empty">请先从左侧 XML 树中选择单条记录节点。</div>
+                    <t-button theme="default" variant="outline" @click="importXml">
+                      <template #icon>
+                        <FileCodeIcon />
+                      </template>
+                      {{ activeTask.xml ? '重新导入' : '导入 XML 模板' }}
+                    </t-button>
                   </div>
-                </div>
-                <div v-else class="large-empty">
-                  <FileCodeIcon size="34px" />
-                  <strong>导入你的 XML 模板</strong>
-                  <p>模板固定节点、注释、命名空间和 CDATA 规则会保留。</p>
-                  <t-button theme="primary" @click="importXml">
-                    <template #icon>
-                      <FolderOpenIcon />
-                    </template>
-                    选择 XML 文件
-                  </t-button>
-                </div>
+
+                  <div v-if="activeTask.xml" class="xml-workbench">
+                    <aside class="xml-tree">
+                      <div class="pane-label">XML 树</div>
+                      <t-button v-for="entry in flatXmlTree" :key="entry.node.path" theme="default" variant="text"
+                        block :class="{ selected: activeTask.xml.recordPath === entry.node.path }"
+                        :style="{ paddingLeft: `${10 + entry.depth * 14}px` }" @click="selectRecordNode(entry.node)">
+                        <span>{{ entry.node.kind === 'attribute' ? '@' : '‹›' }}</span>
+                        {{ entry.node.name }}
+                      </t-button>
+                    </aside>
+                    <div class="mapping-pane">
+                      <div class="mapping-pane-head">
+                        <div><strong>字段处理</strong><span>每个字段必须明确选择一种处理方式</span></div>
+                        <t-tag :theme="unresolvedMappings === 0 ? 'success' : 'warning'" variant="light">
+                          {{ unresolvedMappings ? `${unresolvedMappings} 项待配置` : '全部已配置' }}
+                        </t-tag>
+                      </div>
+                      <FieldMappingEditor v-if="activeTask.xml.recordPath" :fields="activeTask.xml.fields"
+                        :mappings="activeTask.xml.mappings" @pick="pickMapping" @evaluate="evaluateMapping" />
+                      <div v-else class="mapping-empty">请先从左侧 XML 树中选择单条记录节点。</div>
+                    </div>
+                  </div>
+                  <div v-else class="large-empty">
+                    <FileCodeIcon size="34px" />
+                    <strong>导入你的 XML 模板</strong>
+                    <p>模板固定节点、注释、命名空间和 CDATA 规则会保留。</p>
+                    <t-button theme="primary" @click="importXml">
+                      <template #icon>
+                        <FolderOpenIcon />
+                      </template>
+                      选择 XML 文件
+                    </t-button>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div class="template-toolbar">
+                    <div>
+                      <strong>{{ activeTask.spreadsheet?.fileName || '尚未导入模板' }}</strong>
+                      <span v-if="activeTask.spreadsheet">
+                        工作表：{{ activeTask.spreadsheet.sheetName }} ·
+                        {{ activeTask.spreadsheet.format.toUpperCase() }} ·
+                        {{ activeTask.spreadsheet.fields.length }} 列
+                      </span>
+                      <span v-else>第一行作为列名，第二行起写入采集记录</span>
+                    </div>
+                    <t-button theme="default" variant="outline" @click="importSpreadsheet">
+                      <template #icon>
+                        <FileExcelIcon />
+                      </template>
+                      {{ activeTask.spreadsheet ? '重新导入' : '导入表格模板' }}
+                    </t-button>
+                  </div>
+
+                  <div v-if="activeTask.spreadsheet" class="spreadsheet-workbench">
+                    <div class="mapping-pane">
+                      <div class="mapping-pane-head">
+                        <div><strong>列字段处理</strong><span>列名来自模板第一行，列字母用于区分重复名称</span></div>
+                        <t-tag :theme="unresolvedMappings === 0 ? 'success' : 'warning'" variant="light">
+                          {{ unresolvedMappings ? `${unresolvedMappings} 项待配置` : '全部已配置' }}
+                        </t-tag>
+                      </div>
+                      <FieldMappingEditor :fields="activeTask.spreadsheet.fields"
+                        :mappings="activeTask.spreadsheet.mappings" @pick="pickMapping"
+                        @evaluate="evaluateMapping" />
+                    </div>
+                  </div>
+                  <div v-else class="large-empty">
+                    <FileExcelIcon size="34px" />
+                    <strong>导入 XLSX 或 XLS 模板</strong>
+                    <p>使用首个工作表，第一行非空单元格会生成可映射列。</p>
+                    <t-button theme="primary" @click="importSpreadsheet">
+                      <template #icon>
+                        <FolderOpenIcon />
+                      </template>
+                      选择表格文件
+                    </t-button>
+                  </div>
+                </template>
               </template>
 
               <template v-else>
@@ -1691,7 +1774,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="section-line">
-                  <div class="section-title"><strong>资源处理</strong><span>可只改写地址，也可下载 XML 中实际引用的站内资源</span></div>
+                  <div class="section-title"><strong>资源处理</strong><span>可只改写地址，也可下载输出内容实际引用的站内资源</span></div>
                   <div class="form-grid compact resource-mode-grid">
                     <div class="field">
                       <span>不下载时的地址处理方式</span>
@@ -1702,7 +1785,7 @@ onBeforeUnmount(() => {
                       </t-select>
                     </div>
                     <div class="switch-line compact-switch resource-download-switch">
-                      <span><strong>下载资源</strong><small>默认关闭，仅处理最终 XML 引用</small></span>
+                      <span><strong>下载资源</strong><small>默认关闭，仅处理最终输出引用</small></span>
                       <t-switch v-model="activeTask.resources.download.enabled" />
                     </div>
                   </div>
@@ -1733,7 +1816,7 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                     <div class="field full resource-field">
-                      <span>XML 中的资源访问前缀</span>
+                      <span>输出内容中的资源访问前缀</span>
                       <t-input v-model="activeTask.resources.download.urlPrefix"
                         placeholder="例如 /resources 或 https://static.example.com/resources" />
                       <small>本地目录按原资源路径建立；查询参数会生成稳定短标识，避免同名文件互相覆盖。</small>
@@ -1772,7 +1855,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="section-line">
-                  <div class="section-title"><strong>XML 输出</strong><span>采集结果会按设置的条数自动拆分成多个文件</span></div>
+                  <div class="section-title"><strong>采集输出</strong><span>采集结果会按设置的条数自动拆分成多个文件</span></div>
                   <div class="field full">
                     <span>输出根目录</span>
                     <div class="inline-control">
@@ -1790,7 +1873,7 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="form-grid compact">
                     <div class="field">
-                      <span>每个 XML 文件最多保存多少条</span>
+                      <span>每个输出文件最多保存多少条</span>
                       <t-input-number v-model="activeTask.output.recordsPerFile" theme="column" :min="1" :max="200"
                         :step="1" :decimal-places="0" />
                     </div>
@@ -1859,7 +1942,8 @@ onBeforeUnmount(() => {
 
                 <div class="test-actions">
                   <div><strong>测试采集</strong><span>读取当前列表页，并处理前 3 条记录。</span></div>
-                  <t-button theme="default" variant="outline" :loading="testing" :disabled="!activeTask.xml || activeTaskLocked"
+                  <t-button theme="default" variant="outline" :loading="testing"
+                    :disabled="!activeOutputTemplate || activeTaskLocked"
                     @click="runTest">
                     <template #icon>
                       <RefreshIcon />
@@ -1938,9 +2022,9 @@ onBeforeUnmount(() => {
 
       <div v-else-if="appView === 'task'" class="welcome-empty">
         <FileCodeIcon size="42px" />
-        <span>网页 → XML</span>
+        <span>网页 → XML / Excel</span>
         <h1>创建第一个采集任务</h1>
-        <p>配置列表、可选详情、分页和 XML 字段映射。</p>
+        <p>配置列表、可选详情、分页和输出模板字段映射。</p>
         <t-button theme="primary" @click="createNewTask">
           <template #icon>
             <AddIcon />
@@ -2127,7 +2211,7 @@ onBeforeUnmount(() => {
 
     <t-dialog v-model:visible="resumePrompt" header="发现未完成检查点" theme="warning" :footer="false"
       :close-on-overlay-click="false" width="480px">
-      <p class="dialog-copy">继续会从上次页码、未满批次和资源统计恢复；重新开始会放弃检查点，并按当前覆盖设置处理旧 XML 与资源。</p>
+      <p class="dialog-copy">继续会从上次页码、未满批次和资源统计恢复；重新开始会放弃检查点，并按当前覆盖设置处理旧输出文件与资源。</p>
       <div class="dialog-actions">
         <t-button theme="default" variant="text" @click="resumePrompt = false">取消</t-button>
         <t-button theme="default" variant="outline" @click="launchRun(false)">放弃并重新开始</t-button>
@@ -2137,7 +2221,7 @@ onBeforeUnmount(() => {
 
     <t-dialog :visible="Boolean(pendingDeleteTaskId)" header="删除任务配置？" theme="danger" :footer="false" width="440px"
       @close="pendingDeleteTaskId = ''">
-      <p class="dialog-copy">任务配置会从本机删除，已经生成的 XML 文件不会被删除。</p>
+      <p class="dialog-copy">任务配置会从本机删除，已经生成的输出文件不会被删除。</p>
       <div class="dialog-actions">
         <t-button theme="default" variant="text" @click="pendingDeleteTaskId = ''">取消</t-button>
         <t-button theme="danger" @click="confirmRemoveTask">删除任务</t-button>

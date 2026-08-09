@@ -2,10 +2,13 @@
 import { ref } from 'vue'
 import { AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { createMergeValue, isFieldMappingConfigured } from '@shared/field-mapping'
-import type { FieldMapping, XmlFieldDefinition, XmlTemplateConfig } from '@shared/types'
+import type { FieldMapping, OutputFieldDefinition } from '@shared/types'
 import PageValueEditor from './PageValueEditor.vue'
 
-const model = defineModel<XmlTemplateConfig>({ required: true })
+const props = defineProps<{
+  fields: OutputFieldDefinition[]
+  mappings: FieldMapping[]
+}>()
 
 defineEmits<{
   pick: [fieldPath: string, mergeValueId?: string]
@@ -25,8 +28,13 @@ const modeLabels: Record<FieldMapping['mode'], string> = {
   'external-url': '外链 URL'
 }
 
-const fieldFor = (mapping: FieldMapping): XmlFieldDefinition | undefined =>
-  model.value.fields.find((field) => field.path === mapping.fieldPath)
+const fieldFor = (mapping: FieldMapping): OutputFieldDefinition | undefined =>
+  props.fields.find((field) => field.path === mapping.fieldPath)
+
+const fieldPathLabel = (mapping: FieldMapping): string => {
+  const field = fieldFor(mapping)
+  return field && 'column' in field ? `${String(field.column)} 列` : mapping.fieldPath
+}
 
 const addMergeValue = (mapping: FieldMapping): void => {
   mapping.mergeValues.push(createMergeValue(crypto.randomUUID()))
@@ -47,7 +55,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 <template>
   <t-collapse v-model="expanded" class="mapping-list" borderless expand-icon-placement="right"
     :expand-on-row-click="true">
-    <t-collapse-panel v-for="mapping in model.mappings" :key="mapping.fieldPath" :value="mapping.fieldPath"
+    <t-collapse-panel v-for="mapping in mappings" :key="mapping.fieldPath" :value="mapping.fieldPath"
       class="mapping-row" :class="{ unresolved: !isFieldMappingConfigured(mapping) }">
       <template #header>
         <div class="mapping-summary">
@@ -58,7 +66,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
                 CDATA
               </t-tag>
             </span>
-            <small>{{ mapping.fieldPath }}</small>
+            <small>{{ fieldPathLabel(mapping) }}</small>
           </span>
           <t-tag size="small" :theme="isFieldMappingConfigured(mapping) ? 'default' : 'warning'" variant="light">
             {{ modeLabels[mapping.mode] }}

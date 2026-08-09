@@ -3,6 +3,10 @@ import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/prom
 import { dirname, extname, join, resolve } from 'node:path'
 import iconv from 'iconv-lite'
 import type { ExtractedRecord, RecordFailure, TaskConfig } from '@shared/types'
+import {
+  renderSpreadsheetBatch,
+  validateSpreadsheetBatch
+} from '@main/core/spreadsheet-template'
 import { renderXmlBatch, validateXmlOutput } from '@main/core/xml-template'
 import { sanitizeFileName } from '@main/core/url-utils'
 import type { TaskStore } from './task-store'
@@ -41,52 +45,42 @@ const normalizeOutputEncoding = (encoding: string): string => {
   return value || 'utf-8'
 }
 
-export class XmlOutputSession {
+export interface CollectorOutputSession {
+  readonly outputDirectory: string
+  readonly errorLogPath: string
+  prepare: (freshRun: boolean) => Promise<void>
+  writeBatch: (records: ExtractedRecord[], fileIndex: number) => Promise<string>
+  appendFailure: (failure: RecordFailure) => Promise<void>
+}
+
+abstract class FileOutputSession implements CollectorOutputSession {
   readonly outputDirectory: string
   readonly errorLogPath: string
   private manifestFiles: string[] = []
 
   constructor(
-    private readonly task: TaskConfig,
+    protected readonly task: TaskConfig,
     private readonly store: TaskStore,
     readonly runStamp: string,
+    private readonly extension: string,
     errorLogPath = ''
   ) {
     this.outputDirectory = join(task.output.rootDirectory, sanitizeFileName(task.name))
     this.errorLogPath =
-      errorLogPath || join(this.outputDirectory, this.buildBaseName('错误日志', 'csv', false))
+      errorLogPath || join(this.outputDirectory, this.buildBaseName('错误日志', 'csv'))
   }
 
   async prepare(freshRun: boolean): Promise<void> {
     await mkdir(this.outputDirectory, { recursive: true })
     this.manifestFiles = await this.store.getOutputManifest(this.task.id)
-    if (freshRun && this.task.output.overwrite) await this.removePreviousXmlFiles()
+    if (freshRun && this.task.output.overwrite) await this.removePreviousOutputFiles()
     if (freshRun) {
       const header = `\uFEFF${CSV_COLUMNS.map(csvCell).join(',')}\r\n`
       await writeFile(this.errorLogPath, header, 'utf8')
     }
   }
 
-  async writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string> {
-    if (!this.task.xml) throw new Error('任务尚未配置 XML 模板')
-    if (records.length === 0) throw new Error('不能写入空 XML 批次')
-    if (records.length > this.task.output.recordsPerFile || records.length > 200) {
-      throw new Error('XML 批次记录数超过配置上限')
-    }
-
-    const xml = renderXmlBatch(this.task.xml, records)
-    validateXmlOutput(xml)
-    const encoding = normalizeOutputEncoding(this.task.xml.encoding)
-    if (!iconv.encodingExists(encoding)) throw new Error(`不支持 XML 编码：${this.task.xml.encoding}`)
-    const bytes = iconv.encode(xml, encoding)
-    validateXmlOutput(iconv.decode(bytes, encoding))
-
-    const path = join(this.outputDirectory, this.buildXmlFileName(fileIndex))
-    await atomicWrite(path, bytes)
-    this.manifestFiles = [...new Set([...this.manifestFiles, path])]
-    await this.store.saveOutputManifest(this.task.id, this.manifestFiles)
-    return path
-  }
+  abstract writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string>
 
   async appendFailure(failure: RecordFailure): Promise<void> {
     const row = [
@@ -105,28 +99,46 @@ export class XmlOutputSession {
     await appendFile(this.errorLogPath, `${row}\r\n`, 'utf8')
   }
 
-  private buildXmlFileName(fileIndex: number): string {
+  protected assertBatchSize(records: ExtractedRecord[]): void {
+    if (records.length === 0) throw new Error('不能写入空输出批次')
+    if (records.length > this.task.output.recordsPerFile || records.length > 200) {
+      throw new Error('输出批次记录数超过配置上限')
+    }
+  }
+
+  protected async commitBatch(bytes: Buffer, fileIndex: number): Promise<string> {
+    const path = join(this.outputDirectory, this.buildOutputFileName(fileIndex))
+    await atomicWrite(path, bytes)
+    this.manifestFiles = [...new Set([...this.manifestFiles, path])]
+    await this.store.saveOutputManifest(this.task.id, this.manifestFiles)
+    return path
+  }
+
+  private buildOutputFileName(fileIndex: number): string {
     const taskName = sanitizeFileName(this.task.name)
     const index = String(fileIndex).padStart(3, '0')
     return this.task.output.overwrite
-      ? `${taskName}_${index}.xml`
-      : `${taskName}_${this.runStamp}_${index}.xml`
+      ? `${taskName}_${index}.${this.extension}`
+      : `${taskName}_${this.runStamp}_${index}.${this.extension}`
   }
 
-  private buildBaseName(label: string, extension: string, numbered: boolean): string {
+  private buildBaseName(label: string, extension: string): string {
     const taskName = sanitizeFileName(this.task.name)
-    const suffix = numbered ? '_001' : ''
     return this.task.output.overwrite
-      ? `${taskName}_${label}${suffix}.${extension}`
-      : `${taskName}_${label}_${this.runStamp}${suffix}.${extension}`
+      ? `${taskName}_${label}.${extension}`
+      : `${taskName}_${label}_${this.runStamp}.${extension}`
   }
 
-  private async removePreviousXmlFiles(): Promise<void> {
+  private async removePreviousOutputFiles(): Promise<void> {
     const expectedDirectory = resolve(this.outputDirectory)
+    const expectedExtension = `.${this.extension.toLowerCase()}`
     const retained: string[] = []
     for (const path of this.manifestFiles) {
       const resolvedPath = resolve(path)
-      if (dirname(resolvedPath) === expectedDirectory && extname(resolvedPath).toLowerCase() === '.xml') {
+      if (
+        dirname(resolvedPath) === expectedDirectory &&
+        extname(resolvedPath).toLowerCase() === expectedExtension
+      ) {
         await rm(resolvedPath, { force: true })
       } else {
         retained.push(path)
@@ -136,6 +148,51 @@ export class XmlOutputSession {
     await this.store.saveOutputManifest(this.task.id, retained)
   }
 }
+
+export class XmlOutputSession extends FileOutputSession {
+  constructor(task: TaskConfig, store: TaskStore, runStamp: string, errorLogPath = '') {
+    super(task, store, runStamp, 'xml', errorLogPath)
+  }
+
+  async writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string> {
+    if (!this.task.xml) throw new Error('任务尚未配置 XML 模板')
+    this.assertBatchSize(records)
+
+    const xml = renderXmlBatch(this.task.xml, records)
+    validateXmlOutput(xml)
+    const encoding = normalizeOutputEncoding(this.task.xml.encoding)
+    if (!iconv.encodingExists(encoding)) {
+      throw new Error(`不支持 XML 编码：${this.task.xml.encoding}`)
+    }
+    const bytes = iconv.encode(xml, encoding)
+    validateXmlOutput(iconv.decode(bytes, encoding))
+    return this.commitBatch(bytes, fileIndex)
+  }
+}
+
+export class SpreadsheetOutputSession extends FileOutputSession {
+  constructor(task: TaskConfig, store: TaskStore, runStamp: string, errorLogPath = '') {
+    super(task, store, runStamp, task.spreadsheet?.format ?? 'xlsx', errorLogPath)
+  }
+
+  async writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string> {
+    if (!this.task.spreadsheet) throw new Error('任务尚未配置表格模板')
+    this.assertBatchSize(records)
+    const bytes = renderSpreadsheetBatch(this.task.spreadsheet, records)
+    validateSpreadsheetBatch(bytes, this.task.spreadsheet, records)
+    return this.commitBatch(bytes, fileIndex)
+  }
+}
+
+export const createOutputSession = (
+  task: TaskConfig,
+  store: TaskStore,
+  runStamp: string,
+  errorLogPath = ''
+): CollectorOutputSession =>
+  task.output.format === 'spreadsheet'
+    ? new SpreadsheetOutputSession(task, store, runStamp, errorLogPath)
+    : new XmlOutputSession(task, store, runStamp, errorLogPath)
 
 export const readOutputXml = async (path: string, encoding: string): Promise<string> =>
   iconv.decode(await readFile(path), normalizeOutputEncoding(encoding))

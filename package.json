@@ -1,7 +1,7 @@
 {
   "name": "tapcollect",
   "version": "0.2.3",
-  "description": "可配置的网页列表与详情信息采集、XML 模板映射和分批导出工具",
+  "description": "可配置的网页列表与详情信息采集、XML/Excel 模板映射和分批导出工具",
   "main": "./out/main/index.js",
   "author": {
     "name": "Sylvan",
@@ -15,6 +15,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "postinstall": "node ./scripts/patch-sheetjs-biff8.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
@@ -98,6 +99,7 @@
     "fontoxpath": "3.34.0",
     "iconv-lite": "0.7.3",
     "jsdom": "27.4.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "xml-formatter": "3.7.0"
   },
   "devDependencies": {

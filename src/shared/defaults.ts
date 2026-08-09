@@ -1,10 +1,10 @@
 import type {
   AppSettings,
   FieldMapping,
+  OutputFieldDefinition,
   ResourceCounters,
   RunCounters,
-  TaskConfig,
-  XmlFieldDefinition
+  TaskConfig
 } from './types'
 import {
   createPageExtractionConfig,
@@ -17,6 +17,7 @@ import {
   normalizeResourceAddressMode,
   normalizeResourceUrlPrefix
 } from './resource-config'
+import { taskOutputFields, taskOutputTemplate } from './output-template'
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -36,7 +37,7 @@ export const createEmptyResourceCounters = (): ResourceCounters => ({
   failed: 0
 })
 
-export const createFieldMapping = (field: XmlFieldDefinition): FieldMapping => ({
+export const createFieldMapping = <T extends OutputFieldDefinition>(field: T): FieldMapping => ({
   fieldPath: field.path,
   mode: 'unconfigured',
   ...createPageExtractionConfig(),
@@ -100,11 +101,13 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
   },
   resourceReplacements: [],
   output: {
+    format: 'xml',
     rootDirectory: '',
     recordsPerFile: 200,
     overwrite: true
   },
   xml: null,
+  spreadsheet: null,
   dedupeFieldPath: '',
   createdAt: now,
   updatedAt: now
@@ -147,6 +150,16 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
         mappings: task.xml.mappings.map(normalizeFieldMappingConfig)
       }
     : null
+  const spreadsheet = task.spreadsheet
+    ? {
+        ...task.spreadsheet,
+        format: task.spreadsheet.format === 'xls' ? ('xls' as const) : ('xlsx' as const),
+        fields: Array.isArray(task.spreadsheet.fields) ? task.spreadsheet.fields : [],
+        mappings: Array.isArray(task.spreadsheet.mappings)
+          ? task.spreadsheet.mappings.map(normalizeFieldMappingConfig)
+          : []
+      }
+    : null
   const resources = {
     addressMode: normalizeResourceAddressMode(task.resources?.addressMode),
     urlPrefix: normalizeResourceUrlPrefix(task.resources?.urlPrefix ?? ''),
@@ -171,7 +184,14 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
     },
     resources,
     resourceReplacements: task.resourceReplacements ?? [],
-    xml
+    output: {
+      format: task.output?.format === 'spreadsheet' ? 'spreadsheet' : 'xml',
+      rootDirectory: task.output?.rootDirectory?.trim() ?? '',
+      recordsPerFile: task.output?.recordsPerFile ?? 200,
+      overwrite: task.output?.overwrite ?? true
+    },
+    xml,
+    spreadsheet
   }
 }
 
@@ -193,30 +213,40 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
     issues.push('请配置详情链接选择器')
   }
   if (!task.detail.enabled) {
+    const outputFields = taskOutputFields(task)
     if (!task.dedupeFieldPath.trim()) {
       issues.push('关闭详情采集后，请选择去重字段')
-    } else if (
-      task.xml &&
-      !task.xml.fields.some((field) => field.path === task.dedupeFieldPath)
-    ) {
-      issues.push(`去重字段“${task.dedupeFieldPath}”不在当前 XML 模板中，请重新选择`)
+    } else if (!outputFields.some((field) => field.path === task.dedupeFieldPath)) {
+      issues.push(`去重字段“${task.dedupeFieldPath}”不在当前输出模板中，请重新选择`)
     }
   }
 
-  if (!task.xml) {
+  const outputTemplate = taskOutputTemplate(task)
+  if (task.output.format === 'xml' && !task.xml) {
     issues.push('请导入 XML 模板')
-  } else {
-    if (!task.xml.recordPath.trim()) issues.push('请在 XML 模板中选择记录节点')
-    const unresolvedFieldPaths = task.xml.fields
+  } else if (task.output.format === 'spreadsheet' && !task.spreadsheet) {
+    issues.push('请导入 XLSX 或 XLS 表格模板')
+  } else if (outputTemplate) {
+    if (task.output.format === 'xml' && !task.xml?.recordPath.trim()) {
+      issues.push('请在 XML 模板中选择记录节点')
+    }
+    if (task.output.format === 'spreadsheet' && outputTemplate.fields.length === 0) {
+      issues.push('表格模板第一行没有可映射列，请重新导入')
+    }
+    const unresolvedFieldPaths = outputTemplate.fields
       .filter((field) => {
-        const mapping = task.xml?.mappings.find(
+        const mapping = outputTemplate.mappings.find(
           (candidate) => candidate.fieldPath === field.path
         )
         return !mapping || !isFieldMappingConfigured(mapping)
       })
       .map((field) => field.path)
     if (unresolvedFieldPaths.length > 0) {
-      issues.push(`请完成 XML 字段映射：${unresolvedFieldPaths.join('、')}`)
+      issues.push(
+        task.output.format === 'xml'
+          ? `请完成 XML 字段映射：${unresolvedFieldPaths.join('、')}`
+          : `请完成表格字段映射：${unresolvedFieldPaths.join('、')}`
+      )
     }
   }
 
@@ -226,7 +256,7 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
     task.output.recordsPerFile < 1 ||
     task.output.recordsPerFile > 200
   ) {
-    issues.push('每个 XML 文件的记录数必须是 1–200 的整数')
+    issues.push('每个输出文件的记录数必须是 1–200 的整数')
   }
 
   if (task.resources.download.enabled) {

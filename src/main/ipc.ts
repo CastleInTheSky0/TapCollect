@@ -17,6 +17,7 @@ import {
   detectXmlEncoding,
   inspectXmlTree
 } from '@main/core/xml-template'
+import { importSpreadsheetTemplate as parseSpreadsheetTemplate } from '@main/core/spreadsheet-template'
 import type { PreviewService } from './services/preview-service'
 import type { RunManager } from './services/run-manager'
 import type { TaskStore } from './services/task-store'
@@ -59,7 +60,7 @@ export const registerIpcHandlers = (
   })
   ipcMain.handle(IPC_CHANNELS.chooseOutputDirectory, async () => {
     const result = await dialog.showOpenDialog(window, {
-      title: '选择 XML 输出根目录',
+      title: '选择采集输出根目录',
       properties: ['openDirectory', 'createDirectory']
     })
     return result.canceled ? '' : (result.filePaths[0] ?? '')
@@ -96,6 +97,21 @@ export const registerIpcHandlers = (
         importedAt: new Date().toISOString()
       },
       tree
+    }
+  })
+  ipcMain.handle(IPC_CHANNELS.importSpreadsheetTemplate, async () => {
+    const result = await dialog.showOpenDialog(window, {
+      title: '导入表格模板',
+      properties: ['openFile'],
+      filters: [{ name: 'Excel 表格', extensions: ['xlsx', 'xls'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) {
+      return { cancelled: true, template: null }
+    }
+    const path = result.filePaths[0]
+    return {
+      cancelled: false,
+      template: parseSpreadsheetTemplate(await readFile(path), basename(path))
     }
   })
   ipcMain.handle(IPC_CHANNELS.inspectXmlTemplate, (_event, content: string) =>

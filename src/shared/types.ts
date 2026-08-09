@@ -15,6 +15,8 @@ export type MergeValueMode = 'page' | 'fixed' | 'system' | 'external-url'
 export type SystemValue = 'list-url' | 'detail-url' | 'collected-at'
 export type MatchMode = 'first' | 'all'
 export type XmlNodeKind = 'element' | 'attribute'
+export type OutputFormat = 'xml' | 'spreadsheet'
+export type SpreadsheetFormat = 'xlsx' | 'xls'
 export type ResourceAddressMode = 'absolute-replace' | 'prefix'
 export type ResourceKind = 'image' | 'audio' | 'video' | 'attachment' | 'other'
 export type RunStatus =
@@ -103,17 +105,27 @@ export interface ResourceConfig {
 }
 
 export interface OutputConfig {
+  format: OutputFormat
   rootDirectory: string
   recordsPerFile: number
   overwrite: boolean
 }
 
-export interface XmlFieldDefinition {
+export interface OutputFieldDefinition {
   path: string
   name: string
+  sampleValue: string
+  cdata?: boolean
+}
+
+export interface XmlFieldDefinition extends OutputFieldDefinition {
   kind: XmlNodeKind
   cdata: boolean
-  sampleValue: string
+}
+
+export interface SpreadsheetFieldDefinition extends OutputFieldDefinition {
+  column: string
+  columnIndex: number
 }
 
 export interface PageExtractionConfig {
@@ -156,6 +168,16 @@ export interface XmlTemplateConfig {
   importedAt: string
 }
 
+export interface SpreadsheetTemplateConfig {
+  fileName: string
+  contentBase64: string
+  format: SpreadsheetFormat
+  sheetName: string
+  fields: SpreadsheetFieldDefinition[]
+  mappings: FieldMapping[]
+  importedAt: string
+}
+
 export interface TaskConfig {
   version: 1
   id: string
@@ -171,6 +193,7 @@ export interface TaskConfig {
   resourceReplacements: ReplacementRule[]
   output: OutputConfig
   xml: XmlTemplateConfig | null
+  spreadsheet: SpreadsheetTemplateConfig | null
   dedupeFieldPath: string
   createdAt: string
   updatedAt: string
@@ -196,6 +219,11 @@ export interface XmlImportResult {
   cancelled: boolean
   template: XmlTemplateConfig | null
   tree: XmlTreeNode[]
+}
+
+export interface SpreadsheetImportResult {
+  cancelled: boolean
+  template: SpreadsheetTemplateConfig | null
 }
 
 export interface PaginationParameter {
@@ -407,6 +435,7 @@ export interface CollectorApi {
   chooseOutputDirectory: () => Promise<string>
   chooseResourceDirectory: () => Promise<string>
   importXmlTemplate: () => Promise<XmlImportResult>
+  importSpreadsheetTemplate: () => Promise<SpreadsheetImportResult>
   inspectXmlTemplate: (content: string) => Promise<XmlTreeNode[]>
   selectXmlRecord: (
     content: string,

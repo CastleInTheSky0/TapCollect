@@ -82,6 +82,8 @@ describe('TaskStore', () => {
     const legacy = JSON.parse(JSON.stringify(task)) as Record<string, unknown>
     delete legacy.listPageRules
     delete legacy.resources
+    delete legacy.spreadsheet
+    delete (legacy.output as Record<string, unknown>).format
     delete (legacy.pagination as Record<string, unknown>).mode
     delete (legacy.pagination as Record<string, unknown>).step
     delete (legacy.pagination as Record<string, unknown>).nextButton
@@ -102,6 +104,8 @@ describe('TaskStore', () => {
       urlPrefix: '',
       download: { enabled: false, rootDirectory: '', urlPrefix: '' }
     })
+    expect(loaded?.output.format).toBe('xml')
+    expect(loaded?.spreadsheet).toBeNull()
   })
 
   it('preserves click-pagination configuration across save and reload', async () => {

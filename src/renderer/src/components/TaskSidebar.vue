@@ -134,7 +134,7 @@ const runDisabled = (taskId: string): boolean => {
           </div>
           <div class="brand-copy">
             <strong>TapCollect</strong>
-            <span>网页列表采集与 XML 输出</span>
+            <span>网页列表采集与模板化输出</span>
           </div>
         </div>
       </template>

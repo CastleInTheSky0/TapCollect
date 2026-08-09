@@ -3,9 +3,10 @@ import {
   createFieldMapping,
   createTask,
   isTaskRunnable,
+  normalizeTaskConfig,
   taskConfigurationIssues
 } from './defaults'
-import type { TaskConfig, XmlFieldDefinition } from './types'
+import type { SpreadsheetFieldDefinition, TaskConfig, XmlFieldDefinition } from './types'
 
 const fields: XmlFieldDefinition[] = [
   {
@@ -49,6 +50,31 @@ const createRunnableTask = (): TaskConfig => {
   return task
 }
 
+const createRunnableSpreadsheetTask = (): TaskConfig => {
+  const task = createRunnableTask()
+  const spreadsheetFields: SpreadsheetFieldDefinition[] = [
+    { path: 'A', name: '标题', column: 'A', columnIndex: 0, sampleValue: '' },
+    { path: 'B', name: '正文', column: 'B', columnIndex: 1, sampleValue: '' }
+  ]
+  task.output.format = 'spreadsheet'
+  task.spreadsheet = {
+    fileName: 'sample.xlsx',
+    contentBase64: 'AA==',
+    format: 'xlsx',
+    sheetName: '数据',
+    fields: spreadsheetFields,
+    mappings: spreadsheetFields.map((field) => {
+      const mapping = createFieldMapping(field)
+      mapping.mode = 'page'
+      mapping.selector = field.path === 'A' ? '.title' : '#content'
+      mapping.pageSource = field.path === 'A' ? 'list' : 'detail'
+      return mapping
+    }),
+    importedAt: '2026-08-09T00:00:00.000Z'
+  }
+  return task
+}
+
 describe('taskConfigurationIssues', () => {
   it('returns no issues for a runnable task and remains the source of runnable truth', () => {
     const task = createRunnableTask()
@@ -84,6 +110,34 @@ describe('taskConfigurationIssues', () => {
     expect(taskConfigurationIssues(task)).toEqual([
       '请完成 XML 字段映射：title、text'
     ])
+  })
+
+  it('validates only the selected spreadsheet template and its column mappings', () => {
+    const task = createRunnableSpreadsheetTask()
+    task.xml!.mappings[0]!.mode = 'unconfigured'
+
+    expect(taskConfigurationIssues(task)).toEqual([])
+    task.spreadsheet!.mappings[1]!.mode = 'unconfigured'
+    task.spreadsheet!.mappings[1]!.selector = ''
+
+    expect(taskConfigurationIssues(task)).toEqual(['请完成表格字段映射：B'])
+    task.spreadsheet!.fields = []
+    task.spreadsheet!.mappings = []
+    expect(taskConfigurationIssues(task)).toEqual(['表格模板第一行没有可映射列，请重新导入'])
+    task.spreadsheet = null
+    expect(taskConfigurationIssues(task)).toEqual(['请导入 XLSX 或 XLS 表格模板'])
+  })
+
+  it('migrates legacy tasks to XML output without requiring spreadsheet configuration', () => {
+    const legacy = JSON.parse(JSON.stringify(createRunnableTask())) as Record<string, unknown>
+    delete (legacy.output as Record<string, unknown>).format
+    delete legacy.spreadsheet
+
+    const normalized = normalizeTaskConfig(legacy as unknown as TaskConfig)
+
+    expect(normalized.output.format).toBe('xml')
+    expect(normalized.spreadsheet).toBeNull()
+    expect(taskConfigurationIssues(normalized)).toEqual([])
   })
 
   it.each([
