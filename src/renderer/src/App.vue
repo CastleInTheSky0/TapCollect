@@ -45,6 +45,7 @@ import type {
   RunResult,
   RunSessionSnapshot,
   TaskConfig,
+  TaskConfigImportResult,
   TaskSummary,
   TestCollectionResult,
   XmlTreeNode
@@ -91,6 +92,7 @@ const appView = ref<'task' | 'run-center'>('task')
 const currentStep = ref(1)
 const busy = ref(false)
 const saving = ref(false)
+const taskConfigTransferring = ref(false)
 const MESSAGE_AUTO_DISMISS_MS = 5_000
 const xmlTree = ref<XmlTreeNode[]>([])
 const paginationSuggestions = ref<PaginationParameter[]>([])
@@ -130,6 +132,8 @@ const runLogMaxHeight = ref(maxRunLogHeight(window.innerHeight))
 const resumePrompt = ref(false)
 const pendingRunTaskId = ref('')
 const pendingDeleteTaskId = ref('')
+const exportTaskConfigsPrompt = ref(false)
+const taskConfigImportResult = ref<TaskConfigImportResult | null>(null)
 const cancelPromptTaskId = ref('')
 const cancelAllPrompt = ref(false)
 
@@ -402,6 +406,45 @@ const duplicateTask = async (id: string): Promise<void> => {
     showNotice('已创建任务副本')
   } catch (error) {
     showError(error)
+  }
+}
+
+const importTaskConfigs = async (): Promise<void> => {
+  if (taskConfigTransferring.value) return
+  taskConfigTransferring.value = true
+  try {
+    const result = await api.importTaskConfigs()
+    if (result.cancelled) return
+    taskConfigImportResult.value = result
+    await refreshTasks()
+    const firstImported = result.imported[0]
+    if (firstImported) await loadTask(firstImported.id)
+  } catch (error) {
+    showError(error)
+  } finally {
+    taskConfigTransferring.value = false
+  }
+}
+
+const requestExportTaskConfigs = (): void => {
+  if (tasks.value.length === 0) {
+    showWarning('请先保存至少一个任务，再导出任务配置')
+    return
+  }
+  exportTaskConfigsPrompt.value = true
+}
+
+const exportTaskConfigs = async (): Promise<void> => {
+  if (taskConfigTransferring.value) return
+  exportTaskConfigsPrompt.value = false
+  taskConfigTransferring.value = true
+  try {
+    const result = await api.exportTaskConfigs()
+    if (!result.cancelled) showNotice(`已导出 ${result.taskCount} 个任务配置`)
+  } catch (error) {
+    showError(error)
+  } finally {
+    taskConfigTransferring.value = false
   }
 }
 
@@ -1313,10 +1356,12 @@ onBeforeUnmount(() => {
       :view="appView"
       :run-items="runSession.items"
       :testing-task-id="runSession.testingTaskId"
-      :disabled="busy || saving"
+      :disabled="busy || saving || taskConfigTransferring"
       @select="loadTask"
       @show-run-center="showRunCenter"
       @create="createNewTask"
+      @import-configs="importTaskConfigs"
+      @export-configs="requestExportTaskConfigs"
       @duplicate="duplicateTask"
       @remove="removeTask"
       @run="requestRun"
@@ -2239,6 +2284,45 @@ onBeforeUnmount(() => {
       <div class="dialog-actions">
         <t-button theme="default" variant="text" @click="pendingDeleteTaskId = ''">取消</t-button>
         <t-button theme="danger" @click="confirmRemoveTask">删除任务</t-button>
+      </div>
+    </t-dialog>
+
+    <t-dialog
+      v-model:visible="exportTaskConfigsPrompt"
+      header="导出全部任务配置？"
+      theme="warning"
+      :footer="false"
+      width="500px"
+    >
+      <p class="dialog-copy">将导出当前全部已保存任务的完整配置，包括 XML/表格模板、本地目录和请求头。Cookie、Authorization 等请求头可能包含敏感信息，请妥善保管导出的 JSON 文件。</p>
+      <p v-if="hasUnsavedChanges" class="dialog-copy">当前任务存在未保存修改，本次只会导出上次保存的版本。</p>
+      <div class="dialog-actions">
+        <t-button theme="default" variant="text" @click="exportTaskConfigsPrompt = false">取消</t-button>
+        <t-button theme="primary" @click="exportTaskConfigs">选择保存位置</t-button>
+      </div>
+    </t-dialog>
+
+    <t-dialog
+      :visible="Boolean(taskConfigImportResult)"
+      header="任务配置导入结果"
+      :footer="false"
+      width="560px"
+      @close="taskConfigImportResult = null"
+    >
+      <t-alert
+        :theme="taskConfigImportResult?.skipped.length ? 'warning' : 'success'"
+        :message="`成功导入 ${taskConfigImportResult?.imported.length ?? 0} 个任务，跳过 ${taskConfigImportResult?.skipped.length ?? 0} 个任务。`"
+      />
+      <div v-if="taskConfigImportResult?.skipped.length" class="task-import-failures">
+        <strong>未导入项目</strong>
+        <ol>
+          <li v-for="item in taskConfigImportResult.skipped" :key="`${item.sourceIndex}-${item.name}`">
+            第 {{ item.sourceIndex }} 项 · {{ item.name }}：{{ item.reason }}
+          </li>
+        </ol>
+      </div>
+      <div class="dialog-actions">
+        <t-button theme="primary" @click="taskConfigImportResult = null">关闭</t-button>
       </div>
     </t-dialog>
 

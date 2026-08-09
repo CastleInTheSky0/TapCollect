@@ -6,6 +6,8 @@ export const IPC_CHANNELS = {
   saveTask: 'tasks:save',
   duplicateTask: 'tasks:duplicate',
   deleteTask: 'tasks:delete',
+  importTaskConfigs: 'tasks:import-configs',
+  exportTaskConfigs: 'tasks:export-configs',
   chooseOutputDirectory: 'dialogs:output-directory',
   chooseResourceDirectory: 'dialogs:resource-directory',
   importXmlTemplate: 'xml:import-template',

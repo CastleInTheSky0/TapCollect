@@ -18,9 +18,13 @@ import {
   inspectXmlTree
 } from '@main/core/xml-template'
 import { importSpreadsheetTemplate as parseSpreadsheetTemplate } from '@main/core/spreadsheet-template'
+import {
+  createTaskConfigBundle,
+  parseTaskConfigBundle
+} from '@shared/task-config-bundle'
 import type { PreviewService } from './services/preview-service'
 import type { RunManager } from './services/run-manager'
-import type { TaskStore } from './services/task-store'
+import { atomicWrite, type TaskStore } from './services/task-store'
 
 const decodeXmlFile = (bytes: Buffer): string => {
   const prefix = bytes.subarray(0, Math.min(bytes.length, 1_024)).toString('latin1')
@@ -29,6 +33,18 @@ const decodeXmlFile = (bytes: Buffer): string => {
   const normalized = detected.toLowerCase() === 'gb2312' ? 'gbk' : detected
   if (!iconv.encodingExists(normalized)) throw new Error(`不支持 XML 模板编码：${detected}`)
   return iconv.decode(bytes, normalized)
+}
+
+const jsonExportPath = (path: string): string =>
+  extname(path).toLowerCase() === '.json' ? path : `${path}.json`
+
+const parseTaskConfigFile = (content: string): unknown[] => {
+  try {
+    return parseTaskConfigBundle(JSON.parse(content) as unknown)
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`任务配置 JSON 格式错误：${error.message}`)
+    throw error
+  }
 }
 
 export const registerIpcHandlers = (
@@ -53,6 +69,37 @@ export const registerIpcHandlers = (
   })
   ipcMain.handle(IPC_CHANNELS.duplicateTask, (_event, id: string) => store.duplicateTask(id))
   ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, id: string) => runManager.deleteTask(id))
+  ipcMain.handle(IPC_CHANNELS.importTaskConfigs, async () => {
+    const result = await dialog.showOpenDialog(window, {
+      title: '导入 TapCollect 任务配置',
+      properties: ['openFile'],
+      filters: [{ name: 'TapCollect 任务配置', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) {
+      return { cancelled: true, imported: [], skipped: [] }
+    }
+    const entries = parseTaskConfigFile(await readFile(result.filePaths[0], 'utf8'))
+    const imported = await store.importTaskConfigs(entries)
+    return { cancelled: false, ...imported }
+  })
+  ipcMain.handle(IPC_CHANNELS.exportTaskConfigs, async () => {
+    const tasks = await store.listTaskConfigs()
+    if (tasks.length === 0) throw new Error('当前没有已保存的任务配置可以导出')
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出 TapCollect 任务配置',
+      defaultPath: `TapCollect-任务配置-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'TapCollect 任务配置', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) {
+      return { cancelled: true, taskCount: 0, filePath: '' }
+    }
+    const filePath = jsonExportPath(result.filePath)
+    await atomicWrite(
+      filePath,
+      `${JSON.stringify(createTaskConfigBundle(tasks), null, 2)}\n`
+    )
+    return { cancelled: false, taskCount: tasks.length, filePath }
+  })
   ipcMain.handle(IPC_CHANNELS.chooseOutputDirectory, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: '选择采集输出根目录',

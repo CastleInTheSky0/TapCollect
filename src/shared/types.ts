@@ -208,6 +208,37 @@ export interface TaskSummary {
   hasCheckpoint: boolean
 }
 
+export interface TaskConfigBundle {
+  format: 'tapcollect-task-bundle'
+  version: 1
+  exportedAt: string
+  tasks: TaskConfig[]
+}
+
+export interface TaskConfigImportSuccess {
+  sourceIndex: number
+  id: string
+  name: string
+}
+
+export interface TaskConfigImportFailure {
+  sourceIndex: number
+  name: string
+  reason: string
+}
+
+export interface TaskConfigImportResult {
+  cancelled: boolean
+  imported: TaskConfigImportSuccess[]
+  skipped: TaskConfigImportFailure[]
+}
+
+export interface TaskConfigExportResult {
+  cancelled: boolean
+  taskCount: number
+  filePath: string
+}
+
 export interface XmlTreeNode {
   path: string
   name: string
@@ -432,6 +463,8 @@ export interface CollectorApi {
   saveTask: (task: TaskConfig) => Promise<TaskConfig>
   duplicateTask: (id: string) => Promise<TaskConfig>
   deleteTask: (id: string) => Promise<boolean>
+  importTaskConfigs: () => Promise<TaskConfigImportResult>
+  exportTaskConfigs: () => Promise<TaskConfigExportResult>
   chooseOutputDirectory: () => Promise<string>
   chooseResourceDirectory: () => Promise<string>
   importXmlTemplate: () => Promise<XmlImportResult>

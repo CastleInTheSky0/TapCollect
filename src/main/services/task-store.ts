@@ -9,11 +9,17 @@ import {
   normalizeTaskConfig
 } from '@shared/defaults'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
+import {
+  importedTaskCandidateName,
+  prepareImportedTaskConfig
+} from '@shared/task-config-bundle'
 import type {
   AppSettings,
   ExtractedRecord,
   RunCheckpoint,
   TaskConfig,
+  TaskConfigImportFailure,
+  TaskConfigImportSuccess,
   TaskSummary
 } from '@shared/types'
 
@@ -48,7 +54,7 @@ const readJson = async <T>(path: string, fallback: T): Promise<T> => {
   }
 }
 
-const atomicWrite = async (path: string, content: string | Buffer): Promise<void> => {
+export const atomicWrite = async (path: string, content: string | Buffer): Promise<void> => {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`
   await writeFile(temporary, content)
@@ -108,13 +114,9 @@ export class TaskStore {
   }
 
   async listTasks(): Promise<TaskSummary[]> {
-    await this.initialize()
-    const entries = await readdir(this.tasksDirectory, { withFileTypes: true })
+    const taskConfigs = await this.listTaskConfigs()
     const summaries: TaskSummary[] = []
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !/^[A-Za-z0-9_-]+$/.test(entry.name)) continue
-      const task = await this.loadTask(entry.name)
-      if (!task) continue
+    for (const task of taskConfigs) {
       summaries.push({
         id: task.id,
         name: task.name,
@@ -124,7 +126,19 @@ export class TaskStore {
         hasCheckpoint: await this.hasCheckpoint(task.id)
       })
     }
-    return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    return summaries
+  }
+
+  async listTaskConfigs(): Promise<TaskConfig[]> {
+    await this.initialize()
+    const entries = await readdir(this.tasksDirectory, { withFileTypes: true })
+    const tasks: TaskConfig[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^[A-Za-z0-9_-]+$/.test(entry.name)) continue
+      const task = await this.loadTask(entry.name)
+      if (task) tasks.push(task)
+    }
+    return tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
   async loadTask(id: string): Promise<TaskConfig | null> {
@@ -161,6 +175,32 @@ export class TaskStore {
       updatedAt: now
     }
     return this.saveTask(copy)
+  }
+
+  async importTaskConfigs(entries: unknown[]): Promise<{
+    imported: TaskConfigImportSuccess[]
+    skipped: TaskConfigImportFailure[]
+  }> {
+    const imported: TaskConfigImportSuccess[] = []
+    const skipped: TaskConfigImportFailure[] = []
+
+    for (const [index, entry] of entries.entries()) {
+      const sourceIndex = index + 1
+      const name = importedTaskCandidateName(entry)
+      try {
+        const prepared = prepareImportedTaskConfig(entry, randomUUID())
+        const saved = await this.saveTask(prepared)
+        imported.push({ sourceIndex, id: saved.id, name: saved.name })
+      } catch (error) {
+        skipped.push({
+          sourceIndex,
+          name,
+          reason: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+
+    return { imported, skipped }
   }
 
   async deleteTask(id: string): Promise<boolean> {

@@ -185,6 +185,44 @@ describe('TaskStore', () => {
     })
   })
 
+  it('imports valid task configs as new tasks and reports malformed entries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-store-import-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    const source = createTask('source-task', '2025-01-01T00:00:00.000Z')
+    source.name = '可导入任务'
+    source.listPageRules = ['https://example.com/list.html']
+    source.request.headers.push({ id: 'cookie', key: 'Cookie', value: 'session=secret' })
+    source.spreadsheet = {
+      fileName: 'template.xls',
+      contentBase64: '0M8R4KGxGuE=',
+      format: 'xls',
+      sheetName: '数据',
+      fields: [],
+      mappings: [],
+      importedAt: '2026-08-09T00:00:00.000Z'
+    }
+    const malformed = JSON.parse(JSON.stringify(source)) as Record<string, unknown>
+    malformed.request = { headers: [] }
+
+    const result = await store.importTaskConfigs([source, malformed])
+
+    expect(result.imported).toHaveLength(1)
+    expect(result.skipped).toEqual([
+      {
+        sourceIndex: 2,
+        name: '可导入任务',
+        reason: '任务配置.request.userAgent 必须是字符串'
+      }
+    ])
+    const imported = await store.loadTask(result.imported[0]!.id)
+    expect(imported?.id).not.toBe(source.id)
+    expect(imported?.createdAt).not.toBe(source.createdAt)
+    expect(imported?.request.headers).toEqual(source.request.headers)
+    expect(imported?.spreadsheet?.contentBase64).toBe(source.spreadsheet.contentBase64)
+    await expect(store.listTaskConfigs()).resolves.toHaveLength(1)
+  })
+
   it('persists pending records separately and restores a checkpoint', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-store-'))
     temporaryDirectories.push(root)

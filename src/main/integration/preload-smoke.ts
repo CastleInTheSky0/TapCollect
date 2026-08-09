@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
 import { PreviewService } from '@main/services/preview-service'
 import { RunManager } from '@main/services/run-manager'
@@ -11,6 +11,7 @@ import { TaskStore } from '@main/services/task-store'
 interface PreloadSmokeResult {
   hasCollector: boolean
   hasRunSubscription: boolean
+  hasTaskConfigTransfer: boolean
   settingsDirectory: string
   maxConcurrentRuns: number
   runSessionCapacity: number
@@ -18,9 +19,12 @@ interface PreloadSmokeResult {
   savedTaskCount: number
   finalTaskCount: number
   uiReady: boolean
+  taskConfigControlsReady: boolean
   createTaskWorks: boolean
   saveTaskWorks: boolean
   deleteTaskWorks: boolean
+  taskConfigExportWorks: boolean
+  taskConfigImportWorks: boolean
   consoleErrors: string[]
 }
 
@@ -54,6 +58,9 @@ const run = async (): Promise<PreloadSmokeResult> => {
   const dataRoot = await mkdtemp(join(tmpdir(), 'tapcollect-preload-smoke-'))
   let window: BrowserWindow | null = null
   let preview: PreviewService | null = null
+  const taskBundlePath = join(dataRoot, 'task-config-bundle.json')
+  const originalShowOpenDialog = dialog.showOpenDialog
+  const originalShowSaveDialog = dialog.showSaveDialog
   const consoleErrors: string[] = []
 
   try {
@@ -75,6 +82,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
     const runManager = new RunManager(store)
     await runManager.initialize()
     preview = new PreviewService(window)
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: taskBundlePath })
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [taskBundlePath] })
     registerIpcHandlers(window, store, runManager, preview)
 
     await window.loadFile(join(__dirname, '../renderer/index.html'))
@@ -88,6 +97,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
           return {
             hasCollector: false,
             hasRunSubscription: false,
+            hasTaskConfigTransfer: false,
             settingsDirectory: '',
             maxConcurrentRuns: -1,
             runSessionCapacity: -1,
@@ -95,9 +105,12 @@ const run = async (): Promise<PreloadSmokeResult> => {
             savedTaskCount: -1,
             finalTaskCount: -1,
             uiReady: false,
+            taskConfigControlsReady: false,
             createTaskWorks: false,
             saveTaskWorks: false,
-            deleteTaskWorks: false
+            deleteTaskWorks: false,
+            taskConfigExportWorks: false,
+            taskConfigImportWorks: false
           }
         }
         const unsubscribe = api.onRunProgress(() => undefined)
@@ -105,6 +118,15 @@ const run = async (): Promise<PreloadSmokeResult> => {
         const settings = await api.getSettings()
         const runSession = await api.getRunSession()
         const initialTasks = await api.listTasks()
+        const taskConfigToolsButton = document.querySelector(
+          'button[aria-label="任务配置工具"]'
+        )
+        taskConfigToolsButton?.click()
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        const taskConfigControlsReady =
+          document.body.textContent?.includes('导入任务配置') === true &&
+          document.body.textContent?.includes('导出全部任务配置') === true
+        taskConfigToolsButton?.click()
         const createButton = [...document.querySelectorAll('button')].find((button) =>
           button.textContent?.includes('新建任务')
         )
@@ -144,13 +166,24 @@ const run = async (): Promise<PreloadSmokeResult> => {
         }
 
         const savedTask = savedTasks.find((task) => task.name === 'Preload Smoke')
+        const exportResult = savedTask
+          ? await api.exportTaskConfigs()
+          : { cancelled: true, taskCount: 0, filePath: '' }
+        const importResult = savedTask
+          ? await api.importTaskConfigs()
+          : { cancelled: true, imported: [], skipped: [] }
+        const importedTask = importResult.imported[0]
         if (savedTask) await api.deleteTask(savedTask.id)
+        if (importedTask) await api.deleteTask(importedTask.id)
         const finalTasks = await api.listTasks()
 
         const result = {
           hasCollector: typeof api.getSettings === 'function',
           hasRunSubscription:
             typeof unsubscribe === 'function' && typeof unsubscribeSession === 'function',
+          hasTaskConfigTransfer:
+            typeof api.importTaskConfigs === 'function' &&
+            typeof api.exportTaskConfigs === 'function',
           settingsDirectory: settings.defaultOutputDirectory,
           maxConcurrentRuns: settings.maxConcurrentRuns,
           runSessionCapacity: runSession.maxConcurrentRuns,
@@ -158,9 +191,19 @@ const run = async (): Promise<PreloadSmokeResult> => {
           savedTaskCount: savedTasks.length,
           finalTaskCount: finalTasks.length,
           uiReady: Boolean(createButton),
+          taskConfigControlsReady,
           createTaskWorks,
           saveTaskWorks: Boolean(savedTask),
-          deleteTaskWorks: Boolean(savedTask) && !finalTasks.some((task) => task.id === savedTask.id)
+          deleteTaskWorks:
+            Boolean(savedTask) &&
+            !finalTasks.some((task) => task.id === savedTask.id || task.id === importedTask?.id),
+          taskConfigExportWorks:
+            !exportResult.cancelled && exportResult.taskCount === 1 && Boolean(exportResult.filePath),
+          taskConfigImportWorks:
+            !importResult.cancelled &&
+            importResult.imported.length === 1 &&
+            importResult.skipped.length === 0 &&
+            importedTask?.id !== savedTask?.id
         }
         unsubscribe()
         unsubscribeSession()
@@ -174,6 +217,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
     writeStage('cleanup')
     preview?.close()
     window?.destroy()
+    dialog.showOpenDialog = originalShowOpenDialog
+    dialog.showSaveDialog = originalShowSaveDialog
     await rm(dataRoot, { recursive: true, force: true })
   }
 }
@@ -184,6 +229,7 @@ const main = async (): Promise<void> => {
     if (
       !result.hasCollector ||
       !result.hasRunSubscription ||
+      !result.hasTaskConfigTransfer ||
       result.settingsDirectory !== '' ||
       result.maxConcurrentRuns !== 3 ||
       result.runSessionCapacity !== 3 ||
@@ -191,9 +237,12 @@ const main = async (): Promise<void> => {
       result.savedTaskCount !== 1 ||
       result.finalTaskCount !== 0 ||
       !result.uiReady ||
+      !result.taskConfigControlsReady ||
       !result.createTaskWorks ||
       !result.saveTaskWorks ||
       !result.deleteTaskWorks ||
+      !result.taskConfigExportWorks ||
+      !result.taskConfigImportWorks ||
       result.consoleErrors.some((message) =>
         /onRunProgress|Cannot read properties of undefined|Uncaught/i.test(message)
       )

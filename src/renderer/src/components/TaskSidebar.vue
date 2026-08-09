@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { DropdownOption } from 'tdesign-vue-next/es/dropdown/type'
 import {
   AddIcon,
   CopyIcon,
   DataSearchIcon,
   DeleteIcon,
+  EllipsisIcon,
   FileIcon,
+  FileExportIcon,
+  FileImportIcon,
   PlayIcon,
   TaskIcon,
   ViewModuleIcon
@@ -27,12 +31,15 @@ const emit = defineEmits<{
   select: [id: string]
   showRunCenter: []
   create: []
+  importConfigs: []
+  exportConfigs: []
   duplicate: [id: string]
   remove: [id: string]
   run: [id: string]
 }>()
 
 const tasksExpanded = ref(true)
+const taskConfigToolsOpen = ref(false)
 const runItemMap = computed(() =>
   new Map(props.runItems.map((item) => [item.taskId, item] as const))
 )
@@ -49,17 +56,38 @@ const expandedMenuValues = computed(() => (tasksExpanded.value ? ['tasks'] : [])
 
 const taskMenuValue = (taskId: string): string => `task:${taskId}`
 
+const emitTaskConfigAction = (key: string): boolean => {
+  if (key === 'import-configs') {
+    emit('importConfigs')
+    return true
+  }
+  if (key === 'export-configs') {
+    emit('exportConfigs')
+    return true
+  }
+  return false
+}
+
 const handleMenuChange = (value: string | number): void => {
   const key = String(value)
   if (key === 'create') {
     emit('create')
     return
   }
+  if (emitTaskConfigAction(key)) return
   if (key === 'run-center') {
     emit('showRunCenter')
     return
   }
   if (key.startsWith('task:')) emit('select', key.slice(5))
+}
+
+const handleTaskConfigToolClick = (option: DropdownOption): void => {
+  emitTaskConfigAction(String(option.value ?? ''))
+}
+
+const handleTaskConfigToolsVisibleChange = (visible: boolean): void => {
+  taskConfigToolsOpen.value = visible
 }
 
 const handleMenuExpand = (values: Array<string | number>): void => {
@@ -116,17 +144,8 @@ const runDisabled = (taskId: string): boolean => {
 
 <template>
   <aside class="task-sidebar" :class="{ collapsed }">
-    <t-menu
-      class="task-menu"
-      theme="light"
-      :collapsed="collapsed"
-      :width="['100%', '64px']"
-      :value="menuValue"
-      :expanded="expandedMenuValues"
-      expand-type="normal"
-      @change="handleMenuChange"
-      @expand="handleMenuExpand"
-    >
+    <t-menu class="task-menu" theme="light" :collapsed="collapsed" :width="['100%', '64px']" :value="menuValue"
+      :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand">
       <template #logo>
         <div class="brand-block">
           <div class="brand-mark" aria-hidden="true">
@@ -140,49 +159,85 @@ const runDisabled = (taskId: string): boolean => {
       </template>
 
       <t-menu-item value="create" class="primary-menu-item" :disabled="disabled">
-        <template #icon><AddIcon /></template>
+        <template #icon>
+          <AddIcon />
+        </template>
         新建采集任务
       </t-menu-item>
 
-      <t-submenu
-        value="tasks"
-        class="tasks-submenu"
-        :popup-props="{ overlayClassName: 'task-sidebar-popup' }"
-      >
-        <template #icon><TaskIcon /></template>
+      <t-submenu value="tasks" class="tasks-submenu" :popup-props="{ overlayClassName: 'task-sidebar-popup' }">
+        <template #icon>
+          <TaskIcon />
+        </template>
         <template #title>
-          <span class="menu-label">
-            <span>任务管理</span>
-            <span class="menu-count">{{ tasks.length }}</span>
+          <span class="task-management-title">
+            <span class="task-management-label">
+              <span>任务管理</span>
+              <span class="menu-count">{{ tasks.length }}</span>
+            </span>
+            <span v-if="!collapsed" class="task-config-tools" @click.stop @pointerdown.stop @keydown.stop>
+              <t-dropdown trigger="click" placement="right-top" :disabled="disabled" :min-column-width="206"
+                :popup-props="{
+                  overlayInnerClassName: 'task-config-tools-dropdown',
+                  onVisibleChange: handleTaskConfigToolsVisibleChange
+                }" @click="handleTaskConfigToolClick">
+                <span class="task-config-tools-trigger">
+                  <t-tooltip content="任务配置工具" placement="top" :visible="taskConfigToolsOpen ? false : undefined">
+                    <t-button aria-label="任务配置工具" theme="default" variant="text" shape="square" size="small"
+                      :disabled="disabled">
+                      <template #icon>
+                        <EllipsisIcon size="17px" />
+                      </template>
+                    </t-button>
+                  </t-tooltip>
+                </span>
+                <t-dropdown-menu>
+                  <t-dropdown-item value="import-configs">
+                    <template #prefix-icon>
+                      <FileImportIcon size="16px" />
+                    </template>
+                    导入任务配置
+                  </t-dropdown-item>
+                  <t-dropdown-item value="export-configs">
+                    <template #prefix-icon>
+                      <FileExportIcon size="16px" />
+                    </template>
+                    导出全部任务配置
+                  </t-dropdown-item>
+                </t-dropdown-menu>
+              </t-dropdown>
+            </span>
           </span>
         </template>
 
-        <t-menu-item
-          v-for="item in tasks"
-          :key="item.id"
-          :value="taskMenuValue(item.id)"
-          class="task-menu-item"
-        >
-          <template #icon><FileIcon /></template>
+        <t-menu-item v-if="collapsed" value="import-configs" class="task-config-popup-item" :disabled="disabled">
+          <template #icon>
+            <FileImportIcon />
+          </template>
+          导入任务配置
+        </t-menu-item>
+
+        <t-menu-item v-if="collapsed" value="export-configs" class="task-config-popup-item task-config-popup-item-last"
+          :disabled="disabled">
+          <template #icon>
+            <FileExportIcon />
+          </template>
+          导出全部任务配置
+        </t-menu-item>
+
+        <t-menu-item v-for="item in tasks" :key="item.id" :value="taskMenuValue(item.id)" class="task-menu-item">
+          <template #icon>
+            <FileIcon />
+          </template>
           <span class="task-entry-shell">
             <button type="button" class="task-row-main" @click.stop="emit('select', item.id)">
               <span class="task-copy">
                 <span class="task-title-line">
                   <strong>{{ item.name }}</strong>
-                  <t-tag
-                    v-if="statusLabel(item.id)"
-                    size="small"
-                    :theme="statusTheme(item.id)"
-                    variant="light"
-                  >
+                  <t-tag v-if="statusLabel(item.id)" size="small" :theme="statusTheme(item.id)" variant="light">
                     {{ statusLabel(item.id) }}
                   </t-tag>
-                  <t-tag
-                    v-else-if="item.hasCheckpoint"
-                    size="small"
-                    theme="warning"
-                    variant="light"
-                  >
+                  <t-tag v-else-if="item.hasCheckpoint" size="small" theme="warning" variant="light">
                     可续采
                   </t-tag>
                 </span>
@@ -191,43 +246,28 @@ const runDisabled = (taskId: string): boolean => {
               </span>
             </button>
             <span class="task-actions">
-              <t-tooltip
-                :content="runItemMap.get(item.id)?.status === 'paused' ? '继续任务' : '运行任务'"
-                placement="top"
-              >
-                <t-button
-                  theme="primary"
-                  variant="text"
-                  shape="square"
-                  size="small"
-                  :disabled="runDisabled(item.id)"
-                  @click.stop="emit('run', item.id)"
-                >
-                  <template #icon><PlayIcon size="18px" /></template>
+              <t-tooltip :content="runItemMap.get(item.id)?.status === 'paused' ? '继续任务' : '运行任务'" placement="top">
+                <t-button theme="primary" variant="text" shape="square" size="small" :disabled="runDisabled(item.id)"
+                  @click.stop="emit('run', item.id)">
+                  <template #icon>
+                    <PlayIcon size="18px" />
+                  </template>
                 </t-button>
               </t-tooltip>
               <t-tooltip content="复制任务" placement="top">
-                <t-button
-                  theme="default"
-                  variant="text"
-                  shape="square"
-                  size="small"
-                  :disabled="disabled"
-                  @click.stop="emit('duplicate', item.id)"
-                >
-                  <template #icon><CopyIcon size="18px" /></template>
+                <t-button theme="default" variant="text" shape="square" size="small" :disabled="disabled"
+                  @click.stop="emit('duplicate', item.id)">
+                  <template #icon>
+                    <CopyIcon size="18px" />
+                  </template>
                 </t-button>
               </t-tooltip>
               <t-tooltip content="删除任务" placement="top">
-                <t-button
-                  theme="danger"
-                  variant="text"
-                  shape="square"
-                  size="small"
-                  :disabled="disabled || taskLocked(item.id)"
-                  @click.stop="emit('remove', item.id)"
-                >
-                  <template #icon><DeleteIcon size="18px" /></template>
+                <t-button theme="danger" variant="text" shape="square" size="small"
+                  :disabled="disabled || taskLocked(item.id)" @click.stop="emit('remove', item.id)">
+                  <template #icon>
+                    <DeleteIcon size="18px" />
+                  </template>
                 </t-button>
               </t-tooltip>
             </span>
@@ -235,7 +275,9 @@ const runDisabled = (taskId: string): boolean => {
         </t-menu-item>
 
         <t-menu-item v-if="tasks.length === 0" value="empty" class="task-empty-item" disabled>
-          <template #icon><DataSearchIcon /></template>
+          <template #icon>
+            <DataSearchIcon />
+          </template>
           <span class="task-empty">
             <strong>还没有任务</strong>
             <small>从一个列表页地址开始。</small>
@@ -244,7 +286,9 @@ const runDisabled = (taskId: string): boolean => {
       </t-submenu>
 
       <t-menu-item value="run-center" class="primary-menu-item">
-        <template #icon><ViewModuleIcon /></template>
+        <template #icon>
+          <ViewModuleIcon />
+        </template>
         <span class="menu-label">
           <span>运行中心</span>
           <span v-if="sessionActivityCount" class="menu-count active-count">
@@ -304,6 +348,10 @@ const runDisabled = (taskId: string): boolean => {
 
 .task-menu :deep(.tasks-submenu > .t-menu__sub .task-menu-item) {
   padding-left: 44px;
+}
+
+:deep(.t-menu__content) {
+  flex: 1;
 }
 
 .brand-block {
@@ -373,6 +421,48 @@ const runDisabled = (taskId: string): boolean => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.task-management-title,
+.task-management-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.task-management-title {
+  flex: 1;
+  gap: 5px;
+}
+
+.task-management-label {
+  flex: 1;
+  gap: 7px;
+}
+
+.task-config-tools,
+.task-config-tools-trigger {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.task-config-tools {
+  margin-right: 4px;
+}
+
+.task-config-tools :deep(.t-button) {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: #63767d;
+}
+
+.task-config-tools :deep(.t-button:hover) {
+  background: #dceced;
+  color: var(--accent);
 }
 
 .menu-count {
@@ -470,21 +560,21 @@ const runDisabled = (taskId: string): boolean => {
   font-size: 8px;
 }
 
-.task-copy > small,
-.task-copy > time {
+.task-copy>small,
+.task-copy>time {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-copy > small {
+.task-copy>small {
   margin-top: 4px;
   color: var(--muted);
   font-size: 8px;
 }
 
-.task-copy > time {
+.task-copy>time {
   margin-top: 3px;
   color: #99a3a7;
   font-size: 8px;
@@ -592,5 +682,31 @@ const runDisabled = (taskId: string): boolean => {
 
 :global(.task-sidebar-popup .task-menu-item.t-menu__item) {
   padding-left: 12px;
+}
+
+:global(.task-sidebar-popup .task-config-popup-item.t-menu__item) {
+  min-height: 40px;
+  padding-left: 12px;
+}
+
+:global(.task-sidebar-popup .task-config-popup-item-last.t-menu__item) {
+  margin-bottom: 6px;
+  box-shadow: 0 7px 0 -6px var(--line);
+}
+
+:global(.task-config-tools-dropdown) {
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 10px 26px rgba(22, 42, 48, 0.16);
+}
+
+:global(.task-config-tools-dropdown .t-dropdown__item) {
+  min-height: 38px;
+  border-radius: 6px;
+}
+
+:global(.task-config-tools-dropdown .t-dropdown__item:hover) {
+  background: #e9f4f4;
 }
 </style>
