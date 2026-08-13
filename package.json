@@ -15,8 +15,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "postinstall": "node ./scripts/patch-sheetjs-biff8.mjs",
-    "dev": "electron-vite dev",
+    "postinstall": "node ./scripts/patch-sheetjs-biff8.mjs && node ./scripts/ensure-electron.mjs",
+    "dev": "node ./scripts/ensure-electron.mjs && electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
