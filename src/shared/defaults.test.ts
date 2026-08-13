@@ -131,11 +131,13 @@ describe('taskConfigurationIssues', () => {
   it('migrates legacy tasks to XML output without requiring spreadsheet configuration', () => {
     const legacy = JSON.parse(JSON.stringify(createRunnableTask())) as Record<string, unknown>
     delete (legacy.output as Record<string, unknown>).format
+    delete (legacy.detail as Record<string, unknown>).navigationMode
     delete legacy.spreadsheet
 
     const normalized = normalizeTaskConfig(legacy as unknown as TaskConfig)
 
     expect(normalized.output.format).toBe('xml')
+    expect(normalized.detail.navigationMode).toBe('link')
     expect(normalized.spreadsheet).toBeNull()
     expect(taskConfigurationIssues(normalized)).toEqual([])
   })

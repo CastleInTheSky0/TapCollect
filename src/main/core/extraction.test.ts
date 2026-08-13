@@ -160,6 +160,30 @@ describe('page extraction', () => {
     expect(candidateToRecord(candidate).detailUrl).toBe('')
   })
 
+  it('keeps click-navigation candidates even when list items have no href', () => {
+    const task = createTask('click-detail-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.content-item'
+    task.detail.navigationMode = 'click'
+    task.detail.link.selector = '.data-name'
+    task.xml = template()
+
+    const result = extractListPage(
+      task,
+      '<div class="content-list"><div class="content-item"><span class="data-name">目录一</span></div></div>',
+      task.listUrl,
+      1,
+      0
+    )
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      detailRequestUrl: '',
+      detailUrl: '',
+      externalUrl: ''
+    })
+  })
+
   it('extracts list and detail child values before merging them with a fixed value', () => {
     const task = createTask('merge-task')
     task.listUrl = 'https://www.example.com/list'

@@ -30,6 +30,9 @@ describe('url utilities', () => {
     expect(normalizeUrl('https://EXAMPLE.com:443/a?q=1#part')).toBe(
       'https://example.com/a?q=1'
     )
+    expect(normalizeUrl('https://EXAMPLE.com/catalog#detail-1', true)).toBe(
+      'https://example.com/catalog#detail-1'
+    )
   })
 
   it('compares the full hostname only', () => {

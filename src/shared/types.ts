@@ -1,5 +1,6 @@
 export type SelectorType = 'css' | 'xpath'
 export type PaginationMode = 'url' | 'click'
+export type DetailNavigationMode = 'link' | 'click'
 export type PageSource = 'list' | 'detail'
 export type ExtractionType = 'text' | 'html' | 'attribute'
 export type MappingMode =
@@ -64,6 +65,7 @@ export interface SelectorConfig {
 
 export interface DetailConfig {
   enabled: boolean
+  navigationMode: DetailNavigationMode
   link: SelectorConfig
   linkAttribute: string
 }

@@ -191,6 +191,7 @@ const listPageRuleAnalysis = computed(() =>
   activeTask.value ? analyzeTaskListPageRules(activeTask.value) : null
 )
 const isClickPagination = computed(() => activeTask.value?.pagination.mode === 'click')
+const isClickDetail = computed(() => activeTask.value?.detail.navigationMode === 'click')
 const hasPaginationTemplate = computed(() => Boolean(listPageRuleAnalysis.value?.templateRule))
 const fixedListPageCount = computed(
   () => listPageRuleAnalysis.value?.rules.filter((rule) => rule.kind === 'fixed').length ?? 0
@@ -893,7 +894,9 @@ const pickBaseSelector = async (target: BaseSelectorTarget): Promise<void> => {
       ? '正在点选列表项，按 Esc 取消'
       : target === 'next-button'
         ? '正在点选下一页按钮，按 Esc 取消'
-        : '正在点选详情链接，按 Esc 取消'
+        : isClickDetail.value
+          ? '正在点选详情点击元素，按 Esc 取消'
+          : '正在点选详情链接，按 Esc 取消'
   try {
     const result = await api.previewPick({
       selectorType: 'css',
@@ -1637,29 +1640,44 @@ onBeforeUnmount(() => {
                   <t-switch v-model="activeTask.detail.enabled" />
                 </div>
                 <div v-if="activeTask.detail.enabled" class="section-line">
-                  <div class="section-title"><strong>详情链接</strong><span>相对于列表项容器选择</span></div>
-                  <div class="selector-grid link-grid">
+                  <div class="detail-navigation-picker">
+                    <div>
+                      <strong>进入详情方式</strong>
+                      <span>有链接读取地址；没有链接时模拟点击列表元素</span>
+                    </div>
+                    <t-radio-group v-model="activeTask.detail.navigationMode" variant="default-filled">
+                      <t-radio-button value="link">读取链接</t-radio-button>
+                      <t-radio-button value="click">点击元素</t-radio-button>
+                    </t-radio-group>
+                  </div>
+                  <div class="section-title">
+                    <strong>{{ isClickDetail ? '详情点击元素' : '详情链接' }}</strong>
+                    <span>相对于每一个列表项容器选择</span>
+                  </div>
+                  <div class="selector-grid" :class="{ 'link-grid': !isClickDetail }">
                     <t-select v-model="activeTask.detail.link.selectorType">
                       <t-option value="css" label="CSS" />
                       <t-option value="xpath" label="XPath 1.0" />
                     </t-select>
                     <t-input v-model="activeTask.detail.link.selector" class="code-input" :spell-check="false"
-                      placeholder="例如 a.title" />
-                    <t-input v-model="activeTask.detail.linkAttribute" class="code-input" placeholder="href" />
+                      :placeholder="isClickDetail ? '例如 .detail-trigger' : '例如 a.title'" />
+                    <t-input v-if="!isClickDetail" v-model="activeTask.detail.linkAttribute" class="code-input"
+                      placeholder="href" />
                     <t-tooltip content="验证" placement="top">
-                      <t-button aria-label="验证详情链接选择器" theme="default" variant="outline"
+                      <t-button :aria-label="isClickDetail ? '验证详情点击元素选择器' : '验证详情链接选择器'"
+                        theme="default" variant="outline"
                         @click="evaluateBaseSelector('detail-link')">
                         <SearchIcon />
                       </t-button>
                     </t-tooltip>
                     <t-tooltip content="点选" placement="top">
-                      <t-button aria-label="点选详情链接" theme="primary" variant="outline"
+                      <t-button :aria-label="isClickDetail ? '点选详情点击元素' : '点选详情链接'" theme="primary" variant="outline"
                         @click="pickBaseSelector('detail-link')">
                         <CursorIcon />
                       </t-button>
                     </t-tooltip>
                   </div>
-                  <div class="host-rule">
+                  <div v-if="!isClickDetail" class="host-rule">
                     <LinkIcon />
                     <span>站内判断</span>
                     <strong>只比较完整 hostname</strong>
@@ -1706,7 +1724,7 @@ onBeforeUnmount(() => {
                     </t-select>
                   </div>
                 </div>
-                <div class="scope-note">
+                <div v-if="activeTask.detail.navigationMode === 'link'" class="scope-note">
                   <strong>外链记录仍会输出</strong>
                   <span>详情页字段为空；可把“外链 URL”来源映射到模板中的任意一个字段。</span>
                 </div>
@@ -1944,7 +1962,10 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="section-line">
-                  <div class="section-title"><strong>请求与并发</strong><span>列表页顺序请求，详情并发后仍按列表顺序输出</span></div>
+                  <div class="section-title">
+                    <strong>请求与并发</strong>
+                    <span>{{ isClickDetail ? '点击式详情按列表顺序逐条处理' : '列表页顺序请求，详情并发后仍按列表顺序输出' }}</span>
+                  </div>
                   <div class="form-grid thirds">
                     <div class="field">
                       <span>超时（秒）</span>
@@ -1954,7 +1975,9 @@ onBeforeUnmount(() => {
                     <div class="field">
                       <span>详情并发</span>
                       <t-input-number v-model="activeTask.request.detailConcurrency" theme="column" :min="1" :max="5"
+                        :disabled="isClickDetail"
                         :step="1" :decimal-places="0" />
+                      <small v-if="isClickDetail">点击后需返回原列表，因此固定为逐条采集。</small>
                     </div>
                     <div class="field">
                       <span>请求延迟（毫秒）</span>

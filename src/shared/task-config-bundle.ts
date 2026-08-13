@@ -77,6 +77,12 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
 
   const detail = requireRecord(task, 'detail', '任务配置')
   requireBoolean(detail, 'enabled', '任务配置.detail')
+  if (detail.navigationMode !== undefined) {
+    requireString(detail, 'navigationMode', '任务配置.detail')
+    if (!['link', 'click'].includes(detail.navigationMode as string)) {
+      throw new Error('任务配置.detail.navigationMode 只能是 link 或 click')
+    }
+  }
   validateSelector(detail.link, '任务配置.detail.link')
   requireString(detail, 'linkAttribute', '任务配置.detail')
 

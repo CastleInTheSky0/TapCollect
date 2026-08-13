@@ -1,6 +1,11 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
-import { isReadyDynamicPageChange, resolveDynamicDomAction } from './dynamic-page'
+import {
+  countDynamicSelectorMatches,
+  isReadyDynamicPageChange,
+  resolveDynamicDetailClick,
+  resolveDynamicDomAction
+} from './dynamic-page'
 
 const css = (selector: string) => ({ selectorType: 'css' as const, selector })
 
@@ -132,5 +137,37 @@ describe('dynamic page DOM actions', () => {
         dom.window.location.href
       )
     ).toMatchObject({ kind: 'snapshot', itemCount: 1 })
+  })
+
+  it('clicks a configured target relative to the requested repeated list item', () => {
+    const dom = new JSDOM(
+      '<main><div class="item"><span class="name">甲</span></div>' +
+        '<div class="item"><span class="name">乙</span></div></main>'
+    )
+    const listener = vi.fn()
+    dom.window.document.querySelectorAll('.name')[1]!.addEventListener('click', listener)
+
+    expect(resolveDynamicDetailClick(dom.window.document, css('.item'), css('.name'), 1))
+      .toEqual({ kind: 'clicked' })
+    expect(listener).toHaveBeenCalledOnce()
+    expect(resolveDynamicDetailClick(dom.window.document, css('.item'), css('.missing'), 0))
+      .toEqual({ kind: 'error', reason: '当前列表项中找不到详情点击元素' })
+
+    const itemListener = vi.fn()
+    dom.window.document.querySelector('.item')!.addEventListener('click', itemListener)
+    expect(resolveDynamicDetailClick(dom.window.document, css('.item'), css(':scope'), 0))
+      .toEqual({ kind: 'clicked' })
+    expect(itemListener).toHaveBeenCalledOnce()
+  })
+
+  it('counts CSS and XPath selectors used to detect a same-page detail render', () => {
+    const dom = new JSDOM('<main><div id="detail"><p>正文</p></div></main>')
+
+    expect(
+      countDynamicSelectorMatches(dom.window.document, [
+        css('#detail'),
+        { selectorType: 'xpath', selector: '//div[@id="detail"]/p' }
+      ])
+    ).toBe(2)
   })
 })

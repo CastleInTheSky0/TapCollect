@@ -1,9 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { WebContentsView, type BrowserWindow } from 'electron'
 import type { TaskConfig } from '@shared/types'
+import { taskOutputMappings } from '@shared/output-template'
 import {
+  countDynamicSelectorMatches,
   isReadyDynamicPageChange,
+  resolveDynamicDetailClick,
   resolveDynamicDomAction,
+  type DynamicDetailDomActionResult,
   type DynamicDomActionResult,
   type DynamicPageAdvance,
   type DynamicPageProvider,
@@ -13,6 +17,8 @@ import {
 import { allowedCustomRequestHeaders } from '@main/core/http-client'
 
 const dynamicDomActionSource = resolveDynamicDomAction.toString()
+const dynamicDetailClickSource = resolveDynamicDetailClick.toString()
+const dynamicSelectorCountSource = countDynamicSelectorMatches.toString()
 const POLL_INTERVAL_MS = 150
 
 const wait = async (milliseconds: number): Promise<void> => {
@@ -45,6 +51,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   private latestSnapshot: DynamicPageSnapshot | null = null
   private blockedNavigation = ''
   private closed = false
+  private readonly detailSelectors: TaskConfig['listItem'][]
 
   constructor(
     private readonly hostWindow: BrowserWindow,
@@ -52,7 +59,17 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     private readonly task: TaskConfig,
     private readonly startUrl: string,
     private readonly allowedHostname: string
-  ) {}
+  ) {
+    this.detailSelectors = taskOutputMappings(task).flatMap((mapping) => {
+      if (mapping.mode === 'page' && mapping.pageSource === 'detail') {
+        return [{ selectorType: mapping.selectorType, selector: mapping.selector }]
+      }
+      if (mapping.mode !== 'merge') return []
+      return mapping.mergeValues
+        .filter((value) => value.mode === 'page' && value.pageSource === 'detail')
+        .map((value) => ({ selectorType: value.selectorType, selector: value.selector }))
+    })
+  }
 
   async initialize(): Promise<void> {
     const timeoutMs = this.task.request.timeoutSeconds * 1_000
@@ -119,6 +136,68 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     }
   }
 
+  async openDetail(itemIndex: number): Promise<DynamicPageSnapshot> {
+    this.assertAlive()
+    const listSnapshot = this.latestSnapshot ?? (await this.current())
+    const action = await this.executeDetailClick(itemIndex)
+    if (action.kind === 'error') throw new Error(action.reason)
+
+    const timeoutMs = this.task.request.timeoutSeconds * 1_000
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await wait(POLL_INTERVAL_MS)
+      this.assertAlive()
+      this.assertAllowedPage()
+      const snapshot = await this.readSnapshot()
+      const detailMatchCount = await this.readDetailMatchCount()
+      if (
+        snapshot.url !== listSnapshot.url ||
+        (snapshot.html !== listSnapshot.html &&
+          (detailMatchCount > 0 ||
+            (this.detailSelectors.length === 0 && snapshot.itemCount === 0)))
+      ) {
+        await wait(POLL_INTERVAL_MS * 2)
+        this.assertAlive()
+        this.assertAllowedPage()
+        return {
+          html: await this.readDocumentHtml(),
+          url: this.view.webContents.getURL(),
+          itemCount: 0,
+          signature: ''
+        }
+      }
+    }
+    throw new Error(`点击后页面在 ${this.task.request.timeoutSeconds} 秒内没有进入详情`)
+  }
+
+  async returnToList(): Promise<DynamicPageSnapshot> {
+    this.assertAlive()
+    const previous = this.latestSnapshot
+    if (!previous) throw new Error('没有可返回的动态列表页状态')
+    const timeoutMs = this.task.request.timeoutSeconds * 1_000
+    try {
+      const current = await this.readSnapshot()
+      if (current.url === previous.url && current.itemCount > 0) {
+        this.latestSnapshot = current
+        return current
+      }
+    } catch {
+      // A partially changed document is recovered through history or reload below.
+    }
+    await this.view.webContents.executeJavaScript('window.history.back()', true)
+    const fromHistory = await this.waitForList(previous.url, timeoutMs)
+    if (fromHistory) return fromHistory
+
+    await withTimeout(
+      this.view.webContents.loadURL(previous.url),
+      timeoutMs,
+      `重新加载列表页超过 ${this.task.request.timeoutSeconds} 秒`
+    )
+    const fromReload = await this.waitForList(previous.url, timeoutMs)
+    if (fromReload) return fromReload
+    throw new Error(`详情返回列表超过 ${this.task.request.timeoutSeconds} 秒`)
+  }
+
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
@@ -142,6 +221,53 @@ class ElectronDynamicPageSession implements DynamicPageSession {
       itemCount: result.itemCount,
       signature: result.signature
     }
+  }
+
+  private async readDocumentHtml(): Promise<string> {
+    return this.view.webContents.executeJavaScript(
+      'document.documentElement ? document.documentElement.outerHTML : ""',
+      true
+    ) as Promise<string>
+  }
+
+  private async readDetailMatchCount(): Promise<number> {
+    if (this.detailSelectors.length === 0) return 0
+    return this.view.webContents.executeJavaScript(
+      `(${dynamicSelectorCountSource})(document,${JSON.stringify(this.detailSelectors)})`,
+      true
+    ) as Promise<number>
+  }
+
+  private async waitForList(url: string, timeoutMs: number): Promise<DynamicPageSnapshot | null> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await wait(POLL_INTERVAL_MS)
+      this.assertAlive()
+      try {
+        const snapshot = await this.readSnapshot()
+        if (snapshot.itemCount > 0 && snapshot.url === url) {
+          this.latestSnapshot = snapshot
+          return snapshot
+        }
+      } catch {
+        // The router can briefly expose an incomplete document while returning.
+      }
+    }
+    return null
+  }
+
+  private async executeDetailClick(itemIndex: number): Promise<DynamicDetailDomActionResult> {
+    this.assertAlive()
+    const payload = [
+      'document',
+      JSON.stringify(this.task.listItem),
+      JSON.stringify(this.task.detail.link),
+      JSON.stringify(itemIndex)
+    ].join(',')
+    return this.view.webContents.executeJavaScript(
+      `(${dynamicDetailClickSource})(${payload})`,
+      true
+    ) as Promise<DynamicDetailDomActionResult>
   }
 
   private async execute(action: 'snapshot' | 'click'): Promise<DynamicDomActionResult> {
@@ -183,8 +309,11 @@ class ElectronDynamicPageSession implements DynamicPageSession {
 export class ElectronDynamicPageProvider implements DynamicPageProvider {
   constructor(private readonly hostWindow: BrowserWindow) {}
 
-  async create(task: TaskConfig): Promise<DynamicPageSession> {
-    const startUrl = task.listPageRules.map((value) => value.trim()).find(Boolean) ?? task.listUrl
+  async create(task: TaskConfig, requestedStartUrl?: string): Promise<DynamicPageSession> {
+    const startUrl =
+      requestedStartUrl?.trim() ||
+      task.listPageRules.map((value) => value.trim()).find(Boolean) ||
+      task.listUrl
     const parsed = validateHttpUrl(startUrl)
     const allowedHostname = parsed.hostname.toLowerCase()
     const view = new WebContentsView({

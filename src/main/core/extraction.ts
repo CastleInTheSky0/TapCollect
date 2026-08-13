@@ -180,7 +180,7 @@ export const extractListPage = (
     let detailRequestUrl = ''
     let detailUrl = ''
     let externalUrl = ''
-    if (task.detail.enabled) {
+    if (task.detail.enabled && task.detail.navigationMode === 'link') {
       const href = extractDetailHref(item, task)
       const resolved = resolveHttpUrl(href, baseUrl)
       if (resolved) {

@@ -14,9 +14,9 @@ export const resolveHttpUrl = (value: string, baseUrl: string): string => {
   }
 }
 
-export const normalizeUrl = (value: string): string => {
+export const normalizeUrl = (value: string, preserveHash = false): string => {
   const url = new URL(value)
-  url.hash = ''
+  if (!preserveHash) url.hash = ''
   url.hostname = url.hostname.toLowerCase()
   if ((url.protocol === 'http:' && url.port === '80') || (url.protocol === 'https:' && url.port === '443')) {
     url.port = ''

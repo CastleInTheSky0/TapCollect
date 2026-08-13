@@ -14,11 +14,13 @@ export type DynamicPageAdvance =
 export interface DynamicPageSession {
   current: () => Promise<DynamicPageSnapshot>
   advance: () => Promise<DynamicPageAdvance>
+  openDetail: (itemIndex: number) => Promise<DynamicPageSnapshot>
+  returnToList: () => Promise<DynamicPageSnapshot>
   close: () => Promise<void>
 }
 
 export interface DynamicPageProvider {
-  create: (task: TaskConfig) => Promise<DynamicPageSession>
+  create: (task: TaskConfig, startUrl?: string) => Promise<DynamicPageSession>
 }
 
 export const isReadyDynamicPageChange = (
@@ -30,6 +32,66 @@ export type DynamicDomActionResult =
   | ({ kind: 'snapshot' } & DynamicPageSnapshot)
   | { kind: 'clicked' }
   | { kind: 'end'; reason: string }
+
+export type DynamicDetailDomActionResult =
+  | { kind: 'clicked' }
+  | { kind: 'error'; reason: string }
+
+export const countDynamicSelectorMatches = (
+  root: Document,
+  selectors: SelectorConfig[]
+): number => {
+  let count = 0
+  for (const config of selectors) {
+    const expression = config.selector.trim()
+    if (!expression) continue
+    if (config.selectorType === 'css') {
+      count += root.querySelectorAll(expression).length
+      continue
+    }
+    count += root.evaluate(expression, root, null, 7, null).snapshotLength
+  }
+  return count
+}
+
+export const resolveDynamicDetailClick = (
+  root: Document,
+  listItem: SelectorConfig,
+  clickTarget: SelectorConfig,
+  itemIndex: number
+): DynamicDetailDomActionResult => {
+  const selectElements = (scope: Document | Element, config: SelectorConfig): Element[] => {
+    const expression = config.selector.trim()
+    if (!expression) return []
+    if (config.selectorType === 'css') {
+      if (expression === ':scope' && scope.nodeType === 1) return [scope as Element]
+      return Array.from(scope.querySelectorAll(expression))
+    }
+    const document = scope.nodeType === 9 ? (scope as Document) : scope.ownerDocument
+    if (!document) return []
+    const result = document.evaluate(expression, scope, null, 7, null)
+    const elements: Element[] = []
+    for (let index = 0; index < result.snapshotLength; index += 1) {
+      const node = result.snapshotItem(index)
+      if (node?.nodeType === 1) elements.push(node as Element)
+    }
+    return elements
+  }
+
+  const item = selectElements(root, listItem)[itemIndex]
+  if (!item) return { kind: 'error', reason: `页面中找不到第 ${itemIndex + 1} 条列表项` }
+  const target = selectElements(item, clickTarget)[0]
+  if (!target) return { kind: 'error', reason: '当前列表项中找不到详情点击元素' }
+
+  const clickable = target as Element & { click?: () => void }
+  if (typeof clickable.click === 'function') clickable.click()
+  else {
+    const EventConstructor = root.defaultView?.MouseEvent
+    if (!EventConstructor) return { kind: 'error', reason: '当前页面无法触发详情点击事件' }
+    target.dispatchEvent(new EventConstructor('click', { bubbles: true, cancelable: true }))
+  }
+  return { kind: 'clicked' }
+}
 
 export const resolveDynamicDomAction = (
   root: Document,

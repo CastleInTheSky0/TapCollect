@@ -53,7 +53,7 @@ const run = async (): Promise<void> => {
   try {
     const store = new TaskStore(join(temporaryRoot, 'data'))
     const task = await store.saveTask(await loadSmokeTask(sourcePath, temporaryRoot))
-    if (task.pagination.mode === 'click') {
+    if (task.pagination.mode === 'click' || task.detail.navigationMode === 'click') {
       hostWindow = new BrowserWindow({
         show: false,
         webPreferences: {

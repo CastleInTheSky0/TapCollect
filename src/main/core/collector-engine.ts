@@ -27,7 +27,7 @@ import {
   type ListCandidate
 } from './extraction'
 import { HttpClient, HttpRequestError } from './http-client'
-import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
+import type { DynamicPageProvider, DynamicPageSession, DynamicPageSnapshot } from './dynamic-page'
 import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
 import { missingRequiredMergeFields, resolveFieldValue } from './field-values'
 import { createOutputSession } from '@main/services/output-writer'
@@ -148,6 +148,12 @@ const resolveListOnlyDedupeValue = (task: TaskConfig, candidate: ListCandidate):
   return resolveFieldValue(mapping, field, candidateToRecord(candidate))
 }
 
+const detailDedupeKey = (task: TaskConfig, value: string): string =>
+  normalizeUrl(value, task.detail.navigationMode === 'click')
+
+const clickCandidateKey = (candidate: ListCandidate): string =>
+  `click:${candidate.page}:${candidate.itemIndex}:${normalizeUrl(candidate.listUrl, true)}`
+
 const compactLogValue = (value: string): string => {
   const compact = value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
   return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact
@@ -200,6 +206,28 @@ export class CollectorEngine {
 
   async getDetailSamples(task: TaskConfig, limit = 20): Promise<string[]> {
     if (!task.detail.enabled || !task.detail.link.selector.trim()) return []
+    if (task.detail.navigationMode === 'click') {
+      if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
+      const session = await this.dynamicPageProvider.create(task)
+      try {
+        const list = await session.current()
+        const page = extractListPage(task, list.html, list.url, 1, 0)
+        const urls: string[] = []
+        for (const candidate of page.candidates.slice(0, Math.max(1, limit))) {
+          try {
+            const detail = await session.openDetail(candidate.itemIndex - 1)
+            if (detail.url && detail.url !== list.url) urls.push(detail.url)
+          } catch {
+            // Continue until a valid clickable detail sample is found.
+          } finally {
+            await session.returnToList()
+          }
+        }
+        return [...new Set(urls)]
+      } finally {
+        await session.close()
+      }
+    }
     const response = await this.loadInitialListPage(task)
     if (!response) return []
     const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
@@ -215,7 +243,16 @@ export class CollectorEngine {
   async testTask(task: TaskConfig): Promise<TestCollectionResult> {
     const outputTemplate = taskOutputTemplate(task)
     if (!outputTemplate) throw new Error('请先导入并配置输出模板')
-    const response = await this.loadInitialListPage(task)
+    let clickSession: DynamicPageSession | null = null
+    let response: LoadedListPage | null = null
+    if (task.detail.navigationMode === 'click') {
+      if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
+      clickSession = await this.dynamicPageProvider.create(task)
+      const snapshot = await clickSession.current()
+      response = { html: snapshot.html, finalUrl: snapshot.url }
+    } else {
+      response = await this.loadInitialListPage(task)
+    }
     if (!response) throw new Error('测试列表页未返回可采集的 HTML')
     const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
     const failures: RecordFailure[] = []
@@ -224,19 +261,25 @@ export class CollectorEngine {
       Object.entries(page.matchCounts).map(([path, counts]) => [path, counts.slice(0, 3)])
     )
 
-    for (const candidate of page.candidates.slice(0, 3)) {
-      if (candidate.missingListFields.length > 0) {
-        failures.push(...missingFailures(candidate, 'list-field', candidate.missingListFields))
-        continue
+    try {
+      for (const candidate of page.candidates.slice(0, 3)) {
+        if (candidate.missingListFields.length > 0) {
+          failures.push(...missingFailures(candidate, 'list-field', candidate.missingListFields))
+          continue
+        }
+        const outcome = clickSession
+          ? await this.processClickCandidate(task, candidate, clickSession, null)
+          : await this.processCandidate(task, candidate, null)
+        failures.push(...outcome.failures)
+        for (const [path, count] of Object.entries(outcome.matchCounts)) {
+          const counts = matchCounts[path] ?? []
+          counts.push(count)
+          matchCounts[path] = counts
+        }
+        if (outcome.record) records.push(outcome.record)
       }
-      const outcome = await this.processCandidate(task, candidate, null)
-      failures.push(...outcome.failures)
-      for (const [path, count] of Object.entries(outcome.matchCounts)) {
-        const counts = matchCounts[path] ?? []
-        counts.push(count)
-        matchCounts[path] = counts
-      }
-      if (outcome.record) records.push(outcome.record)
+    } finally {
+      await clickSession?.close()
     }
 
     const rows = records.map((record) => {
@@ -474,7 +517,8 @@ export class CollectorEngine {
 
     const processExtractedPage = async (
       extracted: ExtractListPageResult,
-      pageDescription: string
+      pageDescription: string,
+      clickDetailSession: DynamicPageSession | null = null
     ): Promise<boolean> => {
       emitLog('info', `${pageDescription}解析完成，共 ${extracted.itemCount} 条信息`)
 
@@ -487,7 +531,8 @@ export class CollectorEngine {
         let key = ''
         if (task.detail.enabled) {
           const link = candidate.externalUrl || candidate.detailUrl
-          if (link) key = normalizeUrl(link)
+          if (link) key = detailDedupeKey(task, link)
+          else if (task.detail.navigationMode === 'click') key = clickCandidateKey(candidate)
         } else {
           key = resolveListOnlyDedupeValue(task, candidate).trim()
         }
@@ -520,14 +565,18 @@ export class CollectorEngine {
 
       const outcomes = await orderedConcurrentMap(
         work,
-        task.request.detailConcurrency,
+        clickDetailSession ? 1 : task.request.detailConcurrency,
         async ({ candidate }) => {
           emitLog(
             'info',
             `${candidate.externalUrl ? '正在记录站外链接' : task.detail.enabled ? '正在采集详情' : '正在处理'}：${describeCandidate(candidate)}`
           )
-          if (task.detail.enabled && candidate.detailRequestUrl) await delay(task.request.delayMs)
-          return this.processCandidate(task, candidate, control)
+          if (task.detail.enabled && (candidate.detailRequestUrl || clickDetailSession)) {
+            await delay(task.request.delayMs)
+          }
+          return clickDetailSession
+            ? this.processClickCandidate(task, candidate, clickDetailSession, control)
+            : this.processCandidate(task, candidate, control)
         }
       )
 
@@ -536,7 +585,12 @@ export class CollectorEngine {
         let completedKey = completedWork?.key ?? ''
         if (task.detail.enabled && outcome.record) {
           const finalLink = outcome.record.externalUrl || outcome.record.detailUrl
-          if (finalLink) completedKey = normalizeUrl(finalLink)
+          if (finalLink) {
+            completedKey =
+              task.detail.navigationMode === 'click' && finalLink === completedWork?.candidate.listUrl
+                ? clickCandidateKey(completedWork.candidate)
+                : detailDedupeKey(task, finalLink)
+          }
         }
         if (completedKey && committedKeys.has(completedKey)) {
           duplicateCount += 1
@@ -654,7 +708,11 @@ export class CollectorEngine {
                 break
               }
 
-              const pageWasDuplicate = await processExtractedPage(extracted, pageDescription)
+              const pageWasDuplicate = await processExtractedPage(
+                extracted,
+                pageDescription,
+                task.detail.enabled && task.detail.navigationMode === 'click' ? session : null
+              )
               checkpoint.seenPageUrls.push(dynamicPageKey)
               checkpoint.pagesVisited += 1
               control.setCheckpoint(checkpoint)
@@ -696,6 +754,12 @@ export class CollectorEngine {
           }
         }
       } else {
+      let clickDetailSession: DynamicPageSession | null = null
+      const usesClickDetail = task.detail.enabled && task.detail.navigationMode === 'click'
+      if (usesClickDetail) {
+        if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
+      }
+      try {
       while (checkpoint.nextRuleIndex < pageRules.length) {
         if (!(await synchronize())) break
         const rule = pageRules[checkpoint.nextRuleIndex]
@@ -732,11 +796,26 @@ export class CollectorEngine {
         emitProgress('running', 'list', `正在采集${pageDescription}`)
         emitLog('info', `请求列表页：${currentUrl}`)
         if (checkpoint.pagesVisited > 0) await delay(task.request.delayMs)
-        const listResponse = await this.httpClient.fetchHtml(
-          currentUrl,
-          task.request,
-          new URL(currentUrl).hostname
-        )
+        let listResponse
+        if (usesClickDetail) {
+          await clickDetailSession?.close()
+          clickDetailSession = await this.dynamicPageProvider!.create(task, currentUrl)
+          const snapshot = await clickDetailSession.current()
+          listResponse = {
+            kind: 'success' as const,
+            requestedUrl: currentUrl,
+            finalUrl: snapshot.url,
+            status: 200,
+            html: snapshot.html,
+            encoding: 'utf-8'
+          }
+        } else {
+          listResponse = await this.httpClient.fetchHtml(
+            currentUrl,
+            task.request,
+            new URL(currentUrl).hostname
+          )
+        }
         if (listResponse.kind === 'not-found') {
           terminalMessage =
             rule.kind === 'template'
@@ -773,7 +852,11 @@ export class CollectorEngine {
           await this.store.saveCheckpoint(checkpoint)
           continue
         }
-        const pageWasDuplicate = await processExtractedPage(extracted, pageDescription)
+        const pageWasDuplicate = await processExtractedPage(
+          extracted,
+          pageDescription,
+          clickDetailSession
+        )
 
         checkpoint.seenPageUrls.push(normalizedPageUrl)
         checkpoint.pagesVisited += 1
@@ -800,6 +883,9 @@ export class CollectorEngine {
         } else {
           terminalMessage = '采集完成'
         }
+      }
+      } finally {
+        await clickDetailSession?.close()
       }
       }
 
@@ -949,6 +1035,57 @@ export class CollectorEngine {
         matchCounts: {}
       }
     }
+  }
+
+  private async processClickCandidate(
+    task: TaskConfig,
+    candidate: ListCandidate,
+    session: DynamicPageSession,
+    control: CollectorRunControl | null
+  ): Promise<CandidateOutcome> {
+    if (control?.isCancelled()) {
+      return { record: null, failures: [], counter: 'skipped', matchCounts: {} }
+    }
+
+    let detailOpened = false
+    let outcome: CandidateOutcome
+    try {
+      const detail = await session.openDetail(candidate.itemIndex - 1)
+      detailOpened = true
+      const extracted = extractDetailPage(task, candidate, detail.html, detail.url)
+      if (extracted.missingFields.length > 0) {
+        outcome = {
+          record: null,
+          failures: missingFailures(candidate, 'detail-field', extracted.missingFields),
+          counter: 'skipped',
+          matchCounts: extracted.matchCounts
+        }
+      } else {
+        outcome = this.finalizeRecord(task, candidate, extracted.record, extracted.matchCounts)
+      }
+    } catch (error) {
+      outcome = {
+        record: null,
+        failures: [
+          createRecordFailure(
+            candidate,
+            detailOpened ? 'detail-extraction' : 'detail-click',
+            error instanceof Error ? error.message : String(error)
+          )
+        ],
+        counter: 'failed',
+        matchCounts: {}
+      }
+    }
+
+    try {
+      await session.returnToList()
+    } catch (error) {
+      throw new Error(
+        `详情处理后无法返回列表：${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+    return outcome
   }
 
   private finalizeRecord(

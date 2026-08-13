@@ -479,6 +479,30 @@ body.pane-resizing * {
   font-size: 10px;
 }
 
+.detail-navigation-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.detail-navigation-picker > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-navigation-picker strong {
+  font-size: 11px;
+}
+
+.detail-navigation-picker span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .selector-grid {
   display: grid;
   grid-template-columns: 94px minmax(0, 1fr) 38px 38px;

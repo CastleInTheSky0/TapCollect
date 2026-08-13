@@ -92,5 +92,11 @@ describe('task config bundle', () => {
     expect(() => prepareImportedTaskConfig('not-an-object', 'new-id')).toThrow(
       '任务配置必须是 JSON 对象'
     )
+
+    const invalidNavigation = createTask('invalid-navigation') as unknown as Record<string, unknown>
+    ;(invalidNavigation.detail as Record<string, unknown>).navigationMode = 'script'
+    expect(() => prepareImportedTaskConfig(invalidNavigation, 'new-id')).toThrow(
+      '任务配置.detail.navigationMode 只能是 link 或 click'
+    )
   })
 })

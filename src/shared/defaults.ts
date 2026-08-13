@@ -60,6 +60,7 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
   },
   detail: {
     enabled: true,
+    navigationMode: 'link',
     link: {
       selectorType: 'css',
       selector: ''
@@ -130,6 +131,16 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> | null): App
 })
 
 export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
+  const detail = {
+    ...task.detail,
+    enabled: task.detail?.enabled ?? true,
+    navigationMode: task.detail?.navigationMode === 'click' ? ('click' as const) : ('link' as const),
+    link: {
+      selectorType: task.detail?.link?.selectorType ?? 'css',
+      selector: task.detail?.link?.selector ?? ''
+    },
+    linkAttribute: task.detail?.linkAttribute ?? 'href'
+  }
   const pagination = {
     ...task.pagination,
     mode: task.pagination?.mode ?? 'url',
@@ -173,6 +184,7 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
     ...task,
     listUrl: analysis.firstUrl || task.listUrl.trim(),
     listPageRules: lines,
+    detail,
     pagination: {
       ...pagination,
       urlTemplate: analysis.templateRule?.template ?? ''
@@ -210,7 +222,11 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
     issues.push('请配置动态分页的“下一页按钮”选择器')
   }
   if (task.detail.enabled && !task.detail.link.selector.trim()) {
-    issues.push('请配置详情链接选择器')
+    issues.push(
+      task.detail.navigationMode === 'click'
+        ? '请配置详情点击元素选择器'
+        : '请配置详情链接选择器'
+    )
   }
   if (!task.detail.enabled) {
     const outputFields = taskOutputFields(task)

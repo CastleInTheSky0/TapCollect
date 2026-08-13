@@ -87,7 +87,9 @@ const createDynamicProvider = (
     return { kind: 'page' as const, snapshot: next }
   })
   const close = vi.fn(async () => undefined)
-  const create = vi.fn(async () => ({ current, advance, close }))
+  const openDetail = vi.fn(async () => snapshots[index]!)
+  const returnToList = vi.fn(async () => snapshots[index]!)
+  const create = vi.fn(async () => ({ current, advance, openDetail, returnToList, close }))
   return { provider: { create }, create, current, advance, close }
 }
 
@@ -694,6 +696,73 @@ describe('CollectorEngine', () => {
     expect(dynamic.close).toHaveBeenCalledOnce()
     expect(fetchHtml).not.toHaveBeenCalled()
     expect(logs).toContain('页面中找不到下一页按钮')
+  })
+
+  it('clicks each configured list item to collect a JavaScript-rendered detail page', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-click-detail-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-click-detail', root)
+    task.listPageRules = ['https://example.com/catalog']
+    task.detail.enabled = true
+    task.detail.navigationMode = 'click'
+    task.detail.link.selector = '.data-name'
+    task.xml = configureXmlRecord(
+      '<book><article><title/><text/></article></book>',
+      'template.xml',
+      '/book/article'
+    )
+    const title = task.xml.mappings.find((mapping) => mapping.fieldPath === 'title')!
+    title.mode = 'page'
+    title.pageSource = 'list'
+    title.selector = '.data-name'
+    const text = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
+    text.mode = 'page'
+    text.pageSource = 'detail'
+    text.selector = '#content'
+
+    const listSnapshot: DynamicPageSnapshot = {
+      html:
+        '<main><div class="item"><span class="data-name">目录一</span></div>' +
+        '<div class="item"><span class="data-name">目录二</span></div></main>',
+      url: task.listPageRules[0]!,
+      itemCount: 2,
+      signature: 'catalog'
+    }
+    const current = vi.fn(async () => listSnapshot)
+    const openDetail = vi.fn(async (itemIndex: number): Promise<DynamicPageSnapshot> => ({
+      html: `<main><div id="content">正文${itemIndex + 1}</div></main>`,
+      url: `https://example.com/catalog#detail-${itemIndex + 1}`,
+      itemCount: 0,
+      signature: ''
+    }))
+    const returnToList = vi.fn(async () => listSnapshot)
+    const close = vi.fn(async () => undefined)
+    const create = vi.fn(async () => ({
+      current,
+      openDetail,
+      returnToList,
+      close,
+      advance: vi.fn(async () => ({ kind: 'end' as const, reason: '没有下一页' }))
+    }))
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml: vi.fn() } as unknown as HttpClient,
+      { create }
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: () => undefined
+    })
+    const output = await readOutputXml(result.outputFiles[0]!, 'utf-8')
+
+    expect(result.status).toBe('completed')
+    expect(result.counters.succeeded).toBe(2)
+    expect(openDetail.mock.calls.map(([index]) => index)).toEqual([0, 1])
+    expect(returnToList).toHaveBeenCalledTimes(2)
+    expect(output).toContain('正文1')
+    expect(output).toContain('正文2')
+    expect(output.indexOf('正文1')).toBeLessThan(output.indexOf('正文2'))
   })
 
   it('counts the initial dynamic page in the maximum page limit', async () => {
