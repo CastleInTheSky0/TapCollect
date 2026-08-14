@@ -457,7 +457,77 @@ export interface AppSettings {
   maxConcurrentRuns: number
 }
 
+export type AppPlatform = 'windows' | 'macos' | 'linux' | 'unsupported'
+
+export interface AppRuntimeInfo {
+  appName: string
+  version: string
+  platform: AppPlatform
+  platformLabel: string
+  architecture: string
+  architectureLabel: string
+  developmentPreview: boolean
+  updateInstallSupported: boolean
+}
+
+export interface UpdateAsset {
+  id: number
+  name: string
+  size: number
+  digest: string
+}
+
+export interface UpdateRelease {
+  id: number
+  version: string
+  tagName: string
+  title: string
+  summary: string
+  hasSummary: boolean
+  summaryTruncated: boolean
+  releaseUrl: string
+  publishedAt: string
+  asset: UpdateAsset | null
+}
+
+export type UpdateCheckStatus = 'up-to-date' | 'available' | 'unsupported'
+
+export interface UpdateCheckResult {
+  status: UpdateCheckStatus
+  checkedAt: string
+  currentVersion: string
+  release: UpdateRelease
+  message: string
+}
+
+export interface UpdateDownloadProgress {
+  assetId: number
+  fileName: string
+  receivedBytes: number
+  totalBytes: number
+  percentage: number
+}
+
+export interface DownloadedUpdate {
+  downloadId: string
+  releaseVersion: string
+  fileName: string
+  size: number
+  digestVerified: boolean
+}
+
+export interface UpdateInstallResult {
+  started: boolean
+  cancelled: boolean
+  message: string
+}
+
 export interface CollectorApi {
+  getAppRuntimeInfo: () => Promise<AppRuntimeInfo>
+  checkForUpdates: () => Promise<UpdateCheckResult>
+  downloadUpdate: () => Promise<DownloadedUpdate>
+  installUpdate: (downloadId: string) => Promise<UpdateInstallResult>
+  openUpdateRelease: () => Promise<boolean>
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   listTasks: () => Promise<TaskSummary[]>
@@ -501,4 +571,7 @@ export interface CollectorApi {
   onRunLog: (listener: (log: RunLog) => void) => () => void
   onRunFinished: (listener: (result: RunResult) => void) => () => void
   onRunSession: (listener: (snapshot: RunSessionSnapshot) => void) => () => void
+  onUpdateDownloadProgress: (
+    listener: (progress: UpdateDownloadProgress) => void
+  ) => () => void
 }

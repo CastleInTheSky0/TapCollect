@@ -15,6 +15,11 @@ describe('collector renderer runtime', () => {
   it('accepts the preload methods required during application mount', () => {
     expect(
       hasCollectorRuntime({
+        getAppRuntimeInfo: async () => ({}),
+        checkForUpdates: async () => ({}),
+        downloadUpdate: async () => ({}),
+        installUpdate: async () => ({}),
+        openUpdateRelease: async () => true,
         getSettings: async () => ({}),
         getRunSession: async () => ({}),
         listTasks: async () => [],
@@ -22,7 +27,8 @@ describe('collector renderer runtime', () => {
         onRunProgress: () => () => undefined,
         onRunLog: () => () => undefined,
         onRunFinished: () => () => undefined,
-        onRunSession: () => () => undefined
+        onRunSession: () => () => undefined,
+        onUpdateDownloadProgress: () => () => undefined
       })
     ).toBe(true)
   })

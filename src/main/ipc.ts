@@ -8,7 +8,8 @@ import type {
   PreviewBounds,
   PreviewEvaluateRequest,
   PreviewPickRequest,
-  TaskConfig
+  TaskConfig,
+  UpdateInstallResult
 } from '@shared/types'
 import { IPC_CHANNELS } from '@shared/ipc-channels'
 import { detectPaginationParameters, sanitizeFileName } from '@main/core/url-utils'
@@ -25,6 +26,7 @@ import {
 import type { PreviewService } from './services/preview-service'
 import type { RunManager } from './services/run-manager'
 import { atomicWrite, type TaskStore } from './services/task-store'
+import type { UpdateService } from './services/update-service'
 
 const decodeXmlFile = (bytes: Buffer): string => {
   const prefix = bytes.subarray(0, Math.min(bytes.length, 1_024)).toString('latin1')
@@ -51,8 +53,17 @@ export const registerIpcHandlers = (
   window: BrowserWindow,
   store: TaskStore,
   runManager: RunManager,
-  preview: PreviewService
+  preview: PreviewService,
+  updateService: UpdateService,
+  installUpdate: (downloadId: string) => Promise<UpdateInstallResult>
 ): void => {
+  ipcMain.handle(IPC_CHANNELS.getAppRuntimeInfo, () => updateService.getRuntimeInfo())
+  ipcMain.handle(IPC_CHANNELS.checkForUpdates, () => updateService.checkForUpdates())
+  ipcMain.handle(IPC_CHANNELS.downloadUpdate, () => updateService.downloadUpdate())
+  ipcMain.handle(IPC_CHANNELS.installUpdate, (_event, downloadId: string) =>
+    installUpdate(downloadId)
+  )
+  ipcMain.handle(IPC_CHANNELS.openUpdateRelease, () => updateService.openReleasePage())
   ipcMain.handle(IPC_CHANNELS.getSettings, () => store.getSettings())
   ipcMain.handle(IPC_CHANNELS.saveSettings, async (_event, settings: AppSettings) => {
     const saved = await store.saveSettings(settings)
@@ -241,10 +252,14 @@ export const registerIpcHandlers = (
   const removeSession = runManager.onSession((snapshot) =>
     window.webContents.send(IPC_CHANNELS.runSession, snapshot)
   )
+  const removeUpdateProgress = updateService.onDownloadProgress((progress) =>
+    window.webContents.send(IPC_CHANNELS.updateDownloadProgress, progress)
+  )
   window.once('closed', () => {
     removeProgress()
     removeLog()
     removeFinished()
     removeSession()
+    removeUpdateProgress()
   })
 }

@@ -9,6 +9,11 @@ const LOCKED_RUN_STATUSES = new Set<RunSessionItem['status']>([
 ])
 
 export const COLLECTOR_RUNTIME_METHODS = [
+  'getAppRuntimeInfo',
+  'checkForUpdates',
+  'downloadUpdate',
+  'installUpdate',
+  'openUpdateRelease',
   'getSettings',
   'getRunSession',
   'listTasks',
@@ -16,7 +21,8 @@ export const COLLECTOR_RUNTIME_METHODS = [
   'onRunProgress',
   'onRunLog',
   'onRunFinished',
-  'onRunSession'
+  'onRunSession',
+  'onUpdateDownloadProgress'
 ] as const satisfies ReadonlyArray<keyof CollectorApi>
 
 export const hasCollectorRuntime = (value: unknown): value is CollectorApi => {

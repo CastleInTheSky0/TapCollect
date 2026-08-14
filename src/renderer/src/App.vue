@@ -51,6 +51,7 @@ import type {
   XmlTreeNode
 } from '@shared/types'
 import FieldMappingEditor from './components/FieldMappingEditor.vue'
+import AboutUpdateDialog from './components/AboutUpdateDialog.vue'
 import RunCenter from './components/RunCenter.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import {
@@ -136,6 +137,7 @@ const exportTaskConfigsPrompt = ref(false)
 const taskConfigImportResult = ref<TaskConfigImportResult | null>(null)
 const cancelPromptTaskId = ref('')
 const cancelAllPrompt = ref(false)
+const aboutUpdateVisible = ref(false)
 
 const activeId = computed(() => activeTask.value?.id ?? '')
 const runItemMap = computed(() =>
@@ -1368,6 +1370,7 @@ onBeforeUnmount(() => {
       @duplicate="duplicateTask"
       @remove="removeTask"
       @run="requestRun"
+      @show-about="aboutUpdateVisible = true"
     />
 
     <div class="pane-divider sidebar-divider" role="separator" aria-label="调整任务栏宽度" aria-orientation="vertical"
@@ -2290,6 +2293,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
+
+    <AboutUpdateDialog v-model:visible="aboutUpdateVisible" :api="api" />
 
     <t-dialog v-model:visible="resumePrompt" header="发现未完成检查点" theme="warning" :footer="false"
       :close-on-overlay-click="false" width="480px">

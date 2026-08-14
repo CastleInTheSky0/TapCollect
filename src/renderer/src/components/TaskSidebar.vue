@@ -10,6 +10,7 @@ import {
   FileIcon,
   FileExportIcon,
   FileImportIcon,
+  HelpCircleIcon,
   PlayIcon,
   TaskIcon,
   ViewModuleIcon
@@ -36,6 +37,7 @@ const emit = defineEmits<{
   duplicate: [id: string]
   remove: [id: string]
   run: [id: string]
+  showAbout: []
 }>()
 
 const tasksExpanded = ref(true)
@@ -298,12 +300,32 @@ const runDisabled = (taskId: string): boolean => {
       </t-menu-item>
 
       <template #operations>
-        <t-tooltip content="本地多任务运行 · 数据保存在本机" placement="right">
-          <div class="sidebar-note">
-            <span class="status-dot" />
-            <span v-if="!collapsed">本地多任务运行 · 数据保存在本机</span>
-          </div>
-        </t-tooltip>
+        <div class="sidebar-operations">
+          <t-tooltip
+            content="关于与更新"
+            placement="right"
+            :disabled="!collapsed"
+            :visible="collapsed ? undefined : false"
+          >
+            <t-button class="about-entry" theme="default" variant="text" @click="emit('showAbout')">
+              <template #icon>
+                <HelpCircleIcon />
+              </template>
+              <span v-if="!collapsed">关于与更新</span>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip
+            content="本地多任务运行 · 数据保存在本机"
+            placement="right"
+            :disabled="!collapsed"
+            :visible="collapsed ? undefined : false"
+          >
+            <div class="sidebar-note">
+              <span class="status-dot" />
+              <span v-if="!collapsed">本地多任务运行 · 数据保存在本机</span>
+            </div>
+          </t-tooltip>
+        </div>
       </template>
     </t-menu>
   </aside>
@@ -660,19 +682,76 @@ const runDisabled = (taskId: string): boolean => {
   display: flex;
   min-height: 34px;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 16px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
+}
+
+.collapsed .sidebar-note {
+  justify-content: center;
+  padding: 0;
+}
+
+.task-menu :deep(.t-menu__operations) {
+  padding: 8px;
+}
+
+.sidebar-operations {
+  padding: 7px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.about-entry.t-button {
+  width: 100%;
+  height: 40px;
+  justify-content: flex-start;
+  padding: 0 16px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.about-entry.t-button:hover {
+  background: #e3eeee;
+  color: var(--accent);
+}
+
+.about-entry :deep(.t-button__text) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.about-entry :deep(.t-icon) {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  font-size: 18px;
+}
+
+.collapsed .about-entry.t-button {
+  justify-content: center;
+  padding: 0;
 }
 
 .status-dot {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.status-dot::after {
   width: 7px;
   height: 7px;
-  flex: 0 0 auto;
   border-radius: 50%;
   background: var(--success);
   box-shadow: 0 0 0 3px rgba(40, 151, 96, 0.09);
+  content: '';
 }
 
 :global(.task-sidebar-popup) {

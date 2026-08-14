@@ -4,7 +4,8 @@ import type {
   RunLog,
   RunProgress,
   RunResult,
-  RunSessionSnapshot
+  RunSessionSnapshot,
+  UpdateDownloadProgress
 } from '@shared/types'
 import { IPC_CHANNELS } from '@shared/ipc-channels'
 
@@ -15,6 +16,11 @@ const eventSubscription = <T>(channel: string, listener: (payload: T) => void): 
 }
 
 const api: CollectorApi = {
+  getAppRuntimeInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppRuntimeInfo),
+  checkForUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.checkForUpdates),
+  downloadUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.downloadUpdate),
+  installUpdate: (downloadId) => ipcRenderer.invoke(IPC_CHANNELS.installUpdate, downloadId),
+  openUpdateRelease: () => ipcRenderer.invoke(IPC_CHANNELS.openUpdateRelease),
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getSettings),
   saveSettings: (settings) => ipcRenderer.invoke(IPC_CHANNELS.saveSettings, settings),
   listTasks: () => ipcRenderer.invoke(IPC_CHANNELS.listTasks),
@@ -59,7 +65,9 @@ const api: CollectorApi = {
   onRunLog: (listener) => eventSubscription<RunLog>(IPC_CHANNELS.runLog, listener),
   onRunFinished: (listener) => eventSubscription<RunResult>(IPC_CHANNELS.runFinished, listener),
   onRunSession: (listener) =>
-    eventSubscription<RunSessionSnapshot>(IPC_CHANNELS.runSession, listener)
+    eventSubscription<RunSessionSnapshot>(IPC_CHANNELS.runSession, listener),
+  onUpdateDownloadProgress: (listener) =>
+    eventSubscription<UpdateDownloadProgress>(IPC_CHANNELS.updateDownloadProgress, listener)
 }
 
 contextBridge.exposeInMainWorld('collector', api)

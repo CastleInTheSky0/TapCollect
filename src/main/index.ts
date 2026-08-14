@@ -1,5 +1,6 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, net, shell } from 'electron'
+import type { UpdateInstallResult } from '@shared/types'
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { registerIpcHandlers } from './ipc'
 import { PreviewService } from './services/preview-service'
@@ -7,6 +8,7 @@ import { ElectronDynamicPageProvider } from './services/dynamic-page-service'
 import { prepareDataDirectory } from './services/data-directory'
 import { RunManager } from './services/run-manager'
 import { TaskStore } from './services/task-store'
+import { UpdateService } from './services/update-service'
 
 const APP_NAME = 'TapCollect'
 const APP_ID = 'cn.local.tapcollect'
@@ -49,9 +51,61 @@ const createWindow = async (): Promise<void> => {
   const runManager = new RunManager(store, new ElectronDynamicPageProvider(window))
   await runManager.initialize()
   const preview = new PreviewService(window)
-  registerIpcHandlers(window, store, runManager, preview)
-
   let confirmedClose = false
+  const updateService = new UpdateService({
+    appName: APP_NAME,
+    version: app.getVersion(),
+    platform: process.platform,
+    architecture: process.arch,
+    developmentPreview: IS_DEVELOPMENT_PREVIEW,
+    temporaryDirectory: app.getPath('temp'),
+    fetcher: net.fetch as typeof fetch,
+    openPath: (path) => shell.openPath(path),
+    openExternal: (url) => shell.openExternal(url)
+  })
+  const installUpdate = async (downloadId: string): Promise<UpdateInstallResult> => {
+    if (IS_DEVELOPMENT_PREVIEW) {
+      throw new Error('本地开发预览只检查更新，不启动安装包')
+    }
+    const download = updateService.getDownloadedUpdate(downloadId)
+    if (!download) throw new Error('找不到已验证的更新安装包，请重新下载')
+    await updateService.verifyDownloaded(downloadId)
+    const hasActiveRun = runManager.hasActiveRun()
+    const result = await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: '安装 TapCollect 更新',
+      message: hasActiveRun
+        ? '当前有采集或测试任务正在运行、排队或暂停。继续后会先保存安全检查点，再退出应用并打开安装包。'
+        : 'TapCollect 将退出并打开安装包，是否继续？',
+      detail: `${download.fileName}\n安装完成后请重新打开 TapCollect。`,
+      buttons: ['取消', hasActiveRun ? '保存并安装' : '立即安装'],
+      defaultId: 0,
+      cancelId: 0
+    })
+    if (result.response !== 1) {
+      return { started: false, cancelled: true, message: '已取消安装' }
+    }
+    const shutdownSnapshot = await runManager.prepareForShutdown()
+    try {
+      await updateService.installDownloaded(downloadId)
+    } catch (error) {
+      await runManager.restoreAfterFailedShutdown(shutdownSnapshot)
+      throw error
+    }
+    confirmedClose = true
+    preview.close()
+    setTimeout(() => app.quit(), 100)
+    return { started: true, cancelled: false, message: '安装包已打开' }
+  }
+  registerIpcHandlers(
+    window,
+    store,
+    runManager,
+    preview,
+    updateService,
+    installUpdate
+  )
+
   window.on('close', (event) => {
     if (confirmedClose || !runManager.hasActiveRun()) return
     event.preventDefault()

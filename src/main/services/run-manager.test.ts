@@ -402,6 +402,48 @@ describe('RunManager', () => {
     await firstTest
   })
 
+  it('restores queued and active work when an update installer cannot be opened', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-shutdown-restore-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    await store.initialize()
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1 })
+    await store.saveTask(runnableTask('task-a', root))
+    await store.saveTask(runnableTask('task-b', root))
+    const engine = new FakeCollectorEngine(store)
+    const manager = new RunManager(store, null, engine)
+    await manager.initialize()
+
+    await manager.start('task-a', false)
+    await manager.start('task-b', false)
+    const shutdown = manager.prepareForShutdown()
+    await engine.settlePause('task-a')
+    const snapshot = await shutdown
+
+    expect(manager.getSessionSnapshot().items.map((item) => item.status)).toEqual([
+      'paused',
+      'cancelled'
+    ])
+
+    await manager.restoreAfterFailedShutdown(snapshot)
+    expect(manager.getSessionSnapshot().items.map((item) => item.status)).toEqual([
+      'preparing',
+      'queued'
+    ])
+    expect(manager.getSessionSnapshot().activeCount).toBe(1)
+
+    for (let attempt = 0; attempt < 20 && engine.started.length < 2; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5))
+    }
+    expect(engine.started).toEqual(['task-a', 'task-a'])
+
+    engine.complete('task-a')
+    await flushTasks()
+    expect(engine.started).toEqual(['task-a', 'task-a', 'task-b'])
+    engine.complete('task-b')
+    await flushTasks()
+  })
+
   it('removes a completed task from the session while keeping collected output files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-delete-'))
     temporaryDirectories.push(root)

@@ -44,7 +44,7 @@ release/
 /.trellis/
 /AGENTS.md
 /Trellis任务说明.md
-
+/.workbuddy
 # OS and editor files
 ~$*.docx
 .DS_Store

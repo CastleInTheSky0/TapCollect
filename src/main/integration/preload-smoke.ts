@@ -7,9 +7,11 @@ import { registerIpcHandlers } from '@main/ipc'
 import { PreviewService } from '@main/services/preview-service'
 import { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
+import { UpdateService } from '@main/services/update-service'
 
 interface PreloadSmokeResult {
   hasCollector: boolean
+  hasUpdateApi: boolean
   hasRunSubscription: boolean
   hasTaskConfigTransfer: boolean
   settingsDirectory: string
@@ -82,9 +84,24 @@ const run = async (): Promise<PreloadSmokeResult> => {
     const runManager = new RunManager(store)
     await runManager.initialize()
     preview = new PreviewService(window)
+    const updateService = new UpdateService({
+      appName: 'TapCollect',
+      version: app.getVersion(),
+      platform: process.platform,
+      architecture: process.arch,
+      developmentPreview: true,
+      temporaryDirectory: dataRoot,
+      fetcher: async () => new Response('', { status: 503 }),
+      openPath: async () => '',
+      openExternal: async () => undefined
+    })
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: taskBundlePath })
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [taskBundlePath] })
-    registerIpcHandlers(window, store, runManager, preview)
+    registerIpcHandlers(window, store, runManager, preview, updateService, async () => ({
+      started: false,
+      cancelled: true,
+      message: '冒烟测试不执行安装'
+    }))
 
     await window.loadFile(join(__dirname, '../renderer/index.html'))
     writeStage('renderer-loaded')
@@ -96,6 +113,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
         if (!api) {
           return {
             hasCollector: false,
+            hasUpdateApi: false,
             hasRunSubscription: false,
             hasTaskConfigTransfer: false,
             settingsDirectory: '',
@@ -114,7 +132,9 @@ const run = async (): Promise<PreloadSmokeResult> => {
           }
         }
         const unsubscribe = api.onRunProgress(() => undefined)
+        const unsubscribeUpdate = api.onUpdateDownloadProgress(() => undefined)
         const unsubscribeSession = api.onRunSession(() => undefined)
+        const runtimeInfo = await api.getAppRuntimeInfo()
         const settings = await api.getSettings()
         const runSession = await api.getRunSession()
         const initialTasks = await api.listTasks()
@@ -179,6 +199,13 @@ const run = async (): Promise<PreloadSmokeResult> => {
 
         const result = {
           hasCollector: typeof api.getSettings === 'function',
+          hasUpdateApi:
+            typeof api.checkForUpdates === 'function' &&
+            typeof api.downloadUpdate === 'function' &&
+            typeof api.installUpdate === 'function' &&
+            typeof api.openUpdateRelease === 'function' &&
+            typeof unsubscribeUpdate === 'function' &&
+            runtimeInfo.appName === 'TapCollect',
           hasRunSubscription:
             typeof unsubscribe === 'function' && typeof unsubscribeSession === 'function',
           hasTaskConfigTransfer:
@@ -206,6 +233,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
             importedTask?.id !== savedTask?.id
         }
         unsubscribe()
+        unsubscribeUpdate()
         unsubscribeSession()
         return result
       })()
@@ -228,6 +256,7 @@ const main = async (): Promise<void> => {
     const result = await run()
     if (
       !result.hasCollector ||
+      !result.hasUpdateApi ||
       !result.hasRunSubscription ||
       !result.hasTaskConfigTransfer ||
       result.settingsDirectory !== '' ||

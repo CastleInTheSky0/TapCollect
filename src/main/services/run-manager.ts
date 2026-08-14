@@ -65,6 +65,14 @@ interface ManagedRun {
   finalizingCancellation: boolean
 }
 
+export interface RunShutdownSnapshot {
+  runs: Array<{
+    taskId: string
+    status: RunSessionItem['status']
+    resume: boolean
+  }>
+}
+
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 const normalizedOutputKey = (task: TaskConfig): string => {
@@ -364,7 +372,16 @@ export class RunManager extends EventEmitter {
     return true
   }
 
-  async prepareForShutdown(): Promise<void> {
+  async prepareForShutdown(): Promise<RunShutdownSnapshot> {
+    const snapshot: RunShutdownSnapshot = {
+      runs: [...this.runs.values()]
+        .filter(({ item }) => LOCKED_STATUSES.has(item.status))
+        .map(({ item }) => ({
+          taskId: item.taskId,
+          status: item.status,
+          resume: item.resume
+        }))
+    }
     this.shuttingDown = true
     for (const taskId of [...this.queue]) {
       const managed = this.runs.get(taskId)
@@ -384,6 +401,43 @@ export class RunManager extends EventEmitter {
       .map((managed) => managed.execution)
       .filter((execution): execution is Promise<void> => execution !== null)
     await Promise.allSettled(executions)
+    return snapshot
+  }
+
+  async restoreAfterFailedShutdown(snapshot: RunShutdownSnapshot): Promise<void> {
+    this.shuttingDown = false
+    const restoreQueuedItem = (
+      previous: RunShutdownSnapshot['runs'][number],
+      message: string
+    ): void => {
+      const managed = this.runs.get(previous.taskId)
+      if (!managed) return
+      managed.item.status = 'queued'
+      managed.item.resume = previous.status === 'queued' ? previous.resume : true
+      managed.item.queuedAt = nowIso()
+      managed.item.finishedAt = ''
+      managed.item.queuePosition = 0
+      managed.item.queueReason = 'capacity'
+      managed.item.message = message
+      if (!this.queue.includes(previous.taskId)) this.queue.push(previous.taskId)
+    }
+    for (const previous of snapshot.runs) {
+      const managed = this.runs.get(previous.taskId)
+      if (
+        managed?.item.status === 'paused' &&
+        ['preparing', 'running'].includes(previous.status)
+      ) {
+        restoreQueuedItem(previous, '更新安装未启动，正在恢复采集')
+      }
+    }
+    for (const previous of snapshot.runs) {
+      const managed = this.runs.get(previous.taskId)
+      if (previous.status === 'queued' && managed?.item.status === 'cancelled') {
+        restoreQueuedItem(previous, '更新安装未启动，已恢复等待队列')
+      }
+    }
+    this.schedule()
+    this.emitSession()
   }
 
   onProgress(listener: (progress: RunProgress) => void): () => void {
