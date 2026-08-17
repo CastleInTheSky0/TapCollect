@@ -103,8 +103,10 @@ const addReplacement = (): void => {
         <span>→</span>
         <t-input v-model="rule.to" placeholder="新字符串" />
         <t-tooltip content="删除替换规则" placement="top">
-          <t-button theme="danger" variant="text" shape="square"
-            @click="model.replacements.splice(model.replacements.indexOf(rule), 1)">
+          <t-button
+            theme="danger" variant="text" shape="square"
+            @click="model.replacements.splice(model.replacements.indexOf(rule), 1)"
+          >
             <DeleteIcon />
           </t-button>
         </t-tooltip>
