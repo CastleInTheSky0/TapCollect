@@ -131,6 +131,19 @@ describe('preview selector resolution', () => {
     expect(unique.matches).toHaveLength(1)
   })
 
+  it('rejects list-field picks outside the configured list-item scope', () => {
+    const detailDocument = new JSDOM(
+      '<main><h1 class="title">详情标题</h1><div id="content">详情正文</div></main>'
+    ).window.document
+
+    expect(() =>
+      resolvePreviewSelection(detailDocument.querySelector('.title')!, '#results > li')
+    ).toThrow('当前点击位置不在已配置的列表项范围内')
+    expect(() =>
+      resolvePreviewSelection(detailDocument.querySelector('.title')!, '[')
+    ).toThrow('列表项范围选择器无效')
+  })
+
   it('can run from the serialized function used by the isolated preview page', () => {
     const document = createListDocument()
     const runtime = new Function(

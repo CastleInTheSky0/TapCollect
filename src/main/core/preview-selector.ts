@@ -240,13 +240,24 @@ export function resolvePreviewSelection(
     return { selector, matches: uniqueMatches(selector) }
   }
 
-  let root: Document | Element = ownerDocument
-  try {
-    root = target.closest(scopeSelector) || ownerDocument
-  } catch {
-    root = ownerDocument
-  }
   const documentScope = scopeSelector === ':root'
+  let root: Document | Element = ownerDocument
+  if (documentScope) {
+    root = target.closest(':root') || ownerDocument
+  } else {
+    let scopedRoot: Element | null = null
+    try {
+      scopedRoot = target.closest(scopeSelector)
+    } catch {
+      throw new Error('列表项范围选择器无效，请返回第 2 步重新配置')
+    }
+    if (!scopedRoot) {
+      throw new Error(
+        '当前点击位置不在已配置的列表项范围内；若正在选择详情内容，请先将“页面来源”改为“详情页”'
+      )
+    }
+    root = scopedRoot
+  }
   const selector = exactSelectorFor(target, root, !documentScope, documentScope)
   return { selector, matches: uniqueMatches(selector) }
 }

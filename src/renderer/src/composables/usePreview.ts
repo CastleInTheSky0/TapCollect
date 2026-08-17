@@ -307,9 +307,15 @@ export const usePreview = (deps: PreviewDeps) => {
         selector: pageMapping.selector,
         scopeSelector: previewScopeForMapping(pageMapping)
       })
-      previewStatus.value = result.error
-        ? `字段 ${path}：${result.error}`
-        : `字段 ${path} 匹配 ${result.matchCount} 个元素`
+      if (result.error) {
+        previewStatus.value = `字段 ${path}：${result.error}`
+        deps.showWarning(previewStatus.value)
+      } else {
+        previewStatus.value = `字段 ${path} 匹配 ${result.matchCount} 个元素`
+        if (result.matchCount === 0) {
+          deps.showWarning(`字段 ${path} 未匹配到内容，请检查页面来源和选择器`)
+        }
+      }
     } catch (error) {
       deps.showError(error)
     }

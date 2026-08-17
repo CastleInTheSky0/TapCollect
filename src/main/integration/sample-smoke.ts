@@ -72,6 +72,26 @@ const run = async (): Promise<void> => {
     if (tested.listItemCount === 0 || tested.records.length === 0) {
       throw new Error('本地任务未采集到列表或详情记录')
     }
+    const activeMappings =
+      task.output.format === 'spreadsheet'
+        ? task.spreadsheet?.mappings ?? []
+        : task.xml?.mappings ?? []
+    const pageFieldPopulation = Object.fromEntries(
+      activeMappings
+        .filter((mapping) => mapping.mode === 'page')
+        .map((mapping) => [
+          mapping.fieldPath,
+          tested.rows.filter((row) => Boolean(row[mapping.fieldPath]?.trim())).length
+        ])
+    )
+    if (
+      Object.keys(pageFieldPopulation).length > 0 &&
+      Object.values(pageFieldPopulation).every((count) => count === 0)
+    ) {
+      throw new Error(
+        `测试采集生成了记录，但页面采集字段全部为空：${Object.keys(pageFieldPopulation).join('、')}`
+      )
+    }
     if (task.output.format === 'xml') validateXmlOutput(tested.xmlPreview)
 
     const result = await engine.run(task, null, new CollectorRunControl(), {
@@ -109,6 +129,7 @@ const run = async (): Promise<void> => {
           sourceTask: basename(sourcePath),
           listItems: tested.listItemCount,
           testedRecords: tested.records.length,
+          pageFieldPopulation,
           pagesVisited: result.pagesVisited,
           outputRecords: result.counters.succeeded,
           outputFiles: result.outputFiles.length,

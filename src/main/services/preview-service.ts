@@ -172,6 +172,15 @@ export class PreviewService {
           const scopes = request.scopeSelector
             ? Array.from(document.querySelectorAll(request.scopeSelector))
             : [document];
+          if (
+            request.scopeSelector &&
+            request.scopeSelector !== ':root' &&
+            scopes.length === 0
+          ) {
+            throw new Error(
+              '当前预览页找不到已配置的列表项范围；若正在验证详情内容，请先将“页面来源”改为“详情页”'
+            );
+          }
           const matches = [];
           scopes.forEach((scope) => {
             if (request.selectorType === 'css') {
