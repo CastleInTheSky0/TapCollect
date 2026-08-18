@@ -28,6 +28,11 @@ const forwardPick = (fieldPath: string, mergeValueId?: string): void => {
 const forwardEvaluate = (fieldPath: string, mergeValueId?: string): void => {
   emit('evaluate', fieldPath, mergeValueId)
 }
+
+const updateXmlFieldCdata = (fieldPath: string, value: boolean): void => {
+  const field = task.value.xml?.fields.find((candidate) => candidate.path === fieldPath)
+  if (field) field.cdata = value
+}
 </script>
 
 <template>
@@ -95,6 +100,7 @@ const forwardEvaluate = (fieldPath: string, mergeValueId?: string): void => {
           :mappings="task.xml.mappings"
           @pick="forwardPick"
           @evaluate="forwardEvaluate"
+          @update-cdata="updateXmlFieldCdata"
         />
         <div v-else class="mapping-empty">请先从左侧 XML 树中选择单条记录节点。</div>
       </div>

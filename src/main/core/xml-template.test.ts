@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { Element } from '@xmldom/xmldom'
 import { createMergeValue, mergePageValueKey } from '@shared/field-mapping'
-import { configureXmlRecord, inspectXmlTree, renderXmlBatch } from './xml-template'
+import { configureXmlRecord, inspectXmlTree, parseXml, renderXmlBatch } from './xml-template'
 
 const template = `<?xml version="1.0" encoding="UTF-8"?>
 <book>
@@ -11,6 +12,23 @@ const template = `<?xml version="1.0" encoding="UTF-8"?>
     <href><![CDATA[]]></href>
   </article>
 </book>`
+
+const idFieldTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <InfoEntities>
+    <InfoEntity>
+      <field name="信息标题" id="title">示例标题</field>
+      <field name="信息副标题" id="sectitle"></field>
+      <field name="附件" id="vc_attach"><![CDATA[]]></field>
+      <field name="文章正文" id="vc_content"><![CDATA[<p>示例正文</p>]]></field>
+    </InfoEntity>
+  </InfoEntities>
+</config>`
+
+const xmlElements = (parent: Element, nodeName: string): Element[] =>
+  Array.from({ length: parent.childNodes.length }, (_, index) => parent.childNodes.item(index)).filter(
+    (node): node is Element => node !== null && node.nodeType === 1 && node.nodeName === nodeName
+  )
 
 describe('XML template', () => {
   it('inspects the XML tree and fields', () => {
@@ -93,5 +111,127 @@ describe('XML template', () => {
     ])
 
     expect(output).toContain('<![CDATA[页面标题 - 固定后缀]]>')
+  })
+
+  it('uses field id values to identify repeated field elements', () => {
+    const tree = inspectXmlTree(idFieldTemplate)
+    const entityNode = tree[0]?.children
+      .find((node) => node.name === 'InfoEntities')
+      ?.children.find((node) => node.name === 'InfoEntity')
+    expect(entityNode?.children.map((node) => [node.name, node.path])).toEqual([
+      ['title', '/config/InfoEntities/InfoEntity/field[@id="title"]'],
+      ['sectitle', '/config/InfoEntities/InfoEntity/field[@id="sectitle"]'],
+      ['vc_attach', '/config/InfoEntities/InfoEntity/field[@id="vc_attach"]'],
+      ['vc_content', '/config/InfoEntities/InfoEntity/field[@id="vc_content"]']
+    ])
+
+    const configured = configureXmlRecord(
+      idFieldTemplate,
+      '中央动态.xml',
+      '/config/InfoEntities/InfoEntity'
+    )
+    expect(
+      configured.fields.map((field) => [field.name, field.label, field.path, field.cdata])
+    ).toEqual([
+      ['title', '信息标题', 'field[@id="title"]', false],
+      ['sectitle', '信息副标题', 'field[@id="sectitle"]', false],
+      ['vc_attach', '附件', 'field[@id="vc_attach"]', true],
+      ['vc_content', '文章正文', 'field[@id="vc_content"]', true]
+    ])
+    expect(new Set(configured.mappings.map((mapping) => mapping.fieldPath)).size).toBe(4)
+
+    configured.mappings.forEach((mapping) => {
+      mapping.mode = ['field[@id="title"]', 'field[@id="vc_content"]'].includes(
+        mapping.fieldPath
+      )
+        ? 'page'
+        : 'preserve'
+    })
+    configured.fields.find((field) => field.name === 'title')!.cdata = true
+    configured.fields.find((field) => field.name === 'vc_content')!.cdata = false
+    const output = renderXmlBatch(configured, [
+      {
+        sequence: 1,
+        collectedAt: '2026-08-18T00:00:00.000Z',
+        page: 1,
+        itemIndex: 1,
+        listUrl: 'https://example.com/list',
+        detailUrl: 'https://example.com/detail/1',
+        externalUrl: '',
+        values: {
+          'field[@id="title"]': '第一条标题',
+          'field[@id="vc_content"]': '<p>第一条正文</p>'
+        }
+      },
+      {
+        sequence: 2,
+        collectedAt: '2026-08-18T00:00:01.000Z',
+        page: 1,
+        itemIndex: 2,
+        listUrl: 'https://example.com/list',
+        detailUrl: 'https://example.com/detail/2',
+        externalUrl: '',
+        values: {
+          'field[@id="title"]': '第二条标题',
+          'field[@id="vc_content"]': '<p>第二条正文</p>'
+        }
+      }
+    ])
+
+    const document = parseXml(output)
+    const entities = Array.from(
+      { length: document.getElementsByTagName('InfoEntity').length },
+      (_, index) => document.getElementsByTagName('InfoEntity').item(index)
+    ).filter((node): node is Element => node !== null)
+    expect(entities).toHaveLength(2)
+    expect(
+      entities.map((entity) => {
+        const fields = xmlElements(entity, 'field')
+        const title = fields.find((field) => field.getAttribute('id') === 'title')!
+        const content = fields.find((field) => field.getAttribute('id') === 'vc_content')!
+        return {
+          title: title.textContent,
+          titleName: title.getAttribute('name'),
+          titleNodeType: title.firstChild?.nodeType,
+          content: content.textContent,
+          contentName: content.getAttribute('name'),
+          contentNodeType: content.firstChild?.nodeType
+        }
+      })
+    ).toEqual([
+      {
+        title: '第一条标题',
+        titleName: '信息标题',
+        titleNodeType: 4,
+        content: '<p>第一条正文</p>',
+        contentName: '文章正文',
+        contentNodeType: 3
+      },
+      {
+        title: '第二条标题',
+        titleName: '信息标题',
+        titleNodeType: 4,
+        content: '<p>第二条正文</p>',
+        contentName: '文章正文',
+        contentNodeType: 3
+      }
+    ])
+  })
+
+  it('rejects repeated field elements without unique id values', () => {
+    expect(() =>
+      configureXmlRecord(
+        '<root><item><field id="same">一</field><field id="same">二</field></item></root>',
+        'duplicate.xml',
+        '/root/item'
+      )
+    ).toThrow('同名 field 节点必须具有非空且唯一的 id')
+    expect(() =>
+      configureXmlRecord(
+        '<root><item><field id="first">一</field><field>二</field></item></root>',
+        'missing.xml',
+        '/root/item'
+      )
+    ).toThrow('同名 field 节点必须具有非空且唯一的 id')
   })
 })

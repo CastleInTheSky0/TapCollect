@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { createMergeValue, isFieldMappingConfigured } from '@shared/field-mapping'
-import type { FieldMapping, OutputFieldDefinition } from '@shared/types'
+import type { FieldMapping, OutputFieldDefinition, XmlFieldDefinition } from '@shared/types'
 import PageValueEditor from './PageValueEditor.vue'
 
 const props = defineProps<{
@@ -10,9 +10,10 @@ const props = defineProps<{
   mappings: FieldMapping[]
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   pick: [fieldPath: string, mergeValueId?: string]
   evaluate: [fieldPath: string, mergeValueId?: string]
+  'update-cdata': [fieldPath: string, value: boolean]
 }>()
 
 const expanded = ref<Array<string | number>>([])
@@ -31,9 +32,23 @@ const modeLabels: Record<FieldMapping['mode'], string> = {
 const fieldFor = (mapping: FieldMapping): OutputFieldDefinition | undefined =>
   props.fields.find((field) => field.path === mapping.fieldPath)
 
+const isXmlField = (field: OutputFieldDefinition): field is XmlFieldDefinition => 'kind' in field
+
+const xmlFieldFor = (mapping: FieldMapping): XmlFieldDefinition | undefined => {
+  const field = fieldFor(mapping)
+  return field && isXmlField(field) ? field : undefined
+}
+
+const updateCdata = (mapping: FieldMapping, value: unknown): void => {
+  if (!xmlFieldFor(mapping)) return
+  emit('update-cdata', mapping.fieldPath, value === true)
+}
+
 const fieldPathLabel = (mapping: FieldMapping): string => {
   const field = fieldFor(mapping)
-  return field && 'column' in field ? `${String(field.column)} 列` : mapping.fieldPath
+  if (field && 'column' in field) return `${String(field.column)} 列`
+  if (field && isXmlField(field) && field.label) return `${field.label} · ${mapping.fieldPath}`
+  return mapping.fieldPath
 }
 
 const addMergeValue = (mapping: FieldMapping): void => {
@@ -79,6 +94,16 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
       </template>
 
       <div class="mapping-detail">
+        <div v-if="xmlFieldFor(mapping)" class="cdata-control full">
+          <div>
+            <strong>CDATA 包裹</strong>
+            <span>开启后以 CDATA 写入，适合 HTML 或包含特殊字符的内容</span>
+          </div>
+          <t-switch
+            :value="xmlFieldFor(mapping)?.cdata"
+            @change="updateCdata(mapping, $event)"
+          />
+        </div>
         <div class="field full">
           <span>字段处理方式</span>
           <t-select v-model="mapping.mode" @change="ensureMergeValues(mapping)">
@@ -302,6 +327,36 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 
 .full {
   grid-column: 1 / -1;
+}
+
+.cdata-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border: 1px solid #dfe6e7;
+  border-radius: 6px;
+  background: #fff;
+  gap: 12px;
+}
+
+.cdata-control>div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cdata-control strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.cdata-control span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
 }
 
 .field {

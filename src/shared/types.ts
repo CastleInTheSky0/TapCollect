@@ -123,6 +123,7 @@ export interface OutputFieldDefinition {
 export interface XmlFieldDefinition extends OutputFieldDefinition {
   kind: XmlNodeKind
   cdata: boolean
+  label?: string
 }
 
 export interface SpreadsheetFieldDefinition extends OutputFieldDefinition {

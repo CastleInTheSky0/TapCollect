@@ -38,20 +38,84 @@ const attributeNodes = (element: Element): Attr[] =>
   Array.from({ length: element.attributes.length }, (_, index) => element.attributes.item(index))
     .filter((attribute): attribute is Attr => attribute !== null)
 
-const buildTree = (element: Element, path: string): XmlTreeNode => ({
-  path,
-  name: element.nodeName,
-  kind: 'element',
-  children: [
-    ...attributeNodes(element).map((attribute) => ({
-      path: `${path}/@${attribute.name}`,
-      name: `@${attribute.name}`,
-      kind: 'attribute' as const,
-      children: []
-    })),
-    ...elementChildren(element).map((child) => buildTree(child, `${path}/${child.nodeName}`))
-  ]
-})
+const repeatedFieldId = (
+  element: Element,
+  siblings: Element[],
+  rejectInvalid = false
+): string | null => {
+  if (element.nodeName !== 'field') return null
+  const sameNameSiblings = siblings.filter((sibling) => sibling.nodeName === element.nodeName)
+  if (
+    sameNameSiblings.length <= 1 ||
+    !sameNameSiblings.every((sibling) => elementChildren(sibling).length === 0)
+  ) {
+    return null
+  }
+  const ids = sameNameSiblings.map((sibling) => sibling.getAttribute('id') ?? '')
+  if (ids.some((id) => !id.trim()) || new Set(ids).size !== ids.length) {
+    if (rejectInvalid) throw new Error('同名 field 节点必须具有非空且唯一的 id')
+    return null
+  }
+  return element.getAttribute('id')
+}
+
+const elementPathSegment = (
+  element: Element,
+  siblings: Element[],
+  rejectInvalid = false
+): string => {
+  const id = repeatedFieldId(element, siblings, rejectInvalid)
+  return id === null ? element.nodeName : `field[@id="${encodeURIComponent(id)}"]`
+}
+
+const parseElementPathSegment = (
+  segment: string
+): { nodeName: string; id: string | null } | null => {
+  const qualified = segment.match(/^([A-Za-z_][\w:.-]*)\[@id="([^"]+)"\]$/)
+  if (!qualified) return segment.includes('[') ? null : { nodeName: segment, id: null }
+  try {
+    return { nodeName: qualified[1]!, id: decodeURIComponent(qualified[2]!) }
+  } catch {
+    return null
+  }
+}
+
+const findElementChild = (parent: Element, segment: string): Element | null => {
+  const parsed = parseElementPathSegment(segment)
+  if (!parsed) return null
+  return (
+    elementChildren(parent).find(
+      (child) =>
+        child.nodeName === parsed.nodeName &&
+        (parsed.id === null || child.getAttribute('id') === parsed.id)
+    ) ?? null
+  )
+}
+
+const buildTree = (element: Element, path: string, displayName = element.nodeName): XmlTreeNode => {
+  const children = elementChildren(element)
+  return {
+    path,
+    name: displayName,
+    kind: 'element',
+    children: [
+      ...attributeNodes(element).map((attribute) => ({
+        path: `${path}/@${attribute.name}`,
+        name: `@${attribute.name}`,
+        kind: 'attribute' as const,
+        children: []
+      })),
+      ...children.map((child) => {
+        const id = repeatedFieldId(child, children)
+        return buildTree(
+          child,
+          `${path}/${elementPathSegment(child, children)}`,
+          id ?? child.nodeName
+        )
+      })
+    ]
+  }
+}
 
 export const inspectXmlTree = (content: string): XmlTreeNode[] => {
   const document = parseXml(content)
@@ -66,7 +130,7 @@ const findElementByAbsolutePath = (document: Document, path: string): Element | 
   if (!root || parts.length === 0 || root.nodeName !== parts[0]) return null
   let current: Element = root
   for (const part of parts.slice(1)) {
-    const next = elementChildren(current).find((child) => child.nodeName === part)
+    const next = findElementChild(current, part)
     if (!next) return null
     current = next
   }
@@ -78,18 +142,12 @@ const hasCdata = (element: Element): boolean =>
     (node) => node !== null && node.nodeType === 4
   )
 
-const detectCdataElementNames = (content: string): Set<string> => {
-  const names = new Set<string>()
-  const pattern = /<([A-Za-z_][\w:.-]*)\b[^>]*>\s*<!\[CDATA\[/g
-  for (const match of content.matchAll(pattern)) {
-    if (match[1]) names.add(match[1])
-  }
-  return names
-}
+const cdataDetectionDocument = (content: string): Document =>
+  parseXml(content.replaceAll('<![CDATA[', '<![CDATA[__tapcollect_cdata__'))
 
 const collectFields = (
   record: Element,
-  cdataElementNames: Set<string>,
+  cdataRecord: Element,
   prefix = ''
 ): XmlFieldDefinition[] => {
   const fields: XmlFieldDefinition[] = []
@@ -104,19 +162,25 @@ const collectFields = (
     })
   }
 
-  for (const child of elementChildren(record)) {
-    const path = prefix ? `${prefix}/${child.nodeName}` : child.nodeName
-    const children = elementChildren(child)
-    if (children.length === 0) {
+  const children = elementChildren(record)
+  const cdataChildren = elementChildren(cdataRecord)
+  for (const [index, child] of children.entries()) {
+    const segment = elementPathSegment(child, children, true)
+    const path = prefix ? `${prefix}/${segment}` : segment
+    const grandchildren = elementChildren(child)
+    if (grandchildren.length === 0) {
+      const id = repeatedFieldId(child, children, true)
+      const label = id === null ? '' : (child.getAttribute('name') ?? '').trim()
       fields.push({
         path,
-        name: child.nodeName,
+        name: id ?? child.nodeName,
         kind: 'element',
-        cdata: hasCdata(child) || cdataElementNames.has(child.nodeName),
+        cdata: hasCdata(cdataChildren[index] ?? child),
+        ...(label ? { label } : {}),
         sampleValue: child.textContent ?? ''
       })
     } else {
-      fields.push(...collectFields(child, cdataElementNames, path))
+      fields.push(...collectFields(child, cdataChildren[index] ?? child, path))
     }
   }
   return fields
@@ -136,7 +200,9 @@ export const configureXmlRecord = (
   const document = parseXml(content)
   const record = findElementByAbsolutePath(document, recordPath)
   if (!record) throw new Error('未找到指定的 XML 记录节点')
-  const fields = collectFields(record, detectCdataElementNames(content))
+  const detectionRecord = findElementByAbsolutePath(cdataDetectionDocument(content), recordPath)
+  if (!detectionRecord) throw new Error('无法读取 XML 模板的 CDATA 结构')
+  const fields = collectFields(record, detectionRecord)
   if (fields.length === 0) throw new Error('记录节点下没有可映射字段')
   return {
     fileName,
@@ -157,7 +223,7 @@ const findRelativeTarget = (record: Element, path: string): Element | Attr | nul
       if (index !== parts.length - 1) return null
       return current.getAttributeNode(part.slice(1))
     }
-    const next = elementChildren(current).find((child) => child.nodeName === part)
+    const next = findElementChild(current, part)
     if (!next) return null
     current = next
   }
