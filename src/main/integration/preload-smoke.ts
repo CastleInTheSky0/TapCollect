@@ -1,13 +1,16 @@
 import { writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, WebContentsView } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
 import { PreviewService } from '@main/services/preview-service'
 import { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
 import { UpdateService } from '@main/services/update-service'
+import type { PreviewPickResult } from '@shared/types'
 
 interface PreloadSmokeResult {
   hasCollector: boolean
@@ -27,6 +30,7 @@ interface PreloadSmokeResult {
   deleteTaskWorks: boolean
   taskConfigExportWorks: boolean
   taskConfigImportWorks: boolean
+  previewPickWorks: boolean
   consoleErrors: string[]
 }
 
@@ -39,6 +43,163 @@ const stagePath = resultPath ? `${resultPath}.stage` : ''
 
 const writeStage = (stage: string): void => {
   if (stagePath) writeFileSync(stagePath, stage, 'utf8')
+}
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+const listen = async (server: Server): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const onError = (error: Error): void => reject(error)
+    server.once('error', onError)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', onError)
+      resolve()
+    })
+  })
+
+const closeServer = async (server: Server): Promise<void> =>
+  new Promise((resolve) => server.close(() => resolve()))
+
+const withTimeout = async <T>(promise: Promise<T>, message: string): Promise<T> =>
+  Promise.race([
+    promise,
+    delay(5_000).then(() => {
+      throw new Error(message)
+    })
+  ])
+
+const rejectionMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+const verifyPreviewPick = async (
+  window: BrowserWindow,
+  preview: PreviewService,
+  url: string
+): Promise<boolean> => {
+  const opened = await window.webContents.executeJavaScript(`
+    window.collector.previewOpen(${JSON.stringify(url)}, {
+      x: 0, y: 0, width: 960, height: 640
+    })
+  `)
+  if (!opened) return false
+
+  try {
+    const previewView = window.contentView.children.find(
+      (child): child is WebContentsView =>
+        child instanceof WebContentsView && child.webContents.getURL() === url
+    )
+    if (!previewView) throw new Error('Electron 预览点选冒烟未找到 WebContentsView')
+
+    const waitForPicker = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const ready = await previewView.webContents.executeJavaScript(
+          "Boolean(document.querySelector('[data-tapcollect-preview-picker]'))",
+          true
+        )
+        if (ready) return
+        await delay(25)
+      }
+      throw new Error('Electron 预览点选器未完成初始化')
+    }
+
+    const pickPromise = window.webContents.executeJavaScript(`
+      window.collector.previewPick({ selectorType: 'css', scopeSelector: '' })
+    `) as Promise<PreviewPickResult>
+    await waitForPicker()
+
+    await previewView.webContents.executeJavaScript(`
+      (() => {
+        const target = document.querySelector('#preview-smoke-list li:nth-child(2) a');
+        if (!target) throw new Error('预览点选冒烟目标不存在');
+        target.dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+        return true;
+      })()
+    `, true)
+
+    const result = await withTimeout(pickPromise, 'Electron 预览点选结果等待超时')
+    const successWorks =
+      result.cancelled === false &&
+      result.selector === '#preview-smoke-list > li' &&
+      result.selectorType === 'css' &&
+      result.matchCount === 3 &&
+      result.sample === '冒烟标题二'
+
+    const cancelPromise = preview.pick({ selectorType: 'css', scopeSelector: '' })
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      }));
+      true;
+    `, true)
+    const cancelled = await withTimeout(cancelPromise, 'Electron 预览点选取消等待超时')
+    const cancelWorks =
+      cancelled.cancelled &&
+      cancelled.selector === '' &&
+      cancelled.matchCount === 0 &&
+      cancelled.sample === ''
+
+    const resolverErrorPromise = preview
+      .pick({ selectorType: 'css', scopeSelector: '#missing-list-scope' })
+      .then(() => '', rejectionMessage)
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      document.querySelector('#preview-smoke-list li a').dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      }));
+      true;
+    `, true)
+    const resolverError = await withTimeout(
+      resolverErrorPromise,
+      'Electron 预览点选错误等待超时'
+    )
+
+    const navigationErrorPromise = preview
+      .pick({ selectorType: 'css', scopeSelector: '' })
+      .then(() => '', rejectionMessage)
+    await waitForPicker()
+    await preview.navigate(`${url}?reloaded=1`)
+    const navigationError = await withTimeout(
+      navigationErrorPromise,
+      'Electron 预览点选跳转等待超时'
+    )
+
+    const closeErrorPromise = preview
+      .pick({ selectorType: 'css', scopeSelector: '' })
+      .then(() => '', rejectionMessage)
+    await waitForPicker()
+    preview.close()
+    const closeError = await withTimeout(closeErrorPromise, 'Electron 预览关闭等待超时')
+
+    const checks = {
+      successWorks,
+      cancelWorks,
+      resolverError,
+      navigationError,
+      closeError
+    }
+    if (
+      !successWorks ||
+      !cancelWorks ||
+      !resolverError.includes('当前点击位置不在已配置的列表项范围内') ||
+      !navigationError.includes('预览页面已刷新或跳转') ||
+      !closeError.includes('网页预览已关闭')
+    ) {
+      throw new Error(`Electron 预览点选分支验证失败：${JSON.stringify(checks)}`)
+    }
+    return true
+  } finally {
+    await window.webContents.executeJavaScript('window.collector.previewClose()')
+  }
 }
 
 writeStage('module-loaded')
@@ -60,6 +221,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
   const dataRoot = await mkdtemp(join(tmpdir(), 'tapcollect-preload-smoke-'))
   let window: BrowserWindow | null = null
   let preview: PreviewService | null = null
+  let previewServer: Server | null = null
   const taskBundlePath = join(dataRoot, 'task-config-bundle.json')
   const originalShowOpenDialog = dialog.showOpenDialog
   const originalShowSaveDialog = dialog.showSaveDialog
@@ -103,6 +265,22 @@ const run = async (): Promise<PreloadSmokeResult> => {
       message: '冒烟测试不执行安装'
     }))
 
+    previewServer = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end(`<!doctype html>
+        <html lang="zh-CN"><body>
+          <ul id="preview-smoke-list">
+            <li><a href="/one">冒烟标题一</a></li>
+            <li><a href="/two">冒烟标题二</a></li>
+            <li><a href="/three">冒烟标题三</a></li>
+          </ul>
+        </body></html>`)
+    })
+    await listen(previewServer)
+    const previewAddress = previewServer.address() as AddressInfo | null
+    if (!previewAddress) throw new Error('Electron 预览点选冒烟服务启动失败')
+    const previewUrl = `http://127.0.0.1:${previewAddress.port}/`
+
     await window.loadFile(join(__dirname, '../renderer/index.html'))
     writeStage('renderer-loaded')
     await new Promise<void>((resolve) => setTimeout(resolve, 300))
@@ -128,7 +306,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
             saveTaskWorks: false,
             deleteTaskWorks: false,
             taskConfigExportWorks: false,
-            taskConfigImportWorks: false
+            taskConfigImportWorks: false,
+            previewPickWorks: false
           }
         }
         const unsubscribe = api.onRunProgress(() => undefined)
@@ -237,14 +416,18 @@ const run = async (): Promise<PreloadSmokeResult> => {
         unsubscribeSession()
         return result
       })()
-    `)) as Omit<PreloadSmokeResult, 'consoleErrors'>
+    `)) as Omit<PreloadSmokeResult, 'consoleErrors' | 'previewPickWorks'>
     writeStage('renderer-evaluated')
 
-    return { ...result, consoleErrors }
+    const previewPickWorks = await verifyPreviewPick(window, preview, previewUrl)
+    writeStage('preview-picker-verified')
+
+    return { ...result, previewPickWorks, consoleErrors }
   } finally {
     writeStage('cleanup')
     preview?.close()
     window?.destroy()
+    if (previewServer) await closeServer(previewServer)
     dialog.showOpenDialog = originalShowOpenDialog
     dialog.showSaveDialog = originalShowSaveDialog
     await rm(dataRoot, { recursive: true, force: true })
@@ -272,6 +455,7 @@ const main = async (): Promise<void> => {
       !result.deleteTaskWorks ||
       !result.taskConfigExportWorks ||
       !result.taskConfigImportWorks ||
+      !result.previewPickWorks ||
       result.consoleErrors.some((message) =>
         /onRunProgress|Cannot read properties of undefined|Uncaught/i.test(message)
       )

@@ -9,6 +9,58 @@ import type {
 import { resolvePreviewSelection } from '@main/core/preview-selector'
 
 const previewSelectionResolverSource = resolvePreviewSelection.toString()
+const previewPickStateKey = '__tapcollectPreviewPickState'
+const previewPickPending = '__tapcollect_preview_pick_pending__'
+const previewPickMissing = '__tapcollect_preview_pick_missing__'
+const previewPickPollIntervalMs = 50
+
+const wait = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const decodePreviewPickResult = (serialized: string): PreviewPickResult => {
+  let envelope: unknown
+  try {
+    envelope = JSON.parse(serialized)
+  } catch {
+    throw new Error('网页点选结果格式无效，请重新点选')
+  }
+
+  if (!isRecord(envelope)) throw new Error('网页点选结果格式无效，请重新点选')
+  if (envelope.status === 'error') {
+    throw new Error(
+      typeof envelope.message === 'string' && envelope.message
+        ? envelope.message
+        : '无法识别点选节点'
+    )
+  }
+  if (envelope.status !== 'success' || !isRecord(envelope.result)) {
+    throw new Error('网页点选结果格式无效，请重新点选')
+  }
+
+  const result = envelope.result
+  if (
+    typeof result.cancelled !== 'boolean' ||
+    typeof result.selector !== 'string' ||
+    (result.selectorType !== 'css' && result.selectorType !== 'xpath') ||
+    typeof result.matchCount !== 'number' ||
+    !Number.isInteger(result.matchCount) ||
+    result.matchCount < 0 ||
+    typeof result.sample !== 'string'
+  ) {
+    throw new Error('网页点选结果格式无效，请重新点选')
+  }
+
+  return {
+    cancelled: result.cancelled,
+    selector: result.selector,
+    selectorType: result.selectorType,
+    matchCount: result.matchCount,
+    sample: result.sample
+  }
+}
 
 const validatePreviewUrl = (value: string): string => {
   const url = new URL(value)
@@ -25,6 +77,7 @@ const normalizeBounds = (bounds: PreviewBounds): PreviewBounds => ({
 
 export class PreviewService {
   private view: WebContentsView | null = null
+  private pickSequence = 0
 
   constructor(private readonly window: BrowserWindow) {}
 
@@ -58,10 +111,25 @@ export class PreviewService {
 
   async pick(request: PreviewPickRequest): Promise<PreviewPickResult> {
     if (!this.view) throw new Error('网页预览尚未打开')
+    const view = this.view
+    const webContents = view.webContents
     const payload = JSON.stringify(request)
-    return this.view.webContents.executeJavaScript(`
-      (() => new Promise((resolve, reject) => {
+    const token = `${Date.now()}-${(this.pickSequence += 1)}`
+    const stateKey = JSON.stringify(previewPickStateKey)
+    const serializedToken = JSON.stringify(token)
+
+    try {
+      await webContents.executeJavaScript(`
+        (() => {
         const request = ${payload};
+        const stateKey = ${stateKey};
+        const token = ${serializedToken};
+        const previousState = window[stateKey];
+        if (previousState && typeof previousState.cleanup === 'function') {
+          previousState.cleanup();
+        }
+        const state = { token, result: '', cleanup: null };
+        window[stateKey] = state;
         const marker = '__collectorHighlightedElements';
         const clearHighlights = () => {
           const previous = window[marker] || [];
@@ -78,6 +146,7 @@ export class PreviewService {
           border: '2px solid #2563eb', background: 'rgba(37, 99, 235, .10)',
           display: 'none', boxSizing: 'border-box'
         });
+        overlay.setAttribute('data-tapcollect-preview-picker', token);
         document.documentElement.appendChild(overlay);
 
         const highlight = (elements) => {
@@ -98,14 +167,21 @@ export class PreviewService {
           window.removeEventListener('keydown', keydown, true);
           overlay.remove();
         };
+        state.cleanup = cleanup;
+        const settle = (result) => {
+          const currentState = window[stateKey];
+          cleanup();
+          if (!currentState || currentState.token !== token) return;
+          currentState.cleanup = null;
+          currentState.result = JSON.stringify(result);
+        };
         const eventElement = (event) => {
           const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
           return path.find((entry) => entry instanceof Element && entry !== overlay) || null;
         };
         const fail = (error) => {
-          cleanup();
           const message = error instanceof Error ? error.message : String(error);
-          reject(new Error(message || '无法识别点选节点'));
+          settle({ status: 'error', message: message || '无法识别点选节点' });
         };
         const move = (event) => {
           const target = eventElement(event);
@@ -128,14 +204,16 @@ export class PreviewService {
             const selection = (${previewSelectionResolverSource})(target, request.scopeSelector);
             const selector = selection.selector;
             const matches = selection.matches;
-            cleanup();
             highlight(matches);
-            resolve({
-              cancelled: false,
-              selector,
-              selectorType: 'css',
-              matchCount: matches.length,
-              sample: (target.textContent || '').trim().slice(0, 160)
+            settle({
+              status: 'success',
+              result: {
+                cancelled: false,
+                selector,
+                selectorType: 'css',
+                matchCount: matches.length,
+                sample: (target.textContent || '').trim().slice(0, 160)
+              }
             });
           } catch (error) {
             fail(error);
@@ -145,14 +223,59 @@ export class PreviewService {
           if (event.key !== 'Escape') return;
           event.preventDefault();
           event.stopImmediatePropagation();
-          cleanup();
-          resolve({ cancelled: true, selector: '', selectorType: 'css', matchCount: 0, sample: '' });
+          settle({
+            status: 'success',
+            result: {
+              cancelled: true,
+              selector: '',
+              selectorType: 'css',
+              matchCount: 0,
+              sample: ''
+            }
+          });
         };
         window.addEventListener('mousemove', move, true);
         window.addEventListener('click', click, true);
         window.addEventListener('keydown', keydown, true);
-      }))()
-    `, true) as Promise<PreviewPickResult>
+          return true;
+        })()
+      `, true)
+    } catch (error) {
+      if (webContents.isDestroyed() || this.view !== view) {
+        throw new Error('网页预览已关闭，点选已取消')
+      }
+      throw error
+    }
+
+    for (;;) {
+      let serialized: unknown
+      try {
+        serialized = await webContents.executeJavaScript(`
+          (() => {
+            const state = window[${stateKey}];
+            if (!state || state.token !== ${serializedToken}) return ${JSON.stringify(previewPickMissing)};
+            return state.result || ${JSON.stringify(previewPickPending)};
+          })()
+        `, true)
+      } catch {
+        if (webContents.isDestroyed() || this.view !== view) {
+          throw new Error('网页预览已关闭，点选已取消')
+        }
+        throw new Error('预览页面已刷新或跳转，请重新点选')
+      }
+
+      if (serialized === previewPickMissing) {
+        throw new Error('预览页面已刷新或跳转，请重新点选')
+      }
+      if (serialized === previewPickPending) {
+        await wait(previewPickPollIntervalMs)
+        continue
+      }
+      if (typeof serialized !== 'string') {
+        throw new Error('网页点选结果格式无效，请重新点选')
+      }
+      return decodePreviewPickResult(serialized)
+    }
   }
 
   async evaluate(request: PreviewEvaluateRequest): Promise<PreviewEvaluateResult> {
