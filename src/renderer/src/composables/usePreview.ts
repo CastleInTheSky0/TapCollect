@@ -135,6 +135,18 @@ export const usePreview = (deps: PreviewDeps) => {
     return deps.previewVisible.value
   }
 
+  const selectorResultStatus = (
+    target: BaseSelectorTarget,
+    selector: string,
+    matchCount: number,
+    sample = ''
+  ): string => {
+    if (target === 'detail-link' && !deps.isClickDetail() && selector.trim() === ':scope') {
+      return `已选中列表项自身链接，共匹配 ${matchCount} 条`
+    }
+    return `匹配 ${matchCount} 个元素${sample ? ` · ${sample}` : ''}`
+  }
+
   const previewScopeForMapping = (mapping: PageExtractionConfig): string =>
     mapping.pageSource === 'list' ? deps.getActiveTask()?.listItem.selector || '' : ':root'
 
@@ -165,7 +177,9 @@ export const usePreview = (deps: PreviewDeps) => {
             ? task.listItem.selector
             : target === 'next-button'
               ? ':root'
-              : ''
+              : '',
+        ancestorAttribute:
+          target === 'detail-link' && !deps.isClickDetail() ? task.detail.linkAttribute : ''
       })
       if (result.cancelled) return
       if (target === 'list-item') {
@@ -181,7 +195,7 @@ export const usePreview = (deps: PreviewDeps) => {
       previewStatus.value =
         target === 'list-item' && result.matchCount <= 1
           ? `仅匹配 ${result.matchCount} 个元素，未识别到重复列表结构；请点选一整条记录或手动调整选择器`
-          : `匹配 ${result.matchCount} 个元素${result.sample ? ` · ${result.sample}` : ''}`
+          : selectorResultStatus(target, result.selector, result.matchCount, result.sample)
     } catch (error) {
       deps.showError(error)
     } finally {
@@ -210,11 +224,13 @@ export const usePreview = (deps: PreviewDeps) => {
       const result = await api.previewEvaluate({
         selectorType: config.selectorType,
         selector: config.selector,
-        scopeSelector: scope
+        scopeSelector: scope,
+        ancestorAttribute:
+          target === 'detail-link' && !deps.isClickDetail() ? task.detail.linkAttribute : ''
       })
       previewStatus.value = result.error
         ? `选择器错误：${result.error}`
-        : `匹配 ${result.matchCount} 个元素${result.sample ? ` · ${result.sample}` : ''}`
+        : selectorResultStatus(target, config.selector, result.matchCount, result.sample)
     } catch (error) {
       deps.showError(error)
     }
@@ -282,7 +298,8 @@ export const usePreview = (deps: PreviewDeps) => {
     try {
       const result = await api.previewPick({
         selectorType: 'css',
-        scopeSelector: previewScopeForMapping(pageMapping)
+        scopeSelector: previewScopeForMapping(pageMapping),
+        ancestorAttribute: ''
       })
       if (!result.cancelled) {
         pageMapping.selectorType = 'css'
@@ -305,7 +322,8 @@ export const usePreview = (deps: PreviewDeps) => {
       const result = await api.previewEvaluate({
         selectorType: pageMapping.selectorType,
         selector: pageMapping.selector,
-        scopeSelector: previewScopeForMapping(pageMapping)
+        scopeSelector: previewScopeForMapping(pageMapping),
+        ancestorAttribute: ''
       })
       if (result.error) {
         previewStatus.value = `字段 ${path}：${result.error}`

@@ -201,7 +201,11 @@ export class PreviewService {
             return;
           }
           try {
-            const selection = (${previewSelectionResolverSource})(target, request.scopeSelector);
+            const selection = (${previewSelectionResolverSource})(
+              target,
+              request.scopeSelector,
+              request.ancestorAttribute || ''
+            );
             const selector = selection.selector;
             const matches = selection.matches;
             highlight(matches);
@@ -284,6 +288,7 @@ export class PreviewService {
     return this.view.webContents.executeJavaScript(`
       (() => {
         const request = ${payload};
+        const ancestorAttribute = String(request.ancestorAttribute || '').trim();
         const marker = '__collectorHighlightedElements';
         const previous = window[marker] || [];
         previous.forEach((entry) => {
@@ -307,7 +312,22 @@ export class PreviewService {
           const matches = [];
           scopes.forEach((scope) => {
             if (request.selectorType === 'css') {
-              matches.push(...scope.querySelectorAll(request.selector));
+              let scopedMatches = [];
+              if (request.selector === ':scope' && scope instanceof Element) {
+                scopedMatches = [scope];
+              } else {
+                scopedMatches = Array.from(scope.querySelectorAll(request.selector));
+              }
+              if (ancestorAttribute) {
+                scopedMatches = scopedMatches.filter((element) =>
+                  element.hasAttribute(ancestorAttribute)
+                );
+                if (scopedMatches.length === 0 && scope instanceof Element) {
+                  const closest = scope.closest(request.selector);
+                  if (closest?.hasAttribute(ancestorAttribute)) scopedMatches = [closest];
+                }
+              }
+              matches.push(...scopedMatches);
               return;
             }
             const result = document.evaluate(

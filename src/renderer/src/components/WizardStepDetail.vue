@@ -88,6 +88,20 @@ const emit = defineEmits<{
         </t-button>
       </t-tooltip>
     </div>
+    <div
+      v-if="
+        !isClickDetail &&
+          task.detail.link.selectorType === 'css' &&
+          task.detail.link.selector.trim() === ':scope'
+      "
+      class="selector-result-note"
+    >
+      <LinkIcon />
+      <span>
+        <strong>已选中列表项自身链接</strong>
+        采集时会直接读取每个列表项的 {{ task.detail.linkAttribute || 'href' }} 地址。
+      </span>
+    </div>
     <div v-if="!isClickDetail" class="host-rule">
       <LinkIcon />
       <span>站内判断</span>

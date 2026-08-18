@@ -105,6 +105,48 @@ afterEach(async () => {
 })
 
 describe('CollectorEngine', () => {
+  it('returns detail samples when the link is the list item itself or its wrapper', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-detail-samples-'))
+    temporaryDirectories.push(root)
+    const html = `
+      <div id="project">
+        <a href="/detail/1"><li><h1>标题一</h1></li></a>
+        <a href="/detail/2"><li><h1>标题二</h1></li></a>
+      </div>
+    `
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html,
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient
+    )
+    const rootTask = createTask('root-detail-samples')
+    rootTask.listUrl = 'https://www.example.com/list'
+    rootTask.listPageRules = [rootTask.listUrl]
+    rootTask.listItem.selector = '#project > a'
+    rootTask.detail.link.selector = ':scope'
+
+    const wrappedTask = createTask('wrapped-detail-samples')
+    wrappedTask.listUrl = rootTask.listUrl
+    wrappedTask.listPageRules = [wrappedTask.listUrl]
+    wrappedTask.listItem.selector = '#project > a > li'
+    wrappedTask.detail.link.selector = 'a[href]'
+
+    const expected = [
+      'https://www.example.com/detail/1',
+      'https://www.example.com/detail/2'
+    ]
+    await expect(engine.getDetailSamples(rootTask)).resolves.toEqual(expected)
+    await expect(engine.getDetailSamples(wrappedTask)).resolves.toEqual(expected)
+  })
+
   it('pauses only after committing the current page and resumes without losing records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-safe-pause-'))
     temporaryDirectories.push(root)

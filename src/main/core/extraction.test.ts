@@ -114,6 +114,42 @@ describe('page extraction', () => {
     expect(detail.record.values.text).not.toContain('javascript:')
   })
 
+  it('reads a detail link from the list item itself or its nearest wrapping ancestor', () => {
+    const html = `
+      <div id="project">
+        <a href="/detail/1"><li><h1>标题一</h1></li></a>
+        <a href="/detail/2"><li><h1>标题二</h1></li></a>
+      </div>
+    `
+
+    const rootTask = createTask('root-link-task')
+    rootTask.listUrl = 'https://www.example.com/list'
+    rootTask.listItem.selector = '#project > a'
+    rootTask.detail.link.selector = ':scope'
+    rootTask.xml = template()
+    rootTask.xml.mappings[0]!.selector = 'h1'
+
+    const rootResult = extractListPage(rootTask, html, rootTask.listUrl, 1, 0)
+    expect(rootResult.candidates.map((candidate) => candidate.detailUrl)).toEqual([
+      'https://www.example.com/detail/1',
+      'https://www.example.com/detail/2'
+    ])
+
+    const wrappedTask = createTask('wrapped-link-task')
+    wrappedTask.listUrl = 'https://www.example.com/list'
+    wrappedTask.listItem.selector = '#project > a > li'
+    wrappedTask.detail.link.selector = 'a[href]'
+    wrappedTask.xml = template()
+    wrappedTask.xml.mappings[0]!.selector = 'a[href]'
+
+    const wrappedResult = extractListPage(wrappedTask, html, wrappedTask.listUrl, 1, 0)
+    expect(wrappedResult.candidates.map((candidate) => candidate.detailUrl)).toEqual([
+      'https://www.example.com/detail/1',
+      'https://www.example.com/detail/2'
+    ])
+    expect(wrappedResult.candidates.map((candidate) => candidate.values.title)).toEqual(['', ''])
+  })
+
   it('removes script bodies before extracting plain text', () => {
     const task = createTask('text-cleaning-task')
     task.listUrl = 'https://www.example.com/list'

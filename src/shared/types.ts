@@ -431,6 +431,7 @@ export interface PreviewBounds {
 export interface PreviewPickRequest {
   selectorType: SelectorType
   scopeSelector: string
+  ancestorAttribute: string
 }
 
 export interface PreviewPickResult {
@@ -445,6 +446,7 @@ export interface PreviewEvaluateRequest {
   selectorType: SelectorType
   selector: string
   scopeSelector: string
+  ancestorAttribute: string
 }
 
 export interface PreviewEvaluateResult {

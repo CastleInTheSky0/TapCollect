@@ -10,13 +10,16 @@ export interface PreviewSelection {
  * A non-empty scope means the user is choosing a field relative to that scope.
  * `:root` is used for fields that belong to the whole document (for example,
  * a detail-page body) rather than to a repeated list item.
+ * `ancestorAttribute` is reserved for detail-link picking. It allows a link
+ * attribute on the list-item root or its nearest wrapping ancestor.
  *
  * Keep this function self-contained: PreviewService serializes it with
  * Function.prototype.toString() and runs it inside the isolated preview page.
  */
 export function resolvePreviewSelection(
   target: Element,
-  scopeSelector: string
+  scopeSelector: string,
+  ancestorAttribute = ''
 ): PreviewSelection {
   const ownerDocument = target.ownerDocument
 
@@ -99,6 +102,25 @@ export function resolvePreviewSelection(
       current = current.parentElement
     }
     return parts.join(' > ')
+  }
+
+  const attributedSelectorFor = (element: Element, attribute: string): string => {
+    const tag = element.tagName.toLowerCase()
+    const reusableClasses = Array.from(element.classList)
+      .filter((className) => ownerDocument.getElementsByClassName(className).length > 1)
+      .slice(0, 2)
+    return `${tag}${reusableClasses
+      .map((className) => `.${cssEscape(className)}`)
+      .join('')}[${cssEscape(attribute)}]`
+  }
+
+  const closestWithAttribute = (element: Element, attribute: string): Element | null => {
+    let current: Element | null = element
+    while (current) {
+      if (current.hasAttribute(attribute)) return current
+      current = current.parentElement
+    }
+    return null
   }
 
   const uniqueMatches = (selector: string): Element[] => {
@@ -242,10 +264,10 @@ export function resolvePreviewSelection(
 
   const documentScope = scopeSelector === ':root'
   let root: Document | Element = ownerDocument
+  let scopedRoot: Element | null = null
   if (documentScope) {
     root = target.closest(':root') || ownerDocument
   } else {
-    let scopedRoot: Element | null = null
     try {
       scopedRoot = target.closest(scopeSelector)
     } catch {
@@ -258,6 +280,33 @@ export function resolvePreviewSelection(
     }
     root = scopedRoot
   }
+
+  const attribute = ancestorAttribute.trim()
+  if (scopedRoot && attribute) {
+    const attributedTarget = closestWithAttribute(target, attribute)
+    if (attributedTarget === scopedRoot) {
+      const matches = Array.from(ownerDocument.querySelectorAll(scopeSelector)).filter((scope) =>
+        scope.hasAttribute(attribute)
+      )
+      return { selector: ':scope', matches }
+    }
+    if (attributedTarget && scopedRoot.contains(attributedTarget)) {
+      const exact = exactSelectorFor(attributedTarget, scopedRoot, true, false)
+      const selector = `${exact}[${cssEscape(attribute)}]`
+      return {
+        selector,
+        matches: uniqueMatches(selector).filter((match) => match.hasAttribute(attribute))
+      }
+    }
+    if (attributedTarget?.contains(scopedRoot)) {
+      const selector = attributedSelectorFor(attributedTarget, attribute)
+      const matches = Array.from(ownerDocument.querySelectorAll(scopeSelector))
+        .map((scope) => scope.closest(selector))
+        .filter((match): match is Element => Boolean(match?.hasAttribute(attribute)))
+      return { selector, matches: Array.from(new Set(matches)) }
+    }
+  }
+
   const selector = exactSelectorFor(target, root, !documentScope, documentScope)
   return { selector, matches: uniqueMatches(selector) }
 }

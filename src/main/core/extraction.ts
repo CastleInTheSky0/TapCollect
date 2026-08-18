@@ -123,7 +123,14 @@ const extractMappingValue = (
 
 const extractDetailHref = (item: Element, task: TaskConfig): string => {
   const matches = selectNodes(item, task.detail.link.selectorType, task.detail.link.selector)
-  const first = matches[0]
+  let first = matches[0]
+  if (!first && task.detail.link.selectorType === 'css') {
+    const expression = task.detail.link.selector.trim()
+    if (expression) {
+      const closest = item.closest(expression)
+      if (closest?.hasAttribute(task.detail.linkAttribute)) first = closest
+    }
+  }
   if (!first) return ''
   if (first.nodeType === first.ATTRIBUTE_NODE) return first.nodeValue ?? ''
   if (first.nodeType === first.ELEMENT_NODE) {

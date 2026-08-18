@@ -73,20 +73,75 @@ class ElectronDynamicPageSession implements DynamicPageSession {
 
   async initialize(): Promise<void> {
     const timeoutMs = this.task.request.timeoutSeconds * 1_000
-    await withTimeout(
-      this.view.webContents.loadURL(this.startUrl),
-      timeoutMs,
-      `动态列表页加载超过 ${this.task.request.timeoutSeconds} 秒`
-    )
-    this.assertAllowedPage()
-
-    const deadline = Date.now() + timeoutMs
-    let snapshot = await this.readSnapshot()
-    while (snapshot.itemCount === 0 && Date.now() < deadline) {
-      await wait(POLL_INTERVAL_MS)
-      snapshot = await this.readSnapshot()
+    const navigationDeadline = Date.now() + timeoutMs
+    const navigation: {
+      state: 'loading' | 'loaded' | 'failed'
+      error: unknown
+    } = { state: 'loading', error: null }
+    let renderedDeadline: number | null = null
+    let latestReadableSnapshot: DynamicPageSnapshot | null = null
+    let latestSnapshotError: unknown = null
+    let domReady = false
+    const markDomReady = (): void => {
+      domReady = true
     }
-    this.latestSnapshot = snapshot
+
+    this.view.webContents.on('dom-ready', markDomReady)
+    try {
+      void this.view.webContents.loadURL(this.startUrl).then(
+        () => {
+          navigation.state = 'loaded'
+        },
+        (error: unknown) => {
+          navigation.state = 'failed'
+          navigation.error = error
+        }
+      )
+
+      for (;;) {
+        this.assertAlive()
+        if (domReady || navigation.state === 'loaded') {
+          try {
+            const snapshot = await this.readSnapshot()
+            latestReadableSnapshot = snapshot
+            latestSnapshotError = null
+            if (snapshot.itemCount > 0) {
+              this.latestSnapshot = snapshot
+              return
+            }
+          } catch (error) {
+            latestSnapshotError = error
+          }
+        }
+
+        const now = Date.now()
+        if (navigation.state === 'failed') {
+          throw navigation.error instanceof Error
+            ? navigation.error
+            : new Error(String(navigation.error || '动态列表页加载失败'))
+        }
+        if (navigation.state === 'loaded') {
+          renderedDeadline ??= now + timeoutMs
+          if (now >= renderedDeadline) {
+            if (latestReadableSnapshot) {
+              this.latestSnapshot = latestReadableSnapshot
+              return
+            }
+            throw latestSnapshotError instanceof Error
+              ? latestSnapshotError
+              : new Error('无法读取动态列表页 DOM')
+          }
+        } else if (now >= navigationDeadline) {
+          throw new Error(`动态列表页加载超过 ${this.task.request.timeoutSeconds} 秒`)
+        }
+
+        await wait(POLL_INTERVAL_MS)
+      }
+    } finally {
+      if (!this.view.webContents.isDestroyed()) {
+        this.view.webContents.off('dom-ready', markDomReady)
+      }
+    }
   }
 
   async current(): Promise<DynamicPageSnapshot> {
@@ -184,7 +239,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     } catch {
       // A partially changed document is recovered through history or reload below.
     }
-    await this.view.webContents.executeJavaScript('window.history.back()', true)
+    await this.executeInMainFrame('window.history.back()', true)
     const fromHistory = await this.waitForList(previous.url, timeoutMs)
     if (fromHistory) return fromHistory
 
@@ -224,18 +279,18 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   }
 
   private async readDocumentHtml(): Promise<string> {
-    return this.view.webContents.executeJavaScript(
+    return this.executeInMainFrame<string>(
       'document.documentElement ? document.documentElement.outerHTML : ""',
       true
-    ) as Promise<string>
+    )
   }
 
   private async readDetailMatchCount(): Promise<number> {
     if (this.detailSelectors.length === 0) return 0
-    return this.view.webContents.executeJavaScript(
+    return this.executeInMainFrame<number>(
       `(${dynamicSelectorCountSource})(document,${JSON.stringify(this.detailSelectors)})`,
       true
-    ) as Promise<number>
+    )
   }
 
   private async waitForList(url: string, timeoutMs: number): Promise<DynamicPageSnapshot | null> {
@@ -264,10 +319,10 @@ class ElectronDynamicPageSession implements DynamicPageSession {
       JSON.stringify(this.task.detail.link),
       JSON.stringify(itemIndex)
     ].join(',')
-    return this.view.webContents.executeJavaScript(
+    return this.executeInMainFrame<DynamicDetailDomActionResult>(
       `(${dynamicDetailClickSource})(${payload})`,
       true
-    ) as Promise<DynamicDetailDomActionResult>
+    )
   }
 
   private async execute(action: 'snapshot' | 'click'): Promise<DynamicDomActionResult> {
@@ -279,10 +334,17 @@ class ElectronDynamicPageSession implements DynamicPageSession {
       JSON.stringify(this.task.pagination.nextButton),
       'window.location.href'
     ].join(',')
-    return this.view.webContents.executeJavaScript(
+    return this.executeInMainFrame<DynamicDomActionResult>(
       `(${dynamicDomActionSource})(${payload})`,
       true
-    ) as Promise<DynamicDomActionResult>
+    )
+  }
+
+  private async executeInMainFrame<T>(code: string, userGesture = false): Promise<T> {
+    this.assertAlive()
+    const frame = this.view.webContents.mainFrame
+    if (frame.isDestroyed()) throw new Error('动态分页网页主框架已关闭')
+    return frame.executeJavaScript(code, userGesture) as Promise<T>
   }
 
   private assertAllowedPage(value = this.view.webContents.getURL()): void {

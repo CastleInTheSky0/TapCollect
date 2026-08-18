@@ -5,8 +5,10 @@ const { evaluateXPathToNodes } = fontoxpath
 
 type QueryRoot = Document | Element
 
-const selectCss = (root: QueryRoot, selector: string): Node[] =>
-  Array.from(root.querySelectorAll(selector))
+const selectCss = (root: QueryRoot, selector: string): Node[] => {
+  if (selector === ':scope' && root.nodeType === root.ELEMENT_NODE) return [root]
+  return Array.from(root.querySelectorAll(selector))
+}
 
 const selectXPath = (root: QueryRoot, selector: string): Node[] =>
   evaluateXPathToNodes(selector, root) as Node[]

@@ -115,6 +115,37 @@ describe('preview selector resolution', () => {
     expect(tableBody.matches).toHaveLength(2)
   })
 
+  it('selects a list-item root or nearest wrapping ancestor as the detail link', () => {
+    const document = new JSDOM(`
+      <div id="project">
+        <a href="/detail/1"><li><h1>标题一</h1></li></a>
+        <a href="/detail/2"><li><h1>标题二</h1></li></a>
+        <a href="/detail/3"><li><h1>标题三</h1></li></a>
+      </div>
+      <div class="item"><a class="title" href="/detail/4"><span>标题四</span></a></div>
+      <div class="item"><a class="title" href="/detail/5"><span>标题五</span></a></div>
+    `).window.document
+    const firstTitle = document.querySelector('#project h1')!
+
+    const list = resolvePreviewSelection(firstTitle, '')
+    const rootLink = resolvePreviewSelection(firstTitle, '#project > a', 'href')
+    const wrappingLink = resolvePreviewSelection(firstTitle, '#project > a > li', 'href')
+    const nestedLink = resolvePreviewSelection(
+      document.querySelector('.item span')!,
+      '.item',
+      'href'
+    )
+
+    expect(list.selector).toBe('#project > a')
+    expect(list.matches).toHaveLength(3)
+    expect(rootLink.selector).toBe(':scope')
+    expect(rootLink.matches).toHaveLength(3)
+    expect(wrappingLink.selector).toBe('a[href]')
+    expect(wrappingLink.matches).toHaveLength(3)
+    expect(nestedLink.selector).toBe('a.title[href]')
+    expect(nestedLink.matches).toHaveLength(2)
+  })
+
   it('keeps document fields concise and falls back to an exact selector without repetition', () => {
     const detailDocument = new JSDOM(
       '<main><div id="divContent"><p>详情正文</p></div></main>'

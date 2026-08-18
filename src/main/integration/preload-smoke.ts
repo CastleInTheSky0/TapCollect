@@ -6,11 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, WebContentsView } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
+import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
 import { PreviewService } from '@main/services/preview-service'
 import { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
 import { UpdateService } from '@main/services/update-service'
-import type { PreviewPickResult } from '@shared/types'
+import { createTask } from '@shared/defaults'
+import type { PreviewEvaluateResult, PreviewPickResult } from '@shared/types'
 
 interface PreloadSmokeResult {
   hasCollector: boolean
@@ -31,6 +33,7 @@ interface PreloadSmokeResult {
   taskConfigExportWorks: boolean
   taskConfigImportWorks: boolean
   previewPickWorks: boolean
+  dynamicPartialLoadWorks: boolean
   consoleErrors: string[]
 }
 
@@ -104,7 +107,11 @@ const verifyPreviewPick = async (
     }
 
     const pickPromise = window.webContents.executeJavaScript(`
-      window.collector.previewPick({ selectorType: 'css', scopeSelector: '' })
+      window.collector.previewPick({
+        selectorType: 'css',
+        scopeSelector: '',
+        ancestorAttribute: ''
+      })
     `) as Promise<PreviewPickResult>
     await waitForPicker()
 
@@ -129,7 +136,81 @@ const verifyPreviewPick = async (
       result.matchCount === 3 &&
       result.sample === '冒烟标题二'
 
-    const cancelPromise = preview.pick({ selectorType: 'css', scopeSelector: '' })
+    const rootLinkPickPromise = window.webContents.executeJavaScript(`
+      window.collector.previewPick({
+        selectorType: 'css',
+        scopeSelector: '#preview-wrapped-list > a',
+        ancestorAttribute: 'href'
+      })
+    `) as Promise<PreviewPickResult>
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      document.querySelector('#preview-wrapped-list > a:nth-of-type(2) span')
+        .dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      true;
+    `, true)
+    const rootLink = await withTimeout(
+      rootLinkPickPromise,
+      'Electron 列表项自身链接点选等待超时'
+    )
+    const rootLinkEvaluation = (await window.webContents.executeJavaScript(`
+      window.collector.previewEvaluate({
+        selectorType: 'css',
+        selector: ':scope',
+        scopeSelector: '#preview-wrapped-list > a',
+        ancestorAttribute: 'href'
+      })
+    `)) as PreviewEvaluateResult
+    const rootLinkWorks =
+      rootLink.selector === ':scope' &&
+      rootLink.matchCount === 3 &&
+      rootLinkEvaluation.matchCount === 3 &&
+      rootLinkEvaluation.error === ''
+
+    const ancestorLinkPickPromise = window.webContents.executeJavaScript(`
+      window.collector.previewPick({
+        selectorType: 'css',
+        scopeSelector: '#preview-wrapped-list > a > li',
+        ancestorAttribute: 'href'
+      })
+    `) as Promise<PreviewPickResult>
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      document.querySelector('#preview-wrapped-list > a:nth-of-type(2) span')
+        .dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      true;
+    `, true)
+    const ancestorLink = await withTimeout(
+      ancestorLinkPickPromise,
+      'Electron 列表项祖先链接点选等待超时'
+    )
+    const ancestorLinkEvaluation = (await window.webContents.executeJavaScript(`
+      window.collector.previewEvaluate({
+        selectorType: 'css',
+        selector: 'a[href]',
+        scopeSelector: '#preview-wrapped-list > a > li',
+        ancestorAttribute: 'href'
+      })
+    `)) as PreviewEvaluateResult
+    const ancestorLinkWorks =
+      ancestorLink.selector === 'a[href]' &&
+      ancestorLink.matchCount === 3 &&
+      ancestorLinkEvaluation.matchCount === 3 &&
+      ancestorLinkEvaluation.error === ''
+
+    const cancelPromise = preview.pick({
+      selectorType: 'css',
+      scopeSelector: '',
+      ancestorAttribute: ''
+    })
     await waitForPicker()
     await previewView.webContents.executeJavaScript(`
       window.dispatchEvent(new KeyboardEvent('keydown', {
@@ -147,7 +228,11 @@ const verifyPreviewPick = async (
       cancelled.sample === ''
 
     const resolverErrorPromise = preview
-      .pick({ selectorType: 'css', scopeSelector: '#missing-list-scope' })
+      .pick({
+        selectorType: 'css',
+        scopeSelector: '#missing-list-scope',
+        ancestorAttribute: ''
+      })
       .then(() => '', rejectionMessage)
     await waitForPicker()
     await previewView.webContents.executeJavaScript(`
@@ -164,7 +249,7 @@ const verifyPreviewPick = async (
     )
 
     const navigationErrorPromise = preview
-      .pick({ selectorType: 'css', scopeSelector: '' })
+      .pick({ selectorType: 'css', scopeSelector: '', ancestorAttribute: '' })
       .then(() => '', rejectionMessage)
     await waitForPicker()
     await preview.navigate(`${url}?reloaded=1`)
@@ -174,7 +259,7 @@ const verifyPreviewPick = async (
     )
 
     const closeErrorPromise = preview
-      .pick({ selectorType: 'css', scopeSelector: '' })
+      .pick({ selectorType: 'css', scopeSelector: '', ancestorAttribute: '' })
       .then(() => '', rejectionMessage)
     await waitForPicker()
     preview.close()
@@ -182,6 +267,8 @@ const verifyPreviewPick = async (
 
     const checks = {
       successWorks,
+      rootLinkWorks,
+      ancestorLinkWorks,
       cancelWorks,
       resolverError,
       navigationError,
@@ -189,6 +276,8 @@ const verifyPreviewPick = async (
     }
     if (
       !successWorks ||
+      !rootLinkWorks ||
+      !ancestorLinkWorks ||
       !cancelWorks ||
       !resolverError.includes('当前点击位置不在已配置的列表项范围内') ||
       !navigationError.includes('预览页面已刷新或跳转') ||
@@ -199,6 +288,38 @@ const verifyPreviewPick = async (
     return true
   } finally {
     await window.webContents.executeJavaScript('window.collector.previewClose()')
+  }
+}
+
+const verifyDynamicPartialLoad = async (
+  window: BrowserWindow,
+  url: string
+): Promise<boolean> => {
+  const task = createTask('dynamic-partial-load-smoke')
+  task.listUrl = url
+  task.listPageRules = [url]
+  task.listItem.selector = '.stream-item'
+  task.pagination.mode = 'click'
+  task.pagination.nextButton.selector = '#next-page'
+  task.pagination.maxPages = 1
+  task.request.timeoutSeconds = 2
+
+  const startedAt = Date.now()
+  const session = await withTimeout(
+    new ElectronDynamicPageProvider(window).create(task),
+    '动态列表可用 DOM 等待超时'
+  )
+  try {
+    const elapsedMs = Date.now() - startedAt
+    const snapshot = await session.current()
+    if (snapshot.itemCount !== 2 || elapsedMs >= 2_000) {
+      throw new Error(
+        `动态列表没有在慢子资源完成前读取可用 DOM：items=${snapshot.itemCount}, elapsed=${elapsedMs}`
+      )
+    }
+    return true
+  } finally {
+    await session.close()
   }
 }
 
@@ -265,8 +386,21 @@ const run = async (): Promise<PreloadSmokeResult> => {
       message: '冒烟测试不执行安装'
     }))
 
-    previewServer = createServer((_request, response) => {
+    previewServer = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      if (request.url === '/partial-load') {
+        response.end(`<!doctype html><html lang="zh-CN"><body>
+          <div class="stream-item">流式记录一</div>
+          <div class="stream-item">流式记录二</div>
+          <img src="/slow-resource" alt="慢资源">
+        </body></html>`)
+        return
+      }
+      if (request.url === '/slow-resource') {
+        const finishTimer = setTimeout(() => response.end(), 3_000)
+        response.once('close', () => clearTimeout(finishTimer))
+        return
+      }
       response.end(`<!doctype html>
         <html lang="zh-CN"><body>
           <ul id="preview-smoke-list">
@@ -274,6 +408,11 @@ const run = async (): Promise<PreloadSmokeResult> => {
             <li><a href="/two">冒烟标题二</a></li>
             <li><a href="/three">冒烟标题三</a></li>
           </ul>
+          <div id="preview-wrapped-list">
+            <a href="/wrapped/one"><li><span>包装标题一</span></li></a>
+            <a href="/wrapped/two"><li><span>包装标题二</span></li></a>
+            <a href="/wrapped/three"><li><span>包装标题三</span></li></a>
+          </div>
         </body></html>`)
     })
     await listen(previewServer)
@@ -416,13 +555,21 @@ const run = async (): Promise<PreloadSmokeResult> => {
         unsubscribeSession()
         return result
       })()
-    `)) as Omit<PreloadSmokeResult, 'consoleErrors' | 'previewPickWorks'>
+    `)) as Omit<
+      PreloadSmokeResult,
+      'consoleErrors' | 'previewPickWorks' | 'dynamicPartialLoadWorks'
+    >
     writeStage('renderer-evaluated')
 
     const previewPickWorks = await verifyPreviewPick(window, preview, previewUrl)
     writeStage('preview-picker-verified')
+    const dynamicPartialLoadWorks = await verifyDynamicPartialLoad(
+      window,
+      `${previewUrl}partial-load`
+    )
+    writeStage('dynamic-partial-load-verified')
 
-    return { ...result, previewPickWorks, consoleErrors }
+    return { ...result, previewPickWorks, dynamicPartialLoadWorks, consoleErrors }
   } finally {
     writeStage('cleanup')
     preview?.close()
@@ -456,6 +603,7 @@ const main = async (): Promise<void> => {
       !result.taskConfigExportWorks ||
       !result.taskConfigImportWorks ||
       !result.previewPickWorks ||
+      !result.dynamicPartialLoadWorks ||
       result.consoleErrors.some((message) =>
         /onRunProgress|Cannot read properties of undefined|Uncaught/i.test(message)
       )
