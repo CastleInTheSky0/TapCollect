@@ -49,6 +49,18 @@ const downloadDisabled = computed(() =>
   !updateAvailable.value ||
   !checkResult.value?.release.asset
 )
+// 本地开发无法下载安装包，提供完成态数据用于样式验收。
+const displayedDownloadedUpdate = computed<DownloadedUpdate | null>(() => {
+  if (downloadedUpdate.value) return downloadedUpdate.value
+  if (!runtimeInfo.value?.developmentPreview) return null
+  return {
+    downloadId: 'development-preview',
+    releaseVersion: runtimeInfo.value.version,
+    fileName: `TapCollect-${runtimeInfo.value.version}-${runtimeInfo.value.architecture}.exe`,
+    size: 95_210_701,
+    digestVerified: true
+  }
+})
 
 const formatBytes = (value: number): string => {
   if (!Number.isFinite(value) || value <= 0) return '0 B'
@@ -196,14 +208,14 @@ onBeforeUnmount(removeProgressListener)
           <div><strong>正在检查新版本…</strong><span>正在连接 GitHub Releases</span></div>
         </div>
 
-        <template v-else-if="downloadedUpdate">
+        <template v-else-if="displayedDownloadedUpdate">
           <div class="update-ready">
             <span class="ready-icon">
               <CheckCircleIcon />
             </span>
             <div>
               <strong>更新已下载并校验完成</strong>
-              <span>{{ downloadedUpdate.fileName }} · {{ formatBytes(downloadedUpdate.size) }}</span>
+              <span>{{ displayedDownloadedUpdate.fileName }} · {{ formatBytes(displayedDownloadedUpdate.size) }}</span>
             </div>
           </div>
           <t-button block theme="primary" :loading="action === 'installing'" @click="installUpdate">
