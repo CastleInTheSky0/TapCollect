@@ -20,6 +20,9 @@ type TaskListPageSource = Pick<TaskConfig, 'listUrl' | 'pagination'> & {
 
 const markerCount = (value: string): number => value.split('{page}').length - 1
 
+const isPositiveSafeInteger = (value: number): boolean =>
+  Number.isSafeInteger(value) && value >= 1
+
 const resolveHttpUrl = (value: string): URL | null => {
   try {
     const url = new URL(value)
@@ -105,24 +108,16 @@ export const analyzeListPageRules = (
     errors.push('点击下一页模式只能配置一条固定列表 URL')
   }
   if (mode === 'click') {
-    if (
-      !Number.isInteger(pagination.maxPages) ||
-      pagination.maxPages < 1 ||
-      pagination.maxPages > 500
-    ) {
-      errors.push('动态分页最大采集页数必须在 1–500 之间')
+    if (!isPositiveSafeInteger(pagination.maxPages)) {
+      errors.push('动态分页最大采集页数必须是正整数')
     }
   } else if (templateRule) {
     if (!Number.isInteger(pagination.startPage)) errors.push('分页起始值必须是整数')
     if (!Number.isInteger(pagination.step) || pagination.step === 0) {
       errors.push('分页步长必须是非零整数')
     }
-    if (
-      !Number.isInteger(pagination.maxPages) ||
-      pagination.maxPages < 1 ||
-      pagination.maxPages > 500
-    ) {
-      errors.push('分页模板最大采集页数必须在 1–500 之间')
+    if (!isPositiveSafeInteger(pagination.maxPages)) {
+      errors.push('分页模板最大采集页数必须是正整数')
     }
   }
 

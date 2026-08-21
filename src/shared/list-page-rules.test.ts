@@ -64,6 +64,23 @@ describe('list page rules', () => {
     ])
   })
 
+  it('accepts page limits above 500 for click and template pagination', () => {
+    const click = analyzeListPageRules(['https://example.com/dynamic'], {
+      mode: 'click',
+      startPage: 1,
+      step: 1,
+      maxPages: 10_000
+    })
+    const template = analyzeListPageRules(['https://example.com/page_{page}.html'], {
+      startPage: 1,
+      step: 1,
+      maxPages: 10_000
+    })
+
+    expect(click.errors).toEqual([])
+    expect(template.errors).toEqual([])
+  })
+
   it('rejects templates, multiple URLs, and an invalid limit in click pagination', () => {
     const analysis = analyzeListPageRules(
       ['https://example.com/dynamic', 'https://example.com/page_{page}.html'],
@@ -74,10 +91,37 @@ describe('list page rules', () => {
       expect.arrayContaining([
         '第 2 行在动态分页模式下不能包含 {page}',
         '点击下一页模式只能配置一条固定列表 URL',
-        '动态分页最大采集页数必须在 1–500 之间'
+        '动态分页最大采集页数必须是正整数'
       ])
     )
   })
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid click page limit: %s',
+    (maxPages) => {
+      const analysis = analyzeListPageRules(['https://example.com/dynamic'], {
+        mode: 'click',
+        startPage: 1,
+        step: 1,
+        maxPages
+      })
+
+      expect(analysis.errors).toContain('动态分页最大采集页数必须是正整数')
+    }
+  )
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid template page limit: %s',
+    (maxPages) => {
+      const analysis = analyzeListPageRules(['https://example.com/page_{page}.html'], {
+        startPage: 1,
+        step: 1,
+        maxPages
+      })
+
+      expect(analysis.errors).toContain('分页模板最大采集页数必须是正整数')
+    }
+  )
 
   it('rejects multiple templates, a zero step, and mixed hostnames', () => {
     const multipleTemplates = analyzeListPageRules(

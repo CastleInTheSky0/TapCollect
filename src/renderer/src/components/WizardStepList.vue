@@ -133,7 +133,6 @@ const emit = defineEmits<{
           v-model="task.pagination.maxPages"
           theme="column"
           :min="1"
-          :max="500"
           :step="1"
           :decimal-places="0"
         />
@@ -190,7 +189,6 @@ const emit = defineEmits<{
           v-model="task.pagination.maxPages"
           theme="column"
           :min="1"
-          :max="500"
           :step="1"
           :decimal-places="0"
         />
