@@ -178,13 +178,22 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
               <span>固定值</span>
               <t-textarea v-model="value.fixedValue" :autosize="{ minRows: 2, maxRows: 6 }" />
             </div>
-            <div v-else-if="value.mode === 'system'" class="field full">
-              <span>系统值</span>
-              <t-select v-model="value.systemValue">
-                <t-option value="list-url" label="当前列表 URL" />
-                <t-option value="detail-url" label="当前详情 URL" />
-                <t-option value="collected-at" label="采集时间（ISO）" />
-              </t-select>
+            <div v-else-if="value.mode === 'system'" class="system-value-editor full">
+              <div class="field">
+                <span>系统值</span>
+                <t-select v-model="value.systemValue">
+                  <t-option value="list-url" label="当前列表 URL" />
+                  <t-option value="detail-url" label="当前详情 URL" />
+                  <t-option value="collected-at" label="采集时间（默认 ISO）" />
+                </t-select>
+              </div>
+              <div v-if="value.systemValue === 'collected-at'" class="timestamp-control">
+                <div>
+                  <strong>转为毫秒时间戳</strong>
+                  <span>仅转换当前合并项</span>
+                </div>
+                <t-switch v-model="value.convertToTimestamp" />
+              </div>
             </div>
             <t-alert v-else class="mapping-note full" theme="info" message="站外记录使用补全后的外链 URL；站内记录此子值为空。" />
           </div>
@@ -201,13 +210,22 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
           <t-textarea v-model="mapping.fixedValue" :autosize="{ minRows: 3, maxRows: 7 }" />
         </div>
 
-        <div v-else-if="mapping.mode === 'system'" class="field full">
-          <span>系统值</span>
-          <t-select v-model="mapping.systemValue">
-            <t-option value="list-url" label="当前列表 URL" />
-            <t-option value="detail-url" label="当前详情 URL" />
-            <t-option value="collected-at" label="采集时间（ISO）" />
-          </t-select>
+        <div v-else-if="mapping.mode === 'system'" class="system-value-editor full">
+          <div class="field">
+            <span>系统值</span>
+            <t-select v-model="mapping.systemValue">
+              <t-option value="list-url" label="当前列表 URL" />
+              <t-option value="detail-url" label="当前详情 URL" />
+              <t-option value="collected-at" label="采集时间（默认 ISO）" />
+            </t-select>
+          </div>
+          <div v-if="mapping.systemValue === 'collected-at'" class="timestamp-control">
+            <div>
+              <strong>转为毫秒时间戳</strong>
+              <span>开启后输出 13 位毫秒值</span>
+            </div>
+            <t-switch v-model="mapping.convertToTimestamp" />
+          </div>
         </div>
 
         <t-alert
@@ -354,6 +372,43 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 }
 
 .cdata-control span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.system-value-editor {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timestamp-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border: 1px solid #dfe6e7;
+  border-radius: 6px;
+  background: #fff;
+  gap: 12px;
+}
+
+.timestamp-control>div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.timestamp-control strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.timestamp-control span {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.5;

@@ -29,7 +29,11 @@ import {
 import { HttpClient, HttpRequestError } from './http-client'
 import type { DynamicPageProvider, DynamicPageSession, DynamicPageSnapshot } from './dynamic-page'
 import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
-import { missingRequiredMergeFields, resolveFieldValue } from './field-values'
+import {
+  missingRequiredMergeFields,
+  resolveFieldValue,
+  resolveFieldValueResult
+} from './field-values'
 import { createOutputSession } from '@main/services/output-writer'
 import { ResourceDownloader } from '@main/services/resource-downloader'
 import type { TaskStore } from '@main/services/task-store'
@@ -263,6 +267,7 @@ export class CollectorEngine {
 
     try {
       for (const candidate of page.candidates.slice(0, 3)) {
+        failures.push(...candidate.warnings)
         if (candidate.missingListFields.length > 0) {
           failures.push(...missingFailures(candidate, 'list-field', candidate.missingListFields))
           continue
@@ -528,6 +533,7 @@ export class CollectorEngine {
       let duplicateCount = 0
 
       for (const candidate of extracted.candidates) {
+        for (const warning of candidate.warnings) await appendFailure(warning)
         let key = ''
         if (task.detail.enabled) {
           const link = candidate.externalUrl || candidate.detailUrl
@@ -1011,12 +1017,21 @@ export class CollectorEngine {
       if (extracted.missingFields.length > 0) {
         return {
           record: null,
-          failures: missingFailures(candidate, 'detail-field', extracted.missingFields),
+          failures: [
+            ...extracted.warnings,
+            ...missingFailures(candidate, 'detail-field', extracted.missingFields)
+          ],
           counter: 'skipped',
           matchCounts: extracted.matchCounts
         }
       }
-      return this.finalizeRecord(task, candidate, extracted.record, extracted.matchCounts)
+      return this.finalizeRecord(
+        task,
+        candidate,
+        extracted.record,
+        extracted.matchCounts,
+        extracted.warnings
+      )
     } catch (error) {
       const retries = error instanceof HttpRequestError ? error.retries : 0
       const stage = error instanceof HttpRequestError ? 'detail-request' : 'detail-extraction'
@@ -1056,12 +1071,21 @@ export class CollectorEngine {
       if (extracted.missingFields.length > 0) {
         outcome = {
           record: null,
-          failures: missingFailures(candidate, 'detail-field', extracted.missingFields),
+          failures: [
+            ...extracted.warnings,
+            ...missingFailures(candidate, 'detail-field', extracted.missingFields)
+          ],
           counter: 'skipped',
           matchCounts: extracted.matchCounts
         }
       } else {
-        outcome = this.finalizeRecord(task, candidate, extracted.record, extracted.matchCounts)
+        outcome = this.finalizeRecord(
+          task,
+          candidate,
+          extracted.record,
+          extracted.matchCounts,
+          extracted.warnings
+        )
       }
     } catch (error) {
       outcome = {
@@ -1092,18 +1116,40 @@ export class CollectorEngine {
     task: TaskConfig,
     candidate: ListCandidate,
     record: ExtractedRecord,
-    matchCounts: Record<string, number>
+    matchCounts: Record<string, number>,
+    warnings: RecordFailure[] = []
   ): CandidateOutcome {
+    const outputTemplate = taskOutputTemplate(task)
+    const valueWarnings = outputTemplate
+      ? outputTemplate.fields.flatMap((field) => {
+          const mapping = outputTemplate.mappings.find(
+            (candidateMapping) => candidateMapping.fieldPath === field.path
+          )
+          if (!mapping || mapping.mode === 'unconfigured') return []
+          return resolveFieldValueResult(mapping, field, record).warnings.map((warning) =>
+            createRecordFailure(
+              { ...candidate, detailUrl: record.detailUrl },
+              'date-conversion',
+              warning.reason,
+              warning.fieldPath
+            )
+          )
+        })
+      : []
+    const allWarnings = [...warnings, ...valueWarnings]
     const missingFields = missingRequiredMergeFields(task, record)
     if (missingFields.length > 0) {
       return {
         record: null,
-        failures: missingFailures(candidate, 'merged-field', missingFields),
+        failures: [
+          ...allWarnings,
+          ...missingFailures(candidate, 'merged-field', missingFields)
+        ],
         counter: 'skipped',
         matchCounts
       }
     }
-    return { record, failures: [], counter: 'success', matchCounts }
+    return { record, failures: allWarnings, counter: 'success', matchCounts }
   }
 
   private buildResult(

@@ -4,6 +4,7 @@ import type {
   MergeValueMode,
   PageExtractionConfig
 } from './types'
+import { normalizeContentFilterSelectors } from './content-filter'
 
 const MERGE_VALUE_MODES = new Set<MergeValueMode>([
   'page',
@@ -22,7 +23,9 @@ export const createPageExtractionConfig = (): PageExtractionConfig => ({
   separator: ',',
   trim: true,
   collapseWhitespace: false,
-  replacements: []
+  contentFilterSelectors: [],
+  replacements: [],
+  convertToTimestamp: false
 })
 
 export const createMergeValue = (id: string): MergeValueConfig => ({
@@ -46,7 +49,9 @@ export const normalizeMergeValueConfig = (
     ...value,
     id: value.id?.trim() || fallbackId,
     mode,
-    replacements: Array.isArray(value.replacements) ? value.replacements : []
+    contentFilterSelectors: normalizeContentFilterSelectors(value.contentFilterSelectors),
+    replacements: Array.isArray(value.replacements) ? value.replacements : [],
+    convertToTimestamp: Boolean(value.convertToTimestamp)
   }
 }
 
@@ -54,7 +59,9 @@ export const normalizeFieldMappingConfig = (mapping: FieldMapping): FieldMapping
   ...createPageExtractionConfig(),
   ...mapping,
   required: mapping.required ?? false,
+  contentFilterSelectors: normalizeContentFilterSelectors(mapping.contentFilterSelectors),
   replacements: Array.isArray(mapping.replacements) ? mapping.replacements : [],
+  convertToTimestamp: Boolean(mapping.convertToTimestamp),
   fixedValue: mapping.fixedValue ?? '',
   systemValue: mapping.systemValue ?? 'collected-at',
   mergeSeparator: mapping.mergeSeparator ?? '',

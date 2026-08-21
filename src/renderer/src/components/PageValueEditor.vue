@@ -1,5 +1,11 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { AddIcon, CursorIcon, DeleteIcon, SearchIcon } from 'tdesign-icons-vue-next'
+import {
+  CONTENT_FILTER_SELECTOR_PRESETS,
+  normalizeContentFilterSelectors,
+  splitContentFilterInput
+} from '@shared/content-filter'
 import type { PageExtractionConfig } from '@shared/types'
 
 type PageEditorModel = PageExtractionConfig & { required?: boolean }
@@ -17,6 +23,69 @@ defineEmits<{
 
 const addReplacement = (): void => {
   model.value.replacements.push({ id: crypto.randomUUID(), from: '', to: '' })
+}
+
+const contentFilterOptions = CONTENT_FILTER_SELECTOR_PRESETS.map((selector) => ({
+  label: selector,
+  value: selector
+}))
+const contentFilterInput = ref('')
+const contentFilterError = ref('')
+
+const selectorValidationError = (selector: string): string => {
+  try {
+    document.createElement('div').querySelector(selector)
+    return ''
+  } catch {
+    return `CSS 选择器“${selector}”无效，请修改后再添加`
+  }
+}
+
+const appendContentFilterSelectors = (selectors: string[]): string => {
+  const normalized = normalizeContentFilterSelectors(selectors)
+  const invalid = normalized.find((selector) => selectorValidationError(selector))
+  if (invalid) {
+    contentFilterError.value = selectorValidationError(invalid)
+    return invalid
+  }
+  model.value.contentFilterSelectors = normalizeContentFilterSelectors([
+    ...model.value.contentFilterSelectors,
+    ...normalized
+  ])
+  contentFilterError.value = ''
+  return ''
+}
+
+const handleContentFilterInput = (value: string): void => {
+  const { selectors, pending } = splitContentFilterInput(value)
+  if (selectors.length === 0) {
+    contentFilterInput.value = pending
+    contentFilterError.value = ''
+    return
+  }
+  const invalid = appendContentFilterSelectors(selectors)
+  contentFilterInput.value = invalid || pending
+}
+
+const createContentFilterSelector = (value: string | number | boolean | bigint): void => {
+  const selector = String(value).trim()
+  const invalid = appendContentFilterSelectors([selector])
+  contentFilterInput.value = invalid ? selector : ''
+}
+
+const setContentFilterSelectors = (value: unknown): void => {
+  const selectors = normalizeContentFilterSelectors(value)
+  const current = new Set(model.value.contentFilterSelectors)
+  const invalid = selectors.find(
+    (selector) => !current.has(selector) && selectorValidationError(selector)
+  )
+  if (invalid) {
+    contentFilterError.value = selectorValidationError(invalid)
+    contentFilterInput.value = invalid
+    return
+  }
+  model.value.contentFilterSelectors = selectors
+  contentFilterError.value = ''
 }
 </script>
 
@@ -70,6 +139,25 @@ const addReplacement = (): void => {
       <span>属性名</span>
       <t-input v-model="model.attribute" placeholder="href / src / content" />
     </div>
+    <div v-else class="field content-filter-field full">
+      <span>过滤标签及内容</span>
+      <t-select
+        :value="model.contentFilterSelectors"
+        :input-value="contentFilterInput"
+        :options="contentFilterOptions"
+        :status="contentFilterError ? 'error' : 'default'"
+        :tips="contentFilterError || '可从下拉选择常用标签，也可输入 CSS 选择器后按逗号生成 Tag'"
+        :tag-input-props="{ excessTagsDisplayType: 'break-line' }"
+        multiple
+        filterable
+        creatable
+        clearable
+        placeholder="例如 h1、.share、#advertisement"
+        @change="setContentFilterSelectors"
+        @create="createContentFilterSelector"
+        @input-change="handleContentFilterInput"
+      />
+    </div>
     <div class="field">
       <span>多元素处理</span>
       <t-select v-model="model.matchMode">
@@ -87,6 +175,13 @@ const addReplacement = (): void => {
       <t-checkbox v-if="model.extraction === 'text'" v-model="model.collapseWhitespace">
         合并连续空白
       </t-checkbox>
+    </div>
+    <div class="timestamp-control full">
+      <div>
+        <strong>转为毫秒时间戳</strong>
+        <span>仅转换当前字段；正文、标题及其他未开启字段保持原样</span>
+      </div>
+      <t-switch v-model="model.convertToTimestamp" />
     </div>
     <div class="replace-block full">
       <div class="subheading">
@@ -158,6 +253,10 @@ const addReplacement = (): void => {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.content-filter-field :deep(.t-tag-input) {
+  min-height: 34px;
+}
+
 .check-line {
   display: flex;
   flex-wrap: wrap;
@@ -167,6 +266,36 @@ const addReplacement = (): void => {
 
 .check-line :deep(.t-checkbox__label) {
   font-size: 10px;
+}
+
+.timestamp-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border: 1px solid #dfe6e7;
+  border-radius: 6px;
+  background: #fff;
+  gap: 12px;
+}
+
+.timestamp-control>div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.timestamp-control strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.timestamp-control span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
 }
 
 .replace-block {

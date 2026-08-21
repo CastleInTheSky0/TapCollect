@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTask } from './defaults'
+import { createFieldMapping, createTask } from './defaults'
 import {
   createTaskConfigBundle,
   parseTaskConfigBundle,
@@ -56,13 +56,25 @@ describe('task config bundle', () => {
     const source = createTask('source-id', '2025-01-01T00:00:00.000Z')
     source.name = '导入任务'
     source.listPageRules = ['https://example.com/list.html']
+    const field = {
+      path: 'published',
+      name: '发布时间',
+      kind: 'element' as const,
+      cdata: false,
+      sampleValue: ''
+    }
+    const mapping = createFieldMapping(field)
+    mapping.mode = 'page'
+    mapping.selector = '.published'
+    mapping.contentFilterSelectors = ['h1', '.share']
+    mapping.convertToTimestamp = true
     source.xml = {
       fileName: 'template.xml',
-      content: '<root><item><title/></item></root>',
+      content: '<root><item><published/></item></root>',
       encoding: 'UTF-8',
       recordPath: '/root/item',
-      fields: [],
-      mappings: [],
+      fields: [field],
+      mappings: [mapping],
       importedAt: '2026-08-09T00:00:00.000Z'
     }
 
@@ -80,6 +92,8 @@ describe('task config bundle', () => {
       updatedAt: '2026-08-09T02:00:00.000Z'
     })
     expect(imported.xml?.content).toBe(source.xml.content)
+    expect(imported.xml?.mappings[0]?.convertToTimestamp).toBe(true)
+    expect(imported.xml?.mappings[0]?.contentFilterSelectors).toEqual(['h1', '.share'])
   })
 
   it('rejects malformed task entries with a field-specific reason', () => {

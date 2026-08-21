@@ -1,4 +1,5 @@
 import fontoxpath from 'fontoxpath'
+import { normalizeContentFilterSelectors } from '@shared/content-filter'
 import type { PageExtractionConfig, SelectorType } from '@shared/types'
 
 const { evaluateXPathToNodes } = fontoxpath
@@ -25,6 +26,23 @@ export const selectNodes = (
 
 const SCRIPT_CONTENT_SELECTOR = 'script,noscript'
 
+export class ContentFilterSelectorError extends Error {
+  constructor(readonly selector: string) {
+    super(`内容过滤 CSS 选择器“${selector}”无效`)
+    this.name = 'ContentFilterSelectorError'
+  }
+}
+
+const assertContentFilterSelectors = (root: QueryRoot, selectors: string[]): void => {
+  for (const selector of selectors) {
+    try {
+      root.querySelector(selector)
+    } catch {
+      throw new ContentFilterSelectorError(selector)
+    }
+  }
+}
+
 const isScriptContentNode = (node: Node): boolean => {
   if (node.nodeType === node.ELEMENT_NODE) {
     return (node as Element).matches(SCRIPT_CONTENT_SELECTOR)
@@ -32,28 +50,65 @@ const isScriptContentNode = (node: Node): boolean => {
   return Boolean(node.parentElement?.closest(SCRIPT_CONTENT_SELECTOR))
 }
 
-const cloneWithoutScriptContent = (element: Element): Element => {
+const isContentFilterMatch = (node: Node, selectors: string[]): boolean => {
+  const element = node.nodeType === node.ELEMENT_NODE ? (node as Element) : node.parentElement
+  return selectors.some((selector) => Boolean(element?.closest(selector)))
+}
+
+const cloneWithoutFilteredContent = (
+  element: Element,
+  stripScriptContent: boolean,
+  selectors: string[]
+): Element => {
   const clone = element.cloneNode(true) as Element
-  clone.querySelectorAll(SCRIPT_CONTENT_SELECTOR).forEach((child) => child.remove())
+  if (stripScriptContent) {
+    clone.querySelectorAll(SCRIPT_CONTENT_SELECTOR).forEach((child) => child.remove())
+  }
+  for (const selector of selectors) {
+    clone.querySelectorAll(selector).forEach((child) => child.remove())
+  }
   return clone
 }
 
-const nodeText = (node: Node, stripScriptContent: boolean): string => {
-  if (!stripScriptContent) return node.textContent ?? ''
-  if (isScriptContentNode(node)) return ''
+const nodeText = (
+  node: Node,
+  stripScriptContent: boolean,
+  contentFilterSelectors: string[]
+): string => {
+  if (!stripScriptContent && contentFilterSelectors.length === 0) return node.textContent ?? ''
+  if (stripScriptContent && isScriptContentNode(node)) return ''
+  if (isContentFilterMatch(node, contentFilterSelectors)) return ''
   if (node.nodeType === node.ELEMENT_NODE) {
-    return cloneWithoutScriptContent(node as Element).textContent ?? ''
+    return cloneWithoutFilteredContent(
+      node as Element,
+      stripScriptContent,
+      contentFilterSelectors
+    ).textContent ?? ''
   }
   return node.textContent ?? ''
 }
 
-const nodeHtml = (node: Node, stripScriptContent: boolean): string => {
-  if (stripScriptContent && isScriptContentNode(node)) return ''
+const nodeHtml = (
+  node: Node,
+  stripScriptContent: boolean,
+  contentFilterSelectors: string[]
+): string => {
+  if (
+    (stripScriptContent && isScriptContentNode(node)) ||
+    isContentFilterMatch(node, contentFilterSelectors)
+  ) {
+    return ''
+  }
   if (node.nodeType === node.ELEMENT_NODE) {
     const element = node as Element
-    return stripScriptContent ? cloneWithoutScriptContent(element).innerHTML : element.innerHTML
+    if (!stripScriptContent && contentFilterSelectors.length === 0) return element.innerHTML
+    return cloneWithoutFilteredContent(
+      element,
+      stripScriptContent,
+      contentFilterSelectors
+    ).innerHTML
   }
-  return nodeText(node, stripScriptContent)
+  return nodeText(node, stripScriptContent, contentFilterSelectors)
 }
 
 const nodeAttribute = (node: Node, attribute: string): string => {
@@ -71,10 +126,17 @@ export const extractRawValue = (
 ): string => {
   const matches = selectNodes(root, mapping.selectorType, mapping.selector)
   const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
+  const contentFilterSelectors =
+    mapping.extraction === 'attribute'
+      ? []
+      : normalizeContentFilterSelectors(mapping.contentFilterSelectors)
+  assertContentFilterSelectors(root, contentFilterSelectors)
   const values = selected.map((node) => {
-    if (mapping.extraction === 'html') return nodeHtml(node, stripScriptContent)
+    if (mapping.extraction === 'html') {
+      return nodeHtml(node, stripScriptContent, contentFilterSelectors)
+    }
     if (mapping.extraction === 'attribute') return nodeAttribute(node, mapping.attribute)
-    return nodeText(node, stripScriptContent)
+    return nodeText(node, stripScriptContent, contentFilterSelectors)
   })
   return values.join(mapping.separator)
 }

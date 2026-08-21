@@ -925,6 +925,76 @@ describe('CollectorEngine', () => {
     })
   })
 
+  it('keeps a record when an optional date conversion fails and logs the warning', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-date-warning-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('task-date-warning', root)
+    task.listUrl = 'https://example.com/list'
+    task.listPageRules = [task.listUrl]
+    task.xml = configureXmlRecord(
+      '<book><article><title/><published/></article></book>',
+      'date-template.xml',
+      '/book/article'
+    )
+    const title = task.xml.mappings.find((mapping) => mapping.fieldPath === 'title')!
+    title.mode = 'page'
+    title.pageSource = 'list'
+    title.selector = '.title'
+    const published = task.xml.mappings.find((mapping) => mapping.fieldPath === 'published')!
+    published.mode = 'page'
+    published.pageSource = 'list'
+    published.selector = '.published'
+    published.convertToTimestamp = true
+    task.dedupeFieldPath = 'title'
+
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html:
+        '<div class="item"><span class="title">正常记录</span>' +
+        '<span class="published">不是日期</span></div>',
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient
+    )
+
+    const preview = await engine.testTask(task)
+
+    expect(preview.records).toHaveLength(1)
+    expect(preview.rows[0]?.published).toBe('')
+    expect(preview.failures).toEqual([
+      expect.objectContaining({
+        stage: 'date-conversion',
+        fieldPath: 'published',
+        listUrl: task.listUrl,
+        reason: expect.stringContaining('不是日期')
+      })
+    ])
+
+    const logs: string[] = []
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: (entry) => logs.push(entry.message)
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.counters).toMatchObject({ succeeded: 1, skipped: 0, failed: 0 })
+    const xml = await readOutputXml(result.outputFiles[0]!, task.xml.encoding)
+    expect(xml).toContain('<title>正常记录</title>')
+    expect(xml).toContain('<published></published>')
+    const errorLog = await readFile(result.errorLogPath, 'utf8')
+    expect(errorLog).toContain('date-conversion')
+    expect(errorLog).toContain('published')
+    expect(errorLog).toContain('不是日期')
+    expect(errorLog).toContain(task.listUrl)
+    expect(logs.some((message) => message.includes('date-conversion/published'))).toBe(true)
+  })
+
   it('downloads the same planned resource only once across multiple records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-resource-dedupe-'))
     temporaryDirectories.push(root)

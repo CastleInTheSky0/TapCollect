@@ -1,5 +1,9 @@
 import { mergePageValueKey } from '@shared/field-mapping'
 import { taskOutputMappings, taskOutputTemplate } from '@shared/output-template'
+import {
+  convertDateToTimestamp,
+  timestampConversionFailureReason
+} from '@shared/date-to-timestamp'
 import type {
   ExtractedRecord,
   FieldMapping,
@@ -15,6 +19,16 @@ export interface PageValueEntry {
   valueKey: string
   matchKey: string
   mapping: PageExtractionConfig
+}
+
+export interface FieldValueWarning {
+  fieldPath: string
+  reason: string
+}
+
+export interface ResolvedFieldValue {
+  value: string
+  warnings: FieldValueWarning[]
 }
 
 export const pageValueEntries = (task: TaskConfig, source: PageSource): PageValueEntry[] => {
@@ -49,36 +63,86 @@ const systemValue = (value: FieldMapping['systemValue'], record: ExtractedRecord
   return record.collectedAt
 }
 
+const resolveSystemValue = (
+  config: PageExtractionConfig,
+  value: FieldMapping['systemValue'],
+  record: ExtractedRecord,
+  fieldPath: string
+): ResolvedFieldValue => {
+  const raw = systemValue(value, record)
+  if (!config.convertToTimestamp || value !== 'collected-at') {
+    return { value: raw, warnings: [] }
+  }
+  const converted = convertDateToTimestamp(raw)
+  if (converted.ok) return { value: converted.value, warnings: [] }
+  return {
+    value: '',
+    warnings: [
+      {
+        fieldPath,
+        reason: timestampConversionFailureReason(raw, converted.reason)
+      }
+    ]
+  }
+}
+
 const mergeValue = (
   mapping: FieldMapping,
   value: MergeValueConfig,
-  record: ExtractedRecord
-): string => {
+  record: ExtractedRecord,
+  index: number
+): ResolvedFieldValue => {
   if (value.mode === 'page') {
-    return record.values[mergePageValueKey(mapping.fieldPath, value.id)] ?? ''
+    return {
+      value: record.values[mergePageValueKey(mapping.fieldPath, value.id)] ?? '',
+      warnings: []
+    }
   }
-  if (value.mode === 'fixed') return value.fixedValue
-  if (value.mode === 'system') return systemValue(value.systemValue, record)
-  return record.externalUrl
+  if (value.mode === 'fixed') return { value: value.fixedValue, warnings: [] }
+  if (value.mode === 'system') {
+    return resolveSystemValue(
+      value,
+      value.systemValue,
+      record,
+      `${mapping.fieldPath} / 合并项 ${index + 1}`
+    )
+  }
+  return { value: record.externalUrl, warnings: [] }
+}
+
+export const resolveFieldValueResult = (
+  mapping: FieldMapping,
+  definition: OutputFieldDefinition,
+  record: ExtractedRecord
+): ResolvedFieldValue => {
+  if (mapping.mode === 'unconfigured') throw new Error(`字段 ${definition.path} 尚未配置`)
+  if (mapping.mode === 'preserve') return { value: definition.sampleValue, warnings: [] }
+  if (mapping.mode === 'empty') return { value: '', warnings: [] }
+  if (mapping.mode === 'fixed') return { value: mapping.fixedValue, warnings: [] }
+  if (mapping.mode === 'external-url') return { value: record.externalUrl, warnings: [] }
+  if (mapping.mode === 'system') {
+    return resolveSystemValue(mapping, mapping.systemValue, record, mapping.fieldPath)
+  }
+  if (mapping.mode === 'page') {
+    return { value: record.values[definition.path] ?? '', warnings: [] }
+  }
+  const resolved = mapping.mergeValues.map((value, index) =>
+    mergeValue(mapping, value, record, index)
+  )
+  return {
+    value: resolved
+      .map((item) => item.value)
+      .filter((value) => value.length > 0)
+      .join(mapping.mergeSeparator),
+    warnings: resolved.flatMap((item) => item.warnings)
+  }
 }
 
 export const resolveFieldValue = (
   mapping: FieldMapping,
   definition: OutputFieldDefinition,
   record: ExtractedRecord
-): string => {
-  if (mapping.mode === 'unconfigured') throw new Error(`字段 ${definition.path} 尚未配置`)
-  if (mapping.mode === 'preserve') return definition.sampleValue
-  if (mapping.mode === 'empty') return ''
-  if (mapping.mode === 'fixed') return mapping.fixedValue
-  if (mapping.mode === 'external-url') return record.externalUrl
-  if (mapping.mode === 'system') return systemValue(mapping.systemValue, record)
-  if (mapping.mode === 'page') return record.values[definition.path] ?? ''
-  return mapping.mergeValues
-    .map((value) => mergeValue(mapping, value, record))
-    .filter((value) => value.length > 0)
-    .join(mapping.mergeSeparator)
-}
+): string => resolveFieldValueResult(mapping, definition, record).value
 
 const ignoresExternalDetailRequirement = (
   mapping: FieldMapping,

@@ -13,10 +13,19 @@ import {
   processHtmlWithResources,
   type ProcessedResourceValue
 } from './html-processing'
-import { cleanTextValue, extractRawValue, selectNodes } from './selector-engine'
+import {
+  cleanTextValue,
+  ContentFilterSelectorError,
+  extractRawValue,
+  selectNodes
+} from './selector-engine'
 import { hasSameHostname, resolveHttpUrl } from './url-utils'
 import { pageValueEntries } from './field-values'
 import { taskOutputFields, taskOutputMappings } from '@shared/output-template'
+import {
+  convertDateToTimestamp,
+  timestampConversionFailureReason
+} from '@shared/date-to-timestamp'
 
 export interface ListCandidate {
   sequence: number
@@ -30,6 +39,7 @@ export interface ListCandidate {
   values: Record<string, string>
   resources: ResourcePlan[]
   missingListFields: string[]
+  warnings: RecordFailure[]
 }
 
 export interface ExtractListPageResult {
@@ -52,36 +62,69 @@ const applyFieldCleanup = (value: string, mapping: PageExtractionConfig): string
   return result
 }
 
+interface ExtractedMappingValue extends ProcessedResourceValue {
+  conversionError: string
+}
+
+const applyTimestampConversion = (
+  processed: ProcessedResourceValue,
+  mapping: PageExtractionConfig
+): ExtractedMappingValue => {
+  if (!mapping.convertToTimestamp) return { ...processed, conversionError: '' }
+  const converted = convertDateToTimestamp(processed.value)
+  if (converted.ok) return { ...processed, value: converted.value, conversionError: '' }
+  return {
+    value: '',
+    resources: [],
+    conversionError: timestampConversionFailureReason(processed.value, converted.reason)
+  }
+}
+
 const extractMappingValue = (
   root: Document | Element,
   mapping: PageExtractionConfig,
   baseUrl: string,
   pageUrl: string,
-  task: TaskConfig
-): ProcessedResourceValue => {
-  const raw = extractRawValue(root, mapping, task.html.cleanHtml)
+  task: TaskConfig,
+  fieldLabel: string
+): ExtractedMappingValue => {
+  let raw = ''
+  try {
+    raw = extractRawValue(root, mapping, task.html.cleanHtml)
+  } catch (error) {
+    if (error instanceof ContentFilterSelectorError) {
+      throw new Error(`字段“${fieldLabel}”：${error.message}`)
+    }
+    throw error
+  }
   if (mapping.extraction === 'html') {
     const processed = processHtmlWithResources(raw, baseUrl, pageUrl, task)
     const value = applyFieldCleanup(processed.value, mapping)
-    return {
-      value,
-      resources: processed.resources.filter((plan) => value.includes(plan.xmlUrl))
-    }
+    return applyTimestampConversion(
+      {
+        value,
+        resources: processed.resources.filter((plan) => value.includes(plan.xmlUrl))
+      },
+      mapping
+    )
   }
   if (mapping.extraction === 'attribute') {
     if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
-      return {
-        value: applyFieldCleanup(
-          processAttributeValue(
-            raw,
-            baseUrl,
-            task.html.absolutizeResources,
-            task.resourceReplacements
+      return applyTimestampConversion(
+        {
+          value: applyFieldCleanup(
+            processAttributeValue(
+              raw,
+              baseUrl,
+              task.html.absolutizeResources,
+              task.resourceReplacements
+            ),
+            mapping
           ),
-          mapping
-        ),
-        resources: []
-      }
+          resources: []
+        },
+        mapping
+      )
     }
     const matches = selectNodes(root, mapping.selectorType, mapping.selector)
     const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
@@ -111,14 +154,20 @@ const extractMappingValue = (
       processedValues.map((processed) => processed.value).join(mapping.separator),
       mapping
     )
-    return {
-      value,
-      resources: processedValues
-        .flatMap((processed) => processed.resources)
-        .filter((plan) => value.includes(plan.xmlUrl))
-    }
+    return applyTimestampConversion(
+      {
+        value,
+        resources: processedValues
+          .flatMap((processed) => processed.resources)
+          .filter((plan) => value.includes(plan.xmlUrl))
+      },
+      mapping
+    )
   }
-  return { value: applyFieldCleanup(raw, mapping), resources: [] }
+  return applyTimestampConversion(
+    { value: applyFieldCleanup(raw, mapping), resources: [] },
+    mapping
+  )
 }
 
 const extractDetailHref = (item: Element, task: TaskConfig): string => {
@@ -175,13 +224,24 @@ export const extractListPage = (
   const candidates = items.map((item, index): ListCandidate => {
     const values = initialValues(task)
     const resources: ResourcePlan[] = []
+    const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
     for (const entry of entries) {
       matchCounts[entry.matchKey]?.push(
         selectNodes(item, entry.mapping.selectorType, entry.mapping.selector).length
       )
-      const processed = extractMappingValue(item, entry.mapping, baseUrl, pageUrl, task)
+      const processed = extractMappingValue(
+        item,
+        entry.mapping,
+        baseUrl,
+        pageUrl,
+        task,
+        entry.matchKey
+      )
       values[entry.valueKey] = processed.value
       resources.push(...processed.resources)
+      if (processed.conversionError) {
+        conversionWarnings.push({ fieldPath: entry.matchKey, reason: processed.conversionError })
+      }
     }
 
     let detailRequestUrl = ''
@@ -200,7 +260,7 @@ export const extractListPage = (
       }
     }
 
-    return {
+    const candidate = {
       sequence: sequenceStart + index,
       collectedAt: new Date().toISOString(),
       page,
@@ -211,8 +271,13 @@ export const extractListPage = (
       externalUrl,
       values,
       resources,
-      missingListFields: missingRequiredFields(requiredMappings, values)
+      missingListFields: missingRequiredFields(requiredMappings, values),
+      warnings: [] as RecordFailure[]
     }
+    candidate.warnings = conversionWarnings.map((warning) =>
+      createRecordFailure(candidate, 'date-conversion', warning.reason, warning.fieldPath)
+    )
+    return candidate
   })
 
   return { candidates, itemCount: items.length, matchCounts }
@@ -223,7 +288,12 @@ export const extractDetailPage = (
   candidate: ListCandidate,
   html: string,
   pageUrl: string
-): { record: ExtractedRecord; missingFields: string[]; matchCounts: Record<string, number> } => {
+): {
+  record: ExtractedRecord
+  missingFields: string[]
+  matchCounts: Record<string, number>
+  warnings: RecordFailure[]
+} => {
   const dom = new JSDOM(html, { url: pageUrl })
   const { document } = dom.window
   const baseUrl = document.baseURI || pageUrl
@@ -232,16 +302,28 @@ export const extractDetailPage = (
   const values = { ...candidate.values }
   const resources = [...candidate.resources]
   const matchCounts: Record<string, number> = {}
+  const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
   for (const entry of entries) {
     matchCounts[entry.matchKey] = selectNodes(
       document,
       entry.mapping.selectorType,
       entry.mapping.selector
     ).length
-    const processed = extractMappingValue(document, entry.mapping, baseUrl, pageUrl, task)
+    const processed = extractMappingValue(
+      document,
+      entry.mapping,
+      baseUrl,
+      pageUrl,
+      task,
+      entry.matchKey
+    )
     values[entry.valueKey] = processed.value
     resources.push(...processed.resources)
+    if (processed.conversionError) {
+      conversionWarnings.push({ fieldPath: entry.matchKey, reason: processed.conversionError })
+    }
   }
+  const warningContext = { ...candidate, detailUrl: pageUrl }
   return {
     record: {
       sequence: candidate.sequence,
@@ -255,7 +337,10 @@ export const extractDetailPage = (
       resources
     },
     missingFields: missingRequiredFields(requiredMappings, values),
-    matchCounts
+    matchCounts,
+    warnings: conversionWarnings.map((warning) =>
+      createRecordFailure(warningContext, 'date-conversion', warning.reason, warning.fieldPath)
+    )
   }
 }
 

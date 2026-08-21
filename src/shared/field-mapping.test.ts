@@ -37,13 +37,39 @@ describe('field mapping configuration', () => {
 
   it('normalizes missing merge properties from legacy mappings', () => {
     const legacy = mapping()
+    const mergeValue = createMergeValue('legacy-page')
+    legacy.mode = 'merge'
+    legacy.mergeValues = [mergeValue]
     const raw = JSON.parse(JSON.stringify(legacy)) as Record<string, unknown>
     delete raw.mergeSeparator
-    delete raw.mergeValues
+    delete raw.convertToTimestamp
+    delete raw.contentFilterSelectors
+    const rawMergeValue = (raw.mergeValues as Array<Record<string, unknown>>)[0]!
+    delete rawMergeValue.convertToTimestamp
+    delete rawMergeValue.contentFilterSelectors
 
     expect(normalizeFieldMappingConfig(raw as unknown as typeof legacy)).toMatchObject({
       mergeSeparator: '',
-      mergeValues: []
+      convertToTimestamp: false,
+      contentFilterSelectors: [],
+      mergeValues: [
+        { id: 'legacy-page', convertToTimestamp: false, contentFilterSelectors: [] }
+      ]
+    })
+  })
+
+  it('normalizes content filters independently for a field and merge child', () => {
+    const value = mapping()
+    value.contentFilterSelectors = [' h1 ', '.share', 'h1']
+    const child = createMergeValue('body')
+    child.contentFilterSelectors = [' font ', '#advertisement', 'font']
+    value.mergeValues = [child]
+
+    expect(normalizeFieldMappingConfig(value)).toMatchObject({
+      contentFilterSelectors: ['h1', '.share'],
+      mergeValues: [
+        { id: 'body', contentFilterSelectors: ['font', '#advertisement'] }
+      ]
     })
   })
 })

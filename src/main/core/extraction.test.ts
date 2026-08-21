@@ -30,7 +30,9 @@ const template = (): XmlTemplateConfig => ({
       separator: ',',
       trim: true,
       collapseWhitespace: true,
+      contentFilterSelectors: [],
       replacements: [],
+      convertToTimestamp: false,
       fixedValue: '',
       systemValue: 'collected-at',
       mergeSeparator: '',
@@ -49,7 +51,9 @@ const template = (): XmlTemplateConfig => ({
       separator: ',',
       trim: true,
       collapseWhitespace: false,
+      contentFilterSelectors: [],
       replacements: [],
+      convertToTimestamp: false,
       fixedValue: '',
       systemValue: 'collected-at',
       mergeSeparator: '',
@@ -68,7 +72,9 @@ const template = (): XmlTemplateConfig => ({
       separator: ',',
       trim: true,
       collapseWhitespace: false,
+      contentFilterSelectors: [],
       replacements: [],
+      convertToTimestamp: false,
       fixedValue: '',
       systemValue: 'collected-at',
       mergeSeparator: '',
@@ -241,6 +247,8 @@ describe('page extraction', () => {
     const detailValue = createMergeValue('detail-body')
     detailValue.pageSource = 'detail'
     detailValue.selector = '#content'
+    detailValue.extraction = 'html'
+    detailValue.contentFilterSelectors = ['.share']
     mapping.mode = 'merge'
     mapping.mergeSeparator = ' / '
     mapping.mergeValues = [listValue, fixedValue, detailValue]
@@ -255,15 +263,91 @@ describe('page extraction', () => {
     const detail = extractDetailPage(
       task,
       list.candidates[0]!,
-      '<div id="content">详情正文</div>',
+      '<div id="content"><p>详情正文</p><div class="share">分享内容</div></div>',
       'https://www.example.com/detail/1'
     )
 
     expect(resolveFieldValue(mapping, field, detail.record)).toBe(
-      '列表标题 / 固定内容 / 详情正文'
+      '列表标题 / 固定内容 / <p>详情正文</p>'
     )
     expect(list.matchCounts['summary / 合并项 1']).toEqual([1])
     expect(detail.matchCounts['summary / 合并项 3']).toBe(1)
+  })
+
+  it('converts only explicitly enabled page fields and merge children', () => {
+    const task = createTask('date-field-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.enabled = false
+    task.xml = configureXmlRecord(
+      '<book><article><published/><text/><summary/></article></book>',
+      'date.xml',
+      '/book/article'
+    )
+
+    const published = task.xml.mappings.find((mapping) => mapping.fieldPath === 'published')!
+    published.mode = 'page'
+    published.pageSource = 'list'
+    published.selector = '.published'
+    published.convertToTimestamp = true
+
+    const text = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
+    text.mode = 'page'
+    text.pageSource = 'list'
+    text.selector = '.text'
+
+    const summary = task.xml.mappings.find((mapping) => mapping.fieldPath === 'summary')!
+    const datePart = createMergeValue('date-part')
+    datePart.selector = '.published'
+    datePart.convertToTimestamp = true
+    const suffix = createMergeValue('suffix')
+    suffix.mode = 'fixed'
+    suffix.fixedValue = '已发布'
+    summary.mode = 'merge'
+    summary.mergeSeparator = ' / '
+    summary.mergeValues = [datePart, suffix]
+
+    const result = extractListPage(
+      task,
+      '<div class="item"><span class="published">2026-08-12</span>' +
+        '<div class="text">正文中的日期 2026-08-12 保持原样</div></div>',
+      task.listUrl,
+      1,
+      0
+    )
+    const candidate = result.candidates[0]!
+    const outputRecord = candidateToRecord(candidate)
+
+    expect(candidate.values.published).toBe('1786464000000')
+    expect(candidate.values.text).toBe('正文中的日期 2026-08-12 保持原样')
+    expect(resolveFieldValue(summary, task.xml.fields.find((field) => field.path === 'summary')!, outputRecord)).toBe(
+      '1786464000000 / 已发布'
+    )
+    expect(candidate.warnings).toEqual([])
+
+    published.required = true
+    const invalid = extractListPage(
+      task,
+      '<div class="item"><span class="published">2026-02-30</span>' +
+        '<div class="text">正文日期仍不转换</div></div>',
+      task.listUrl,
+      1,
+      0
+    ).candidates[0]!
+    expect(invalid.values.published).toBe('')
+    expect(invalid.missingListFields).toEqual(['published'])
+    expect(invalid.warnings).toEqual([
+      expect.objectContaining({
+        stage: 'date-conversion',
+        fieldPath: 'published',
+        reason: expect.stringContaining('2026-02-30')
+      }),
+      expect.objectContaining({
+        stage: 'date-conversion',
+        fieldPath: 'summary / 合并项 1',
+        reason: expect.stringContaining('2026-02-30')
+      })
+    ])
   })
 
   it('keeps resource plans with the extracted record while rewriting the final HTML value', () => {
@@ -275,6 +359,8 @@ describe('page extraction', () => {
     task.resources.download.enabled = true
     task.resources.download.rootDirectory = 'D:/resources'
     task.resources.download.urlPrefix = '/resources'
+    const textMapping = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
+    textMapping.contentFilterSelectors = ['.advertisement']
 
     const list = extractListPage(
       task,
@@ -286,13 +372,43 @@ describe('page extraction', () => {
     const detail = extractDetailPage(
       task,
       list.candidates[0]!,
-      '<div id="content"><img src="/images/a.jpg"><a href="/files/a.pdf">附件</a></div>',
+      '<div id="content"><div class="advertisement"><img src="/images/ad.jpg">广告</div>' +
+        '<img src="/images/a.jpg"><a href="/files/a.pdf">附件</a></div>',
       'https://www.example.com/detail/1'
     )
 
     expect(detail.record.values.text).toContain('/resources/images/a.jpg')
     expect(detail.record.values.text).toContain('/resources/files/a.pdf')
+    expect(detail.record.values.text).not.toContain('advertisement')
+    expect(detail.record.values.text).not.toContain('/images/ad.jpg')
     expect(detail.record.resources).toHaveLength(2)
+  })
+
+  it('identifies the field when a content filter selector is invalid', () => {
+    const task = createTask('invalid-content-filter-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.enabled = false
+    task.xml = configureXmlRecord(
+      '<book><article><text/></article></book>',
+      'invalid-filter.xml',
+      '/book/article'
+    )
+    const mapping = task.xml.mappings[0]!
+    mapping.mode = 'page'
+    mapping.pageSource = 'list'
+    mapping.selector = '.content'
+    mapping.contentFilterSelectors = ['div[']
+
+    expect(() =>
+      extractListPage(
+        task,
+        '<div class="item"><div class="content">正文</div></div>',
+        task.listUrl,
+        1,
+        0
+      )
+    ).toThrow('字段“text”：内容过滤 CSS 选择器“div[”无效')
   })
 
   it('plans a resource extracted directly from an attribute field', () => {

@@ -141,7 +141,9 @@ export interface PageExtractionConfig {
   separator: string
   trim: boolean
   collapseWhitespace: boolean
+  contentFilterSelectors: string[]
   replacements: FieldReplacementRule[]
+  convertToTimestamp: boolean
 }
 
 export interface MergeValueConfig extends PageExtractionConfig {

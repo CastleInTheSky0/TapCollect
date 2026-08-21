@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { createFieldMapping, createTask } from '@shared/defaults'
 import { createMergeValue, mergePageValueKey } from '@shared/field-mapping'
 import type { ExtractedRecord, XmlFieldDefinition, XmlTemplateConfig } from '@shared/types'
-import { missingRequiredMergeFields, resolveFieldValue } from './field-values'
+import {
+  missingRequiredMergeFields,
+  resolveFieldValue,
+  resolveFieldValueResult
+} from './field-values'
 
 const field: XmlFieldDefinition = {
   path: 'text',
@@ -90,5 +94,62 @@ describe('merged field values', () => {
         externalUrl: 'https://outside.example/article'
       })
     ).toEqual([])
+  })
+
+  it('converts system collection time only when its field switch is enabled', () => {
+    const mapping = createFieldMapping(field)
+    mapping.mode = 'system'
+    mapping.systemValue = 'collected-at'
+    const collectedRecord = {
+      ...record(),
+      collectedAt: '2026-08-12T00:00:00+08:00'
+    }
+
+    expect(resolveFieldValue(mapping, field, collectedRecord)).toBe(
+      '2026-08-12T00:00:00+08:00'
+    )
+
+    mapping.convertToTimestamp = true
+    expect(resolveFieldValue(mapping, field, collectedRecord)).toBe('1786464000000')
+  })
+
+  it('converts a system collection-time merge child independently', () => {
+    const mapping = createFieldMapping(field)
+    const collectedAt = createMergeValue('collected-at')
+    collectedAt.mode = 'system'
+    collectedAt.systemValue = 'collected-at'
+    collectedAt.convertToTimestamp = true
+    const suffix = createMergeValue('suffix')
+    suffix.mode = 'fixed'
+    suffix.fixedValue = '采集'
+    mapping.mode = 'merge'
+    mapping.mergeSeparator = '-'
+    mapping.mergeValues = [collectedAt, suffix]
+
+    expect(
+      resolveFieldValue(mapping, field, {
+        ...record(),
+        collectedAt: '2026-08-12T00:00:00+08:00'
+      })
+    ).toBe('1786464000000-采集')
+  })
+
+  it('returns an empty system value and a warning when conversion fails', () => {
+    const mapping = createFieldMapping(field)
+    mapping.mode = 'system'
+    mapping.convertToTimestamp = true
+
+    const result = resolveFieldValueResult(mapping, field, {
+      ...record(),
+      collectedAt: 'invalid-date'
+    })
+
+    expect(result.value).toBe('')
+    expect(result.warnings).toEqual([
+      {
+        fieldPath: 'text',
+        reason: expect.stringContaining('invalid-date')
+      }
+    ])
   })
 })
