@@ -445,20 +445,20 @@ onBeforeUnmount(removeProgressListener)
 .idle-copy span,
 .update-centered strong,
 .update-centered span,
-.update-ready strong,
-.update-ready span {
+.update-ready>div>strong,
+.update-ready>div>span {
   display: block;
 }
 
 .idle-copy strong,
 .update-centered strong,
-.update-ready strong {
+.update-ready>div>strong {
   font-size: 11px;
 }
 
 .idle-copy span,
 .update-centered span,
-.update-ready span {
+.update-ready>div>span {
   margin-top: 4px;
   color: var(--muted);
   font-size: 9px;
@@ -543,15 +543,23 @@ onBeforeUnmount(removeProgressListener)
 }
 
 .ready-icon {
-  display: grid;
-  width: 34px;
-  height: 34px;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
   background: #dff1e8;
   color: var(--success);
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.ready-icon>svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 
 .install-note {
