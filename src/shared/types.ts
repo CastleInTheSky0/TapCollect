@@ -283,6 +283,7 @@ export interface ExtractedRecord {
 export interface ResourcePlan {
   normalizedUrl: string
   sourceUrl: string
+  sourcePageUrl?: string
   relativePath: string
   localPath: string
   xmlUrl: string

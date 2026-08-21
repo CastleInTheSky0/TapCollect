@@ -187,6 +187,7 @@ export const createResourcePlan = (
   return {
     normalizedUrl: mirror.normalizedUrl,
     sourceUrl: mirror.sourceUrl,
+    sourcePageUrl: ownerPageUrl,
     relativePath: mirror.relativePath,
     localPath,
     xmlUrl: joinResourcePrefix(urlPrefix, mirror.encodedPath),

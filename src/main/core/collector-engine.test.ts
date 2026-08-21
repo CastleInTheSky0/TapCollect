@@ -10,7 +10,11 @@ import {
 import { configureXmlRecord } from './xml-template'
 import type { FetchHtmlResult, HttpClient } from './http-client'
 import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
-import { CollectorEngine, CollectorRunControl } from './collector-engine'
+import {
+  CollectorEngine,
+  CollectorRunControl,
+  resolveResourceSourcePageUrl
+} from './collector-engine'
 import { TaskStore } from '@main/services/task-store'
 import { readOutputXml } from '@main/services/output-writer'
 import type { ResourceDownloader } from '@main/services/resource-downloader'
@@ -1021,17 +1025,71 @@ describe('CollectorEngine', () => {
       null,
       { download } as unknown as ResourceDownloader
     )
+    const logs: string[] = []
 
     const result = await engine.run(task, null, new CollectorRunControl(), {
       progress: () => undefined,
-      log: () => undefined
+      log: (entry) => logs.push(entry.message)
     })
 
     expect(result.status).toBe('completed')
     expect(result.resources).toEqual({ downloaded: 1, skipped: 0, failed: 0 })
     expect(download).toHaveBeenCalledOnce()
+    const resourceLogs = logs.filter(
+      (message) =>
+        message.startsWith('下载资源：') ||
+        message.startsWith('资源下载完成：') ||
+        message.startsWith('资源已在本次运行处理，跳过重复引用：')
+    )
+    expect(resourceLogs).toHaveLength(3)
+    expect(resourceLogs.every((message) => message.includes(`来源页面：${task.listUrl}`))).toBe(
+      true
+    )
     const xml = await readOutputXml(result.outputFiles[0]!, task.xml!.encoding)
     expect(xml.match(/\/resources\/images\/shared\.jpg/g)).toHaveLength(2)
+  })
+
+  it('logs the source page when an existing resource is skipped', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-existing-'))
+    temporaryDirectories.push(root)
+    const task = createResourceTask('task-resource-existing', root)
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html:
+        '<div class="item"><span class="title">记录1</span>' +
+        '<div class="body"><img src="/images/existing.jpg"></div></div>',
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const download = vi.fn(async (plan: { localPath: string }) => ({
+      kind: 'skipped' as const,
+      path: plan.localPath,
+      retries: 0
+    }))
+    const logs: string[] = []
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      null,
+      { download } as unknown as ResourceDownloader
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: (entry) => logs.push(entry.message)
+    })
+
+    expect(result.resources).toEqual({ downloaded: 0, skipped: 1, failed: 0 })
+    expect(
+      logs.some(
+        (message) =>
+          message.startsWith('资源已存在，按覆盖设置跳过：') &&
+          message.includes(`来源页面：${task.listUrl}`)
+      )
+    ).toBe(true)
   })
 
   it('keeps XML records and writes detailed error data when a resource download fails', async () => {
@@ -1057,10 +1115,11 @@ describe('CollectorEngine', () => {
       null,
       { download } as unknown as ResourceDownloader
     )
+    const logs: string[] = []
 
     const result = await engine.run(task, null, new CollectorRunControl(), {
       progress: () => undefined,
-      log: () => undefined
+      log: (entry) => logs.push(entry.message)
     })
 
     expect(result.status).toBe('completed')
@@ -1072,5 +1131,112 @@ describe('CollectorEngine', () => {
     expect(errorLog).toContain('https://example.com/images/missing.jpg')
     expect(errorLog).toContain('/resources/images/missing.jpg')
     expect(errorLog).toContain('磁盘写入失败')
+    expect(errorLog).toContain(`来源页面：${task.listUrl}`)
+    expect(
+      logs.some(
+        (message) =>
+          message.includes('resource-download') &&
+          message.includes(`来源页面：${task.listUrl}`) &&
+          message.includes('https://example.com/images/missing.jpg')
+      )
+    ).toBe(true)
+  })
+
+  it('records the final detail page URL when a detail resource download fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-detail-resource-failure-'))
+    temporaryDirectories.push(root)
+    const task = createResourceTask('task-detail-resource-failure', root)
+    task.detail.enabled = true
+    task.detail.link.selector = 'a.detail'
+    const text = task.xml!.mappings.find((mapping) => mapping.fieldPath === 'text')!
+    text.pageSource = 'detail'
+    text.selector = '#content'
+    const finalDetailUrl = 'https://example.com/detail/final'
+    const resourceUrl = 'https://example.com/images/detail-missing.jpg'
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => {
+      if (url === task.listUrl) {
+        return {
+          kind: 'success',
+          requestedUrl: url,
+          finalUrl: url,
+          status: 200,
+          html:
+            '<div class="item"><a class="title detail" href="/detail/requested">记录1</a></div>',
+          encoding: 'utf-8',
+          retries: 0
+        }
+      }
+      return {
+        kind: 'success',
+        requestedUrl: url,
+        finalUrl: finalDetailUrl,
+        status: 200,
+        html: '<div id="content"><img src="/images/detail-missing.jpg"></div>',
+        encoding: 'utf-8',
+        retries: 0
+      }
+    })
+    const download = vi.fn(async () => {
+      throw new Error('详情资源写入失败')
+    })
+    const logs: string[] = []
+    const engine = new CollectorEngine(
+      new TaskStore(join(root, 'data')),
+      { fetchHtml } as unknown as HttpClient,
+      null,
+      { download } as unknown as ResourceDownloader
+    )
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: () => undefined,
+      log: (entry) => logs.push(entry.message)
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.resources.failed).toBe(1)
+    const errorLog = await readFile(result.errorLogPath, 'utf8')
+    const failureRow = errorLog.trim().split(/\r?\n/)[1]!
+    const failureColumns = failureRow.slice(1, -1).split('","')
+    expect(failureColumns[2]).toBe(task.listUrl)
+    expect(failureColumns[3]).toBe(finalDetailUrl)
+    expect(failureColumns[6]).toContain(`来源页面：${finalDetailUrl}`)
+    expect(failureColumns[6]).toContain(`原始 URL：${resourceUrl}`)
+    expect(
+      logs.some(
+        (message) =>
+          message.includes('resource-download') &&
+          message.includes(`来源页面：${finalDetailUrl}`) &&
+          message.includes(resourceUrl)
+      )
+    ).toBe(true)
+  })
+
+  it('falls back to the record or list URL for legacy resource plans', () => {
+    const legacyPlan = {
+      normalizedUrl: 'https://example.com/images/legacy.jpg',
+      sourceUrl: 'https://example.com/images/legacy.jpg',
+      relativePath: 'images/legacy.jpg',
+      localPath: 'D:/resources/images/legacy.jpg',
+      xmlUrl: '/resources/images/legacy.jpg',
+      kind: 'image' as const
+    }
+
+    expect(
+      resolveResourceSourcePageUrl(
+        legacyPlan,
+        { detailUrl: 'https://example.com/detail/final' },
+        {
+          detailUrl: 'https://example.com/detail/requested',
+          listUrl: 'https://example.com/list'
+        }
+      )
+    ).toBe('https://example.com/detail/final')
+    expect(
+      resolveResourceSourcePageUrl(
+        legacyPlan,
+        { detailUrl: '' },
+        { detailUrl: '', listUrl: 'https://example.com/list' }
+      )
+    ).toBe('https://example.com/list')
   })
 })

@@ -200,6 +200,16 @@ const describeFailure = (failure: RecordFailure): string => {
   return `${position} · ${stage}：${failure.reason}${retry}${targetUrl ? ` · ${targetUrl}` : ''}`
 }
 
+export const resolveResourceSourcePageUrl = (
+  plan: ResourcePlan,
+  record: Pick<ExtractedRecord, 'detailUrl'>,
+  candidate: Pick<ListCandidate, 'detailUrl' | 'listUrl'>
+): string =>
+  plan.sourcePageUrl?.trim() || record.detailUrl || candidate.detailUrl || candidate.listUrl
+
+const resourceLogContext = (sourcePageUrl: string): string =>
+  sourcePageUrl ? ` · 来源页面：${sourcePageUrl}` : ''
+
 export class CollectorEngine {
   constructor(
     private readonly store: TaskStore,
@@ -422,15 +432,17 @@ export class CollectorEngine {
     const resourceFailure = (
       candidate: ListCandidate,
       plan: ResourcePlan,
+      sourcePageUrl: string,
       error: unknown
     ): RecordFailure => ({
       page: candidate.page,
       itemIndex: candidate.itemIndex,
       listUrl: candidate.listUrl,
-      detailUrl: plan.sourceUrl,
+      detailUrl: sourcePageUrl,
       stage: 'resource-download',
       fieldPath: '',
       reason: [
+        `来源页面：${sourcePageUrl || candidate.listUrl}`,
         `原始 URL：${plan.sourceUrl}`,
         `本地目标：${plan.localPath}`,
         `XML 目标：${plan.xmlUrl}`,
@@ -445,43 +457,65 @@ export class CollectorEngine {
       candidate: ListCandidate
     ): Promise<void> => {
       if (!task.resources.download.enabled || !record.resources?.length) return
-      const plans: ResourcePlan[] = []
+      const plans: Array<{ plan: ResourcePlan; sourcePageUrl: string }> = []
       for (const plan of record.resources) {
+        const sourcePageUrl = resolveResourceSourcePageUrl(plan, record, candidate)
         if (processedResourceUrls.has(plan.normalizedUrl)) {
-          emitLog('info', `资源已在本次运行处理，跳过重复引用：${plan.sourceUrl}`)
+          emitLog(
+            'info',
+            `资源已在本次运行处理，跳过重复引用：${plan.sourceUrl}${resourceLogContext(sourcePageUrl)}`
+          )
           continue
         }
         processedResourceUrls.add(plan.normalizedUrl)
         checkpoint.processedResourceUrls.push(plan.normalizedUrl)
-        plans.push(plan)
+        plans.push({ plan, sourcePageUrl })
       }
 
-      const results = await orderedConcurrentMap(plans, 3, async (plan) => {
+      const results = await orderedConcurrentMap(plans, 3, async ({ plan, sourcePageUrl }) => {
         currentUrl = plan.sourceUrl
-        emitProgress('running', 'resource', `正在处理资源：${plan.sourceUrl}`)
-        emitLog('info', `下载资源：${plan.sourceUrl} → ${plan.localPath}`)
+        emitProgress(
+          'running',
+          'resource',
+          `正在处理资源：${plan.sourceUrl}${resourceLogContext(sourcePageUrl)}`
+        )
+        emitLog(
+          'info',
+          `下载资源：${plan.sourceUrl} → ${plan.localPath}${resourceLogContext(sourcePageUrl)}`
+        )
         try {
           const result = await this.resourceDownloader.download(
             plan,
             task.request,
             task.output.overwrite
           )
-          return { plan, result, error: null as unknown }
+          return { plan, sourcePageUrl, result, error: null as unknown }
         } catch (error) {
-          return { plan, result: null, error }
+          return { plan, sourcePageUrl, result: null, error }
         }
       })
 
       for (const item of results) {
         if (item.result?.kind === 'downloaded') {
           checkpoint.resources.downloaded += 1
-          emitLog('success', `资源下载完成：${item.plan.sourceUrl} → ${item.plan.localPath}`)
+          emitLog(
+            'success',
+            `资源下载完成：${item.plan.sourceUrl} → ${item.plan.localPath}${resourceLogContext(item.sourcePageUrl)}`
+          )
         } else if (item.result?.kind === 'skipped') {
           checkpoint.resources.skipped += 1
-          emitLog('info', `资源已存在，按覆盖设置跳过：${item.plan.localPath}`)
+          emitLog(
+            'info',
+            `资源已存在，按覆盖设置跳过：${item.plan.sourceUrl} → ${item.plan.localPath}${resourceLogContext(item.sourcePageUrl)}`
+          )
         } else {
           checkpoint.resources.failed += 1
-          const failure = resourceFailure(candidate, item.plan, item.error)
+          const failure = resourceFailure(
+            candidate,
+            item.plan,
+            item.sourcePageUrl,
+            item.error
+          )
           try {
             await output.appendFailure(failure)
           } catch (error) {

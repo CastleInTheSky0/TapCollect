@@ -22,6 +22,7 @@ describe('resource planner', () => {
 
     expect(plan).toMatchObject({
       sourceUrl: 'https://www.example.com/upload/2026/a.jpg',
+      sourcePageUrl: 'https://www.example.com/news/1.html',
       relativePath: 'upload/2026/a.jpg',
       xmlUrl: '/resources/upload/2026/a.jpg',
       kind: 'image'
