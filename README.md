@@ -2,7 +2,7 @@
 
 TapCollect（网页信息采集工具）是一款基于 Electron、Vue 3、TypeScript 和 TDesign Vue Next 的跨平台桌面工具。它通过可视化点选或手写选择器采集网页列表与详情信息，再按照用户提供的 XML、XLSX 或 XLS 模板完成字段映射、资源处理和分批导出。
 
-当前版本：`v0.3.8`
+当前版本：`v0.3.9`
 
 ## 下载与支持平台
 
@@ -297,8 +297,8 @@ macOS 安装包必须在 macOS 上构建。所有平台安装包默认输出到 
 发布新版本前，先确保 `package.json` 中的版本号与 Git 标签一致，再推送标签，例如：
 
 ```powershell
-git tag -a v0.3.8 -m "TapCollect v0.3.8"
-git push origin v0.3.8
+git tag -a v0.3.9 -m "TapCollect v0.3.9"
+git push origin v0.3.9
 ```
 
 仓库的 `.gitignore` 已排除本地任务、检查点、运行清单、采集输出、导入模板、界面测试截图及开发工具状态目录。提交前仍应执行 `git status --short`，确认没有本地采集数据进入版本控制。
