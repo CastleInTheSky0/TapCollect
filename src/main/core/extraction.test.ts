@@ -23,6 +23,7 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'list',
       selectorType: 'css',
       selector: 'a.title',
+      textPrefix: '',
       extraction: 'text',
       attribute: '',
       required: true,
@@ -44,6 +45,7 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'detail',
       selectorType: 'css',
       selector: '#content',
+      textPrefix: '',
       extraction: 'html',
       attribute: '',
       required: true,
@@ -65,6 +67,7 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'list',
       selectorType: 'css',
       selector: '',
+      textPrefix: '',
       extraction: 'text',
       attribute: '',
       required: false,
@@ -181,6 +184,69 @@ describe('page extraction', () => {
 
     expect(detail.record.values.text).toBe('正文结束')
     expect(detail.record.values.text).not.toContain('window.leaked')
+  })
+
+  it('extracts labelled metadata without depending on an optional sibling position', () => {
+    const task = createTask('labelled-metadata-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.detail'
+    task.xml = template()
+    const published = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
+    published.extraction = 'text'
+    published.selector = 'h2 span'
+    published.textPrefix = '发布时间：'
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a class="title detail" href="/detail/1">标题</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+    const withoutSource = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      '<h2><span>作者：省侨联</span><span>发布时间：2026-08-12</span></h2>',
+      'https://www.example.com/detail/1'
+    )
+    const withSource = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      '<h2><span>作者：周锋生</span><span>来源：海外侨声</span>' +
+        '<span>发布时间：2019-07-08</span></h2>',
+      'https://www.example.com/detail/2'
+    )
+
+    expect(withoutSource.record.values.text).toBe('2026-08-12')
+    expect(withoutSource.matchCounts.text).toBe(1)
+    expect(withSource.record.values.text).toBe('2019-07-08')
+    expect(withSource.matchCounts.text).toBe(1)
+
+    published.selector = '.metadata'
+    published.textPrefix = '作者'
+    const combinedHtml = `
+      <div class="metadata">
+        作者：省侨联
+        发布时间：2026-08-12
+      </div>
+    `
+    const combinedAuthor = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      combinedHtml,
+      'https://www.example.com/detail/3'
+    )
+    published.textPrefix = '发布时间'
+    const combinedPublished = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      combinedHtml,
+      'https://www.example.com/detail/3'
+    )
+
+    expect(combinedAuthor.record.values.text).toBe('省侨联')
+    expect(combinedPublished.record.values.text).toBe('2026-08-12')
   })
 
   it('does not request a different hostname and preserves it as the external URL', () => {

@@ -139,7 +139,12 @@ const setContentFilterSelectors = (value: unknown): void => {
       <span>属性名</span>
       <t-input v-model="model.attribute" placeholder="href / src / content" />
     </div>
-    <div v-else class="field content-filter-field full">
+    <div v-else-if="model.extraction === 'text'" class="field text-prefix-field">
+      <span>文字标签定位（可选）</span>
+      <t-input v-model="model.textPrefix" clearable placeholder="例如：发布时间" />
+      <small>只填写标签文字，无需输入中文或英文冒号；同一节点有多个“标签：值”时会按标签区分，其他连接符暂不支持</small>
+    </div>
+    <div v-if="model.extraction !== 'attribute'" class="field content-filter-field full">
       <span>过滤标签及内容</span>
       <t-select
         :value="model.contentFilterSelectors"
@@ -255,6 +260,12 @@ const setContentFilterSelectors = (value: unknown): void => {
 
 .content-filter-field :deep(.t-tag-input) {
   min-height: 34px;
+}
+
+.text-prefix-field small {
+  color: #7a878d;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .check-line {

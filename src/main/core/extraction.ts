@@ -17,6 +17,7 @@ import {
   cleanTextValue,
   ContentFilterSelectorError,
   extractRawValue,
+  selectMappingNodes,
   selectNodes
 } from './selector-engine'
 import { hasSameHostname, resolveHttpUrl } from './url-utils'
@@ -126,7 +127,7 @@ const extractMappingValue = (
         mapping
       )
     }
-    const matches = selectNodes(root, mapping.selectorType, mapping.selector)
+    const matches = selectMappingNodes(root, mapping)
     const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
     const processedValues = selected.map((node) => {
       const element =
@@ -226,9 +227,7 @@ export const extractListPage = (
     const resources: ResourcePlan[] = []
     const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
     for (const entry of entries) {
-      matchCounts[entry.matchKey]?.push(
-        selectNodes(item, entry.mapping.selectorType, entry.mapping.selector).length
-      )
+      matchCounts[entry.matchKey]?.push(selectMappingNodes(item, entry.mapping).length)
       const processed = extractMappingValue(
         item,
         entry.mapping,
@@ -304,11 +303,7 @@ export const extractDetailPage = (
   const matchCounts: Record<string, number> = {}
   const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
   for (const entry of entries) {
-    matchCounts[entry.matchKey] = selectNodes(
-      document,
-      entry.mapping.selectorType,
-      entry.mapping.selector
-    ).length
+    matchCounts[entry.matchKey] = selectMappingNodes(document, entry.mapping).length
     const processed = extractMappingValue(
       document,
       entry.mapping,

@@ -135,6 +135,7 @@ export interface PageExtractionConfig {
   pageSource: PageSource
   selectorType: SelectorType
   selector: string
+  textPrefix: string
   extraction: ExtractionType
   attribute: string
   matchMode: MatchMode
@@ -435,6 +436,7 @@ export interface PreviewPickRequest {
   selectorType: SelectorType
   scopeSelector: string
   ancestorAttribute: string
+  detectTextPrefix?: boolean
 }
 
 export interface PreviewPickResult {
@@ -443,6 +445,7 @@ export interface PreviewPickResult {
   selectorType: SelectorType
   matchCount: number
   sample: string
+  textPrefix: string
 }
 
 export interface PreviewEvaluateRequest {
@@ -450,6 +453,7 @@ export interface PreviewEvaluateRequest {
   selector: string
   scopeSelector: string
   ancestorAttribute: string
+  textPrefix?: string
 }
 
 export interface PreviewEvaluateResult {

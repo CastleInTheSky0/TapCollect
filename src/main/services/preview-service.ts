@@ -7,8 +7,12 @@ import type {
   PreviewPickResult
 } from '@shared/types'
 import { resolvePreviewSelection } from '@main/core/preview-selector'
+import { detectTextPrefix, stripTextPrefix, textMatchesPrefix } from '@shared/text-prefix'
 
 const previewSelectionResolverSource = resolvePreviewSelection.toString()
+const detectTextPrefixSource = detectTextPrefix.toString()
+const stripTextPrefixSource = stripTextPrefix.toString()
+const textMatchesPrefixSource = textMatchesPrefix.toString()
 const previewPickStateKey = '__tapcollectPreviewPickState'
 const previewPickPending = '__tapcollect_preview_pick_pending__'
 const previewPickMissing = '__tapcollect_preview_pick_missing__'
@@ -48,7 +52,8 @@ const decodePreviewPickResult = (serialized: string): PreviewPickResult => {
     typeof result.matchCount !== 'number' ||
     !Number.isInteger(result.matchCount) ||
     result.matchCount < 0 ||
-    typeof result.sample !== 'string'
+    typeof result.sample !== 'string' ||
+    typeof result.textPrefix !== 'string'
   ) {
     throw new Error('网页点选结果格式无效，请重新点选')
   }
@@ -58,7 +63,8 @@ const decodePreviewPickResult = (serialized: string): PreviewPickResult => {
     selector: result.selector,
     selectorType: result.selectorType,
     matchCount: result.matchCount,
-    sample: result.sample
+    sample: result.sample,
+    textPrefix: result.textPrefix
   }
 }
 
@@ -201,13 +207,21 @@ export class PreviewService {
             return;
           }
           try {
+            const textPrefix = request.detectTextPrefix
+              ? (${detectTextPrefixSource})((target.textContent || '').trim())
+              : '';
             const selection = (${previewSelectionResolverSource})(
               target,
               request.scopeSelector,
-              request.ancestorAttribute || ''
+              request.ancestorAttribute || '',
+              Boolean(textPrefix)
             );
             const selector = selection.selector;
-            const matches = selection.matches;
+            const matches = textPrefix
+              ? selection.matches.filter((element) =>
+                  (${textMatchesPrefixSource})(element.textContent || '', textPrefix)
+                )
+              : selection.matches;
             highlight(matches);
             settle({
               status: 'success',
@@ -216,7 +230,11 @@ export class PreviewService {
                 selector,
                 selectorType: 'css',
                 matchCount: matches.length,
-                sample: (target.textContent || '').trim().slice(0, 160)
+                sample: (textPrefix && matches.length
+                  ? (${stripTextPrefixSource})(matches[0].textContent || '', textPrefix)
+                  : (target.textContent || '').trim()
+                ).trim().slice(0, 160),
+                textPrefix
               }
             });
           } catch (error) {
@@ -234,7 +252,8 @@ export class PreviewService {
               selector: '',
               selectorType: 'css',
               matchCount: 0,
-              sample: ''
+              sample: '',
+              textPrefix: ''
             }
           });
         };
@@ -343,18 +362,26 @@ export class PreviewService {
             }
           });
           const unique = Array.from(new Set(matches));
-          window[marker] = unique.map((element) => ({
+          const textPrefix = String(request.textPrefix || '').trim();
+          const filtered = textPrefix
+            ? unique.filter((element) =>
+                (${textMatchesPrefixSource})(element.textContent || '', textPrefix)
+              )
+            : unique;
+          window[marker] = filtered.map((element) => ({
             element,
             outline: element.style.outline,
             outlineOffset: element.style.outlineOffset
           }));
-          unique.forEach((element) => {
+          filtered.forEach((element) => {
             element.style.outline = '2px solid #2563eb';
             element.style.outlineOffset = '1px';
           });
           return {
-            matchCount: unique.length,
-            sample: unique.length ? (unique[0].textContent || '').trim().slice(0, 160) : '',
+            matchCount: filtered.length,
+            sample: filtered.length
+              ? (${stripTextPrefixSource})(filtered[0].textContent || '', textPrefix).trim().slice(0, 160)
+              : '',
             error: ''
           };
         } catch (error) {

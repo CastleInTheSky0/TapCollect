@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 import { createPageExtractionConfig } from '@shared/field-mapping'
-import { extractRawValue } from './selector-engine'
+import { extractRawValue, selectMappingNodes } from './selector-engine'
 
 const documentFor = (html: string): Document => new JSDOM(html).window.document
 
@@ -71,5 +71,58 @@ describe('field content filtering', () => {
     )
 
     expect(extractRawValue(document, mapping, true)).toBe('正文结尾')
+  })
+})
+
+describe('text prefix field location', () => {
+  const metadataDocument = (withSource: boolean): Document =>
+    documentFor(`<h2>
+      <span>作者：周锋生</span>
+      ${withSource ? '<span>来源：海外侨声</span>' : ''}
+      <span>发布时间：2019-07-08</span>
+    </h2>`)
+
+  it('finds the publication date regardless of an optional source sibling', () => {
+    const mapping = createPageExtractionConfig()
+    mapping.selector = 'h2 span'
+    mapping.textPrefix = '发布时间：'
+
+    expect(extractRawValue(metadataDocument(false), mapping)).toBe('2019-07-08')
+    expect(extractRawValue(metadataDocument(true), mapping)).toBe('2019-07-08')
+    expect(selectMappingNodes(metadataDocument(true), mapping)).toHaveLength(1)
+  })
+
+  it('returns empty instead of falling back to another sibling when the label is absent', () => {
+    const mapping = createPageExtractionConfig()
+    mapping.selector = 'h2 span'
+    mapping.textPrefix = '来源'
+
+    expect(extractRawValue(metadataDocument(false), mapping)).toBe('')
+    expect(selectMappingNodes(metadataDocument(false), mapping)).toHaveLength(0)
+  })
+
+  it('extracts different custom labels from the same selected element', () => {
+    const document = documentFor(`
+      <div class="metadata">
+        撰稿单位：省侨联
+        发布日期：2026-08-12
+      </div>
+    `)
+    const mapping = createPageExtractionConfig()
+    mapping.selector = '.metadata'
+    mapping.textPrefix = '撰稿单位'
+
+    expect(extractRawValue(document, mapping)).toBe('省侨联')
+    mapping.textPrefix = '发布日期'
+    expect(extractRawValue(document, mapping)).toBe('2026-08-12')
+  })
+
+  it('keeps HTML and attribute extraction unchanged when a stale prefix is retained', () => {
+    const mapping = createPageExtractionConfig()
+    mapping.selector = 'h2 span'
+    mapping.textPrefix = '发布时间'
+    mapping.extraction = 'html'
+
+    expect(extractRawValue(metadataDocument(true), mapping)).toBe('作者：周锋生')
   })
 })

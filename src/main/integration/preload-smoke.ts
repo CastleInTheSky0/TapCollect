@@ -206,6 +206,56 @@ const verifyPreviewPick = async (
       ancestorLinkEvaluation.matchCount === 3 &&
       ancestorLinkEvaluation.error === ''
 
+    const textPrefixPickPromise = preview.pick({
+      selectorType: 'css',
+      scopeSelector: ':root',
+      ancestorAttribute: '',
+      detectTextPrefix: true
+    })
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      document.querySelector('#preview-metadata > span:nth-of-type(3)')
+        .dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      true;
+    `, true)
+    const textPrefixPick = await withTimeout(
+      textPrefixPickPromise,
+      'Electron 文字标签点选等待超时'
+    )
+    const textPrefixEvaluation = (await window.webContents.executeJavaScript(`
+      window.collector.previewEvaluate({
+        selectorType: 'css',
+        selector: '#preview-metadata > span',
+        scopeSelector: ':root',
+        ancestorAttribute: '',
+        textPrefix: '发布时间'
+      })
+    `)) as PreviewEvaluateResult
+    const combinedTextPrefixEvaluation = (await window.webContents.executeJavaScript(`
+      window.collector.previewEvaluate({
+        selectorType: 'css',
+        selector: '#preview-combined-metadata',
+        scopeSelector: ':root',
+        ancestorAttribute: '',
+        textPrefix: '发布时间'
+      })
+    `)) as PreviewEvaluateResult
+    const textPrefixWorks =
+      textPrefixPick.selector === '#preview-metadata > span' &&
+      textPrefixPick.textPrefix === '发布时间' &&
+      textPrefixPick.matchCount === 1 &&
+      textPrefixPick.sample === '2019-07-08' &&
+      textPrefixEvaluation.matchCount === 1 &&
+      textPrefixEvaluation.sample === '2019-07-08' &&
+      textPrefixEvaluation.error === '' &&
+      combinedTextPrefixEvaluation.matchCount === 1 &&
+      combinedTextPrefixEvaluation.sample === '2026-08-12' &&
+      combinedTextPrefixEvaluation.error === ''
+
     const cancelPromise = preview.pick({
       selectorType: 'css',
       scopeSelector: '',
@@ -225,7 +275,8 @@ const verifyPreviewPick = async (
       cancelled.cancelled &&
       cancelled.selector === '' &&
       cancelled.matchCount === 0 &&
-      cancelled.sample === ''
+      cancelled.sample === '' &&
+      cancelled.textPrefix === ''
 
     const resolverErrorPromise = preview
       .pick({
@@ -269,6 +320,7 @@ const verifyPreviewPick = async (
       successWorks,
       rootLinkWorks,
       ancestorLinkWorks,
+      textPrefixWorks,
       cancelWorks,
       resolverError,
       navigationError,
@@ -278,6 +330,7 @@ const verifyPreviewPick = async (
       !successWorks ||
       !rootLinkWorks ||
       !ancestorLinkWorks ||
+      !textPrefixWorks ||
       !cancelWorks ||
       !resolverError.includes('当前点击位置不在已配置的列表项范围内') ||
       !navigationError.includes('预览页面已刷新或跳转') ||
@@ -412,6 +465,15 @@ const run = async (): Promise<PreloadSmokeResult> => {
             <a href="/wrapped/one"><li><span>包装标题一</span></li></a>
             <a href="/wrapped/two"><li><span>包装标题二</span></li></a>
             <a href="/wrapped/three"><li><span>包装标题三</span></li></a>
+          </div>
+          <h2 id="preview-metadata">
+            <span>作者：周锋生</span>
+            <span>来源：海外侨声</span>
+            <span>发布时间：2019-07-08</span>
+          </h2>
+          <div id="preview-combined-metadata">
+            作者：省侨联
+            发布时间：2026-08-12
           </div>
         </body></html>`)
     })

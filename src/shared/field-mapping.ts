@@ -5,6 +5,7 @@ import type {
   PageExtractionConfig
 } from './types'
 import { normalizeContentFilterSelectors } from './content-filter'
+import { normalizeTextPrefix } from './text-prefix'
 
 const MERGE_VALUE_MODES = new Set<MergeValueMode>([
   'page',
@@ -17,6 +18,7 @@ export const createPageExtractionConfig = (): PageExtractionConfig => ({
   pageSource: 'list',
   selectorType: 'css',
   selector: '',
+  textPrefix: '',
   extraction: 'text',
   attribute: '',
   matchMode: 'first',
@@ -49,6 +51,7 @@ export const normalizeMergeValueConfig = (
     ...value,
     id: value.id?.trim() || fallbackId,
     mode,
+    textPrefix: normalizeTextPrefix(value.textPrefix),
     contentFilterSelectors: normalizeContentFilterSelectors(value.contentFilterSelectors),
     replacements: Array.isArray(value.replacements) ? value.replacements : [],
     convertToTimestamp: Boolean(value.convertToTimestamp)
@@ -59,6 +62,7 @@ export const normalizeFieldMappingConfig = (mapping: FieldMapping): FieldMapping
   ...createPageExtractionConfig(),
   ...mapping,
   required: mapping.required ?? false,
+  textPrefix: normalizeTextPrefix(mapping.textPrefix),
   contentFilterSelectors: normalizeContentFilterSelectors(mapping.contentFilterSelectors),
   replacements: Array.isArray(mapping.replacements) ? mapping.replacements : [],
   convertToTimestamp: Boolean(mapping.convertToTimestamp),

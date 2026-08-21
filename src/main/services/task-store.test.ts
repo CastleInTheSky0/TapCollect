@@ -171,6 +171,7 @@ describe('TaskStore', () => {
     const legacyXml = legacy.xml as { mappings: Array<Record<string, unknown>> }
     delete legacyXml.mappings[0]!.mergeSeparator
     delete legacyXml.mappings[0]!.mergeValues
+    delete legacyXml.mappings[0]!.textPrefix
     const taskDirectory = join(root, 'tasks', task.id)
     await mkdir(taskDirectory, { recursive: true })
     await writeFile(join(taskDirectory, 'task.json'), JSON.stringify(legacy), 'utf8')
@@ -180,6 +181,7 @@ describe('TaskStore', () => {
     expect(loaded?.xml?.mappings[0]).toMatchObject({
       mode: 'page',
       selector: '.title',
+      textPrefix: '',
       mergeSeparator: '',
       mergeValues: []
     })

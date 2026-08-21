@@ -29,6 +29,7 @@ describe('snapshotTaskForIpc', () => {
     const mergeValue = createMergeValue('body')
     mergeValue.pageSource = 'detail'
     mergeValue.selector = '#content'
+    mergeValue.textPrefix = '发布时间'
     mergeValue.contentFilterSelectors = ['h1', '.share']
     mergeValue.convertToTimestamp = true
     mergeValue.replacements.push({ id: 'cleanup', from: '旧值', to: '新值' })
@@ -97,6 +98,7 @@ describe('snapshotTaskForIpc', () => {
       'h1',
       '.share'
     ])
+    expect(snapshot.xml?.mappings[0]?.mergeValues[0]?.textPrefix).toBe('发布时间')
     expect(snapshot.spreadsheet).toMatchObject({
       fileName: 'sample.xlsx',
       contentBase64: 'UEsDBAoAAAAA',

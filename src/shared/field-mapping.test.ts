@@ -44,16 +44,24 @@ describe('field mapping configuration', () => {
     delete raw.mergeSeparator
     delete raw.convertToTimestamp
     delete raw.contentFilterSelectors
+    delete raw.textPrefix
     const rawMergeValue = (raw.mergeValues as Array<Record<string, unknown>>)[0]!
     delete rawMergeValue.convertToTimestamp
     delete rawMergeValue.contentFilterSelectors
+    delete rawMergeValue.textPrefix
 
     expect(normalizeFieldMappingConfig(raw as unknown as typeof legacy)).toMatchObject({
       mergeSeparator: '',
       convertToTimestamp: false,
       contentFilterSelectors: [],
+      textPrefix: '',
       mergeValues: [
-        { id: 'legacy-page', convertToTimestamp: false, contentFilterSelectors: [] }
+        {
+          id: 'legacy-page',
+          convertToTimestamp: false,
+          contentFilterSelectors: [],
+          textPrefix: ''
+        }
       ]
     })
   })

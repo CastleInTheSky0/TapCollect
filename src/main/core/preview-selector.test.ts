@@ -162,6 +162,24 @@ describe('preview selector resolution', () => {
     expect(unique.matches).toHaveLength(1)
   })
 
+  it('widens a labelled text field selector beyond its current sibling position', () => {
+    const document = new JSDOM(`
+      <h2 id="metadata">
+        <span>作者：周锋生</span>
+        <span>来源：海外侨声</span>
+        <span>发布时间：2019-07-08</span>
+      </h2>
+    `).window.document
+    const target = document.querySelectorAll('#metadata > span')[2]!
+
+    const exact = resolvePreviewSelection(target, ':root')
+    const generalized = resolvePreviewSelection(target, ':root', '', true)
+
+    expect(exact.selector).toBe('#metadata > span:nth-of-type(3)')
+    expect(generalized.selector).toBe('#metadata > span')
+    expect(generalized.matches).toHaveLength(3)
+  })
+
   it('rejects list-field picks outside the configured list-item scope', () => {
     const detailDocument = new JSDOM(
       '<main><h1 class="title">详情标题</h1><div id="content">详情正文</div></main>'
@@ -189,5 +207,19 @@ describe('preview selector resolution', () => {
     expect(result.matches).toHaveLength(3)
     expect(rangeResult.selector).toBe('#gvMain > tbody > tr')
     expect(rangeResult.matches).toHaveLength(3)
+  })
+
+  it('keeps text-position generalization self-contained after serialization', () => {
+    const document = new JSDOM(
+      '<h2 id="metadata"><span>作者：甲</span><span>发布时间：2026-08-12</span></h2>'
+    ).window.document
+    const runtime = new Function(
+      'target',
+      `return (${resolvePreviewSelection.toString()})(target, ':root', '', true)`
+    ) as (target: Element) => PreviewSelection
+
+    const result = runtime(document.querySelectorAll('#metadata > span')[1]!)
+    expect(result.selector).toBe('#metadata > span')
+    expect(result.matches).toHaveLength(2)
   })
 })

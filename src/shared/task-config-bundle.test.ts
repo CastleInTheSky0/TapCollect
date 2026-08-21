@@ -66,6 +66,7 @@ describe('task config bundle', () => {
     const mapping = createFieldMapping(field)
     mapping.mode = 'page'
     mapping.selector = '.published'
+    mapping.textPrefix = '自定义发布日期'
     mapping.contentFilterSelectors = ['h1', '.share']
     mapping.convertToTimestamp = true
     source.xml = {
@@ -93,6 +94,7 @@ describe('task config bundle', () => {
     })
     expect(imported.xml?.content).toBe(source.xml.content)
     expect(imported.xml?.mappings[0]?.convertToTimestamp).toBe(true)
+    expect(imported.xml?.mappings[0]?.textPrefix).toBe('自定义发布日期')
     expect(imported.xml?.mappings[0]?.contentFilterSelectors).toEqual(['h1', '.share'])
   })
 

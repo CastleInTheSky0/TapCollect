@@ -1,5 +1,6 @@
 import fontoxpath from 'fontoxpath'
 import { normalizeContentFilterSelectors } from '@shared/content-filter'
+import { normalizeTextPrefix, stripTextPrefix, textMatchesPrefix } from '@shared/text-prefix'
 import type { PageExtractionConfig, SelectorType } from '@shared/types'
 
 const { evaluateXPathToNodes } = fontoxpath
@@ -22,6 +23,16 @@ export const selectNodes = (
   const expression = selector.trim()
   if (!expression) return []
   return selectorType === 'css' ? selectCss(root, expression) : selectXPath(root, expression)
+}
+
+export const selectMappingNodes = (
+  root: QueryRoot,
+  mapping: PageExtractionConfig
+): Node[] => {
+  const matches = selectNodes(root, mapping.selectorType, mapping.selector)
+  const textPrefix = normalizeTextPrefix(mapping.textPrefix)
+  if (mapping.extraction !== 'text' || !textPrefix) return matches
+  return matches.filter((node) => textMatchesPrefix(node.textContent ?? '', textPrefix))
 }
 
 const SCRIPT_CONTENT_SELECTOR = 'script,noscript'
@@ -124,7 +135,7 @@ export const extractRawValue = (
   mapping: PageExtractionConfig,
   stripScriptContent = false
 ): string => {
-  const matches = selectNodes(root, mapping.selectorType, mapping.selector)
+  const matches = selectMappingNodes(root, mapping)
   const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
   const contentFilterSelectors =
     mapping.extraction === 'attribute'
@@ -136,7 +147,10 @@ export const extractRawValue = (
       return nodeHtml(node, stripScriptContent, contentFilterSelectors)
     }
     if (mapping.extraction === 'attribute') return nodeAttribute(node, mapping.attribute)
-    return nodeText(node, stripScriptContent, contentFilterSelectors)
+    return stripTextPrefix(
+      nodeText(node, stripScriptContent, contentFilterSelectors),
+      mapping.textPrefix
+    )
   })
   return values.join(mapping.separator)
 }

@@ -19,7 +19,8 @@ export interface PreviewSelection {
 export function resolvePreviewSelection(
   target: Element,
   scopeSelector: string,
-  ancestorAttribute = ''
+  ancestorAttribute = '',
+  generalizeTextPosition = false
 ): PreviewSelection {
   const ownerDocument = target.ownerDocument
 
@@ -141,6 +142,15 @@ export function resolvePreviewSelection(
       return []
     }
     return Array.from(new Set(matches))
+  }
+
+  const generalizedTextSelection = (selector: string): PreviewSelection | null => {
+    if (!generalizeTextPosition) return null
+    const generalized = selector.replace(/:nth-of-type\(\d+\)$/, '')
+    if (!generalized || generalized === selector) return null
+    const matches = uniqueMatches(generalized)
+    if (matches.length < 2 || !matches.includes(target)) return null
+    return { selector: generalized, matches }
   }
 
   const repeatedSegmentFor = (element: Element): string => {
@@ -308,5 +318,5 @@ export function resolvePreviewSelection(
   }
 
   const selector = exactSelectorFor(target, root, !documentScope, documentScope)
-  return { selector, matches: uniqueMatches(selector) }
+  return generalizedTextSelection(selector) ?? { selector, matches: uniqueMatches(selector) }
 }

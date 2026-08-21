@@ -299,12 +299,17 @@ export const usePreview = (deps: PreviewDeps) => {
       const result = await api.previewPick({
         selectorType: 'css',
         scopeSelector: previewScopeForMapping(pageMapping),
-        ancestorAttribute: ''
+        ancestorAttribute: '',
+        detectTextPrefix: pageMapping.extraction === 'text'
       })
       if (!result.cancelled) {
         pageMapping.selectorType = 'css'
         pageMapping.selector = result.selector
-        previewStatus.value = `字段 ${path} 匹配 ${result.matchCount} 个元素`
+        pageMapping.textPrefix =
+          pageMapping.extraction === 'text' ? result.textPrefix : ''
+        previewStatus.value = `字段 ${path} 匹配 ${result.matchCount} 个元素${
+          result.textPrefix ? ` · 已按标签“${result.textPrefix}”定位` : ''
+        }`
       }
     } catch (error) {
       deps.showError(error)
@@ -323,7 +328,8 @@ export const usePreview = (deps: PreviewDeps) => {
         selectorType: pageMapping.selectorType,
         selector: pageMapping.selector,
         scopeSelector: previewScopeForMapping(pageMapping),
-        ancestorAttribute: ''
+        ancestorAttribute: '',
+        textPrefix: pageMapping.extraction === 'text' ? pageMapping.textPrefix : ''
       })
       if (result.error) {
         previewStatus.value = `字段 ${path}：${result.error}`
