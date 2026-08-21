@@ -23,6 +23,9 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'list',
       selectorType: 'css',
       selector: 'a.title',
+      startMarker: '',
+      endMarker: '',
+      includeMarkers: false,
       textPrefix: '',
       extraction: 'text',
       attribute: '',
@@ -45,6 +48,9 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'detail',
       selectorType: 'css',
       selector: '#content',
+      startMarker: '',
+      endMarker: '',
+      includeMarkers: false,
       textPrefix: '',
       extraction: 'html',
       attribute: '',
@@ -67,6 +73,9 @@ const template = (): XmlTemplateConfig => ({
       pageSource: 'list',
       selectorType: 'css',
       selector: '',
+      startMarker: '',
+      endMarker: '',
+      includeMarkers: false,
       textPrefix: '',
       extraction: 'text',
       attribute: '',
@@ -121,6 +130,185 @@ describe('page extraction', () => {
     expect(detail.record.values.text).not.toContain('脚本后备内容')
     expect(detail.record.values.text).not.toContain('onclick')
     expect(detail.record.values.text).not.toContain('javascript:')
+  })
+
+  it('extracts detail content between literal multiline markers and optionally keeps them', () => {
+    const task = createTask('detail-marker-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    const mapping = task.xml.mappings.find((value) => value.fieldPath === 'text')!
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '<div class="details">'
+    mapping.endMarker = '</div>\n  <!--主体结束-->\n  <br />\n  <br />'
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a class="title" href="/detail/1">标题</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+    const html =
+      '<header>页头</header><div class="details"><p>正文</p></div>\r\n' +
+      '  <!--主体结束-->\r\n  <br />\r\n  <br /><footer>页尾</footer>'
+
+    const contentOnly = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      html,
+      'https://www.example.com/detail/1'
+    )
+    expect(contentOnly.record.values.text).toBe('<p>正文</p>')
+    expect(contentOnly.matchCounts.text).toBe(1)
+
+    mapping.includeMarkers = true
+    const withMarkers = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      html,
+      'https://www.example.com/detail/1'
+    )
+    expect(withMarkers.record.values.text).toBe(
+      '<div class="details"><p>正文</p></div>\r\n  <!--主体结束-->\r\n  <br />\r\n  <br />'
+    )
+
+    mapping.includeMarkers = false
+    mapping.endMarker = '<!--缺失的结束标记-->'
+    const incomplete = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      html,
+      'https://www.example.com/detail/1'
+    )
+    expect(incomplete.record.values.text).toBe('')
+    expect(incomplete.matchCounts.text).toBe(0)
+    expect(incomplete.missingFields).toEqual(['text'])
+  })
+
+  it('filters matched subtrees from marker HTML while retaining the configured boundaries', () => {
+    const task = createTask('filtered-marker-html-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    const mapping = task.xml.mappings.find((value) => value.fieldPath === 'text')!
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '<div class="details">'
+    mapping.endMarker = '</div><!--主体结束-->'
+    mapping.includeMarkers = true
+    mapping.contentFilterSelectors = ['h1', '.share']
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a class="title" href="/detail/1">标题</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+    const detail = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      '<div class="details"><h1>标题</h1><p>正文</p>' +
+        '<div class="share">分享内容</div></div><!--主体结束-->',
+      'https://www.example.com/detail/1'
+    )
+
+    expect(detail.record.values.text).toBe(
+      '<div class="details"><p>正文</p></div><!--主体结束-->'
+    )
+    expect(detail.matchCounts.text).toBe(1)
+  })
+
+  it('extracts filtered marker ranges as text and reuses all-range cleanup', () => {
+    const task = createTask('filtered-marker-text-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    const mapping = task.xml.mappings.find((value) => value.fieldPath === 'text')!
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '[正文开始]'
+    mapping.endMarker = '[正文结束]'
+    mapping.extraction = 'text'
+    mapping.matchMode = 'all'
+    mapping.separator = ' | '
+    mapping.collapseWhitespace = true
+    mapping.contentFilterSelectors = ['h1', '.share']
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a class="title" href="/detail/1">标题</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+    const detail = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      '[正文开始]<h1>标题一</h1>\n<p>第一段</p><script>泄漏</script>[正文结束]' +
+        '[正文开始]<div class="share">分享</div>\n<p>第二段</p>[正文结束]',
+      'https://www.example.com/detail/1'
+    )
+
+    expect(detail.record.values.text).toBe('第一段 | 第二段')
+    expect(detail.matchCounts.text).toBe(2)
+  })
+
+  it('reports invalid content filters for marker fields with the field label', () => {
+    const task = createTask('invalid-marker-filter-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    const mapping = task.xml.mappings.find((value) => value.fieldPath === 'text')!
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '[开始]'
+    mapping.endMarker = '[结束]'
+    mapping.contentFilterSelectors = ['div[']
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a class="title" href="/detail/1">标题</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+
+    expect(() =>
+      extractDetailPage(
+        task,
+        list.candidates[0]!,
+        '[开始]<p>正文</p>[结束]',
+        'https://www.example.com/detail/1'
+      )
+    ).toThrow('字段“text”：内容过滤 CSS 选择器“div[”无效')
+  })
+
+  it('matches list-field markers against each item source before DOM serialization', () => {
+    const task = createTask('list-marker-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    const mapping = task.xml.mappings.find((value) => value.fieldPath === 'title')!
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '<br />\n<!--标题开始-->'
+    mapping.endMarker = '<!--标题结束-->'
+    mapping.extraction = 'html'
+
+    const result = extractListPage(
+      task,
+      '<article class="item"><a class="title" href="/detail/1">链接</a>' +
+        '<br />\n<!--标题开始--><strong>源码标题</strong><!--标题结束--></article>',
+      task.listUrl,
+      1,
+      0
+    )
+
+    expect(result.candidates[0]?.values.title).toBe('<strong>源码标题</strong>')
+    expect(result.matchCounts.title).toEqual([1])
   })
 
   it('reads a detail link from the list item itself or its nearest wrapping ancestor', () => {
@@ -312,7 +500,9 @@ describe('page extraction', () => {
     fixedValue.fixedValue = '固定内容'
     const detailValue = createMergeValue('detail-body')
     detailValue.pageSource = 'detail'
-    detailValue.selector = '#content'
+    detailValue.selectorType = 'markers'
+    detailValue.startMarker = '<!--正文开始-->'
+    detailValue.endMarker = '<!--正文结束-->'
     detailValue.extraction = 'html'
     detailValue.contentFilterSelectors = ['.share']
     mapping.mode = 'merge'
@@ -329,7 +519,7 @@ describe('page extraction', () => {
     const detail = extractDetailPage(
       task,
       list.candidates[0]!,
-      '<div id="content"><p>详情正文</p><div class="share">分享内容</div></div>',
+      '<!--正文开始--><p>详情正文</p><div class="share">分享内容</div><!--正文结束-->',
       'https://www.example.com/detail/1'
     )
 

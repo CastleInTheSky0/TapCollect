@@ -160,14 +160,37 @@ describe('dynamic page DOM actions', () => {
     expect(itemListener).toHaveBeenCalledOnce()
   })
 
-  it('counts CSS and XPath selectors used to detect a same-page detail render', () => {
-    const dom = new JSDOM('<main><div id="detail"><p>正文</p></div></main>')
+  it('counts CSS, XPath, and marker locators used to detect a same-page detail render', () => {
+    const dom = new JSDOM(
+      '<main><div id="detail"><p>正文</p></div><!--开始-->\n<section>内容</section>\n<!--结束--></main>',
+      { runScripts: 'outside-only' }
+    )
 
     expect(
       countDynamicSelectorMatches(dom.window.document, [
         css('#detail'),
-        { selectorType: 'xpath', selector: '//div[@id="detail"]/p' }
+        { selectorType: 'xpath', selector: '//div[@id="detail"]/p' },
+        {
+          selectorType: 'markers',
+          selector: '',
+          startMarker: '<!--开始-->\r\n',
+          endMarker: '\r\n<!--结束-->'
+        }
       ])
-    ).toBe(2)
+    ).toBe(3)
+
+    const serialized = dom.window.eval(
+      `(${countDynamicSelectorMatches.toString()})`
+    ) as typeof countDynamicSelectorMatches
+    expect(
+      serialized(dom.window.document, [
+        {
+          selectorType: 'markers',
+          selector: '',
+          startMarker: '<!--开始-->\r\n',
+          endMarker: '\r\n<!--结束-->'
+        }
+      ])
+    ).toBe(1)
   })
 })

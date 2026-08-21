@@ -27,6 +27,7 @@ import {
   convertDateToTimestamp,
   timestampConversionFailureReason
 } from '@shared/date-to-timestamp'
+import { findMarkerRangeValues } from './marker-range'
 
 export interface ListCandidate {
   sequence: number
@@ -65,24 +66,67 @@ const applyFieldCleanup = (value: string, mapping: PageExtractionConfig): string
 
 interface ExtractedMappingValue extends ProcessedResourceValue {
   conversionError: string
+  matchCount: number
+}
+
+const extractMarkerValue = (
+  sourceHtml: string,
+  mapping: PageExtractionConfig,
+  stripScriptContent: boolean
+): { value: string; matchCount: number } => {
+  const ranges = findMarkerRangeValues(sourceHtml, mapping)
+  const shouldReadDom =
+    mapping.extraction === 'text' || mapping.contentFilterSelectors.length > 0
+  const rangeRoot = shouldReadDom
+    ? new JSDOM('<!doctype html><body><div></div></body>').window.document.body.firstElementChild
+    : null
+
+  const extractRange = (range: string): string => {
+    if (!rangeRoot) return range
+    rangeRoot.innerHTML = range
+    return extractRawValue(
+      rangeRoot,
+      {
+        ...mapping,
+        selectorType: 'css',
+        selector: ':scope',
+        textPrefix: '',
+        extraction: mapping.extraction === 'attribute' ? 'html' : mapping.extraction,
+        matchMode: 'first',
+        separator: ''
+      },
+      mapping.extraction === 'text' && stripScriptContent
+    )
+  }
+
+  if (ranges.length === 0 && shouldReadDom) extractRange('')
+  return {
+    value: ranges.map(extractRange).join(mapping.separator),
+    matchCount: ranges.length
+  }
 }
 
 const applyTimestampConversion = (
   processed: ProcessedResourceValue,
-  mapping: PageExtractionConfig
+  mapping: PageExtractionConfig,
+  matchCount: number
 ): ExtractedMappingValue => {
-  if (!mapping.convertToTimestamp) return { ...processed, conversionError: '' }
+  if (!mapping.convertToTimestamp) return { ...processed, conversionError: '', matchCount }
   const converted = convertDateToTimestamp(processed.value)
-  if (converted.ok) return { ...processed, value: converted.value, conversionError: '' }
+  if (converted.ok) {
+    return { ...processed, value: converted.value, conversionError: '', matchCount }
+  }
   return {
     value: '',
     resources: [],
-    conversionError: timestampConversionFailureReason(processed.value, converted.reason)
+    conversionError: timestampConversionFailureReason(processed.value, converted.reason),
+    matchCount
   }
 }
 
 const extractMappingValue = (
   root: Document | Element,
+  sourceHtml: string,
   mapping: PageExtractionConfig,
   baseUrl: string,
   pageUrl: string,
@@ -90,13 +134,28 @@ const extractMappingValue = (
   fieldLabel: string
 ): ExtractedMappingValue => {
   let raw = ''
+  let matchCount = 0
   try {
-    raw = extractRawValue(root, mapping, task.html.cleanHtml)
+    if (mapping.selectorType === 'markers') {
+      const result = extractMarkerValue(sourceHtml, mapping, task.html.cleanHtml)
+      raw = result.value
+      matchCount = result.matchCount
+    } else {
+      matchCount = selectMappingNodes(root, mapping).length
+      raw = extractRawValue(root, mapping, task.html.cleanHtml)
+    }
   } catch (error) {
     if (error instanceof ContentFilterSelectorError) {
       throw new Error(`字段“${fieldLabel}”：${error.message}`)
     }
     throw error
+  }
+  if (mapping.selectorType === 'markers') {
+    return applyTimestampConversion(
+      { value: applyFieldCleanup(raw, mapping), resources: [] },
+      mapping,
+      matchCount
+    )
   }
   if (mapping.extraction === 'html') {
     const processed = processHtmlWithResources(raw, baseUrl, pageUrl, task)
@@ -106,7 +165,8 @@ const extractMappingValue = (
         value,
         resources: processed.resources.filter((plan) => value.includes(plan.xmlUrl))
       },
-      mapping
+      mapping,
+      matchCount
     )
   }
   if (mapping.extraction === 'attribute') {
@@ -124,7 +184,8 @@ const extractMappingValue = (
           ),
           resources: []
         },
-        mapping
+        mapping,
+        matchCount
       )
     }
     const matches = selectMappingNodes(root, mapping)
@@ -162,12 +223,14 @@ const extractMappingValue = (
           .flatMap((processed) => processed.resources)
           .filter((plan) => value.includes(plan.xmlUrl))
       },
-      mapping
+      mapping,
+      matchCount
     )
   }
   return applyTimestampConversion(
     { value: applyFieldCleanup(raw, mapping), resources: [] },
-    mapping
+    mapping,
+    matchCount
   )
 }
 
@@ -210,13 +273,16 @@ export const extractListPage = (
   page: number,
   sequenceStart: number
 ): ExtractListPageResult => {
-  const dom = new JSDOM(html, { url: pageUrl })
+  const entries = pageValueEntries(task, 'list')
+  const needsSourceLocations = entries.some(
+    (entry) => entry.mapping.selectorType === 'markers'
+  )
+  const dom = new JSDOM(html, { url: pageUrl, includeNodeLocations: needsSourceLocations })
   const { document } = dom.window
   const baseUrl = document.baseURI || pageUrl
   const items = selectNodes(document, task.listItem.selectorType, task.listItem.selector).filter(
     (node): node is Element => node.nodeType === node.ELEMENT_NODE
   )
-  const entries = pageValueEntries(task, 'list')
   const requiredMappings = requiredPageMappings(task, 'list')
   const matchCounts: Record<string, number[]> = Object.fromEntries(
     entries.map((entry) => [entry.matchKey, []])
@@ -226,16 +292,21 @@ export const extractListPage = (
     const values = initialValues(task)
     const resources: ResourcePlan[] = []
     const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
+    const sourceLocation = needsSourceLocations ? dom.nodeLocation(item) : null
+    const itemSourceHtml = sourceLocation
+      ? html.slice(sourceLocation.startOffset, sourceLocation.endOffset)
+      : item.outerHTML
     for (const entry of entries) {
-      matchCounts[entry.matchKey]?.push(selectMappingNodes(item, entry.mapping).length)
       const processed = extractMappingValue(
         item,
+        itemSourceHtml,
         entry.mapping,
         baseUrl,
         pageUrl,
         task,
         entry.matchKey
       )
+      matchCounts[entry.matchKey]?.push(processed.matchCount)
       values[entry.valueKey] = processed.value
       resources.push(...processed.resources)
       if (processed.conversionError) {
@@ -303,15 +374,16 @@ export const extractDetailPage = (
   const matchCounts: Record<string, number> = {}
   const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
   for (const entry of entries) {
-    matchCounts[entry.matchKey] = selectMappingNodes(document, entry.mapping).length
     const processed = extractMappingValue(
       document,
+      html,
       entry.mapping,
       baseUrl,
       pageUrl,
       task,
       entry.matchKey
     )
+    matchCounts[entry.matchKey] = processed.matchCount
     values[entry.valueKey] = processed.value
     resources.push(...processed.resources)
     if (processed.conversionError) {

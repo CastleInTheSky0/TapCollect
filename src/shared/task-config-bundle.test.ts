@@ -65,7 +65,10 @@ describe('task config bundle', () => {
     }
     const mapping = createFieldMapping(field)
     mapping.mode = 'page'
-    mapping.selector = '.published'
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '<time>'
+    mapping.endMarker = '</time>'
+    mapping.includeMarkers = true
     mapping.textPrefix = '自定义发布日期'
     mapping.contentFilterSelectors = ['h1', '.share']
     mapping.convertToTimestamp = true
@@ -96,6 +99,12 @@ describe('task config bundle', () => {
     expect(imported.xml?.mappings[0]?.convertToTimestamp).toBe(true)
     expect(imported.xml?.mappings[0]?.textPrefix).toBe('自定义发布日期')
     expect(imported.xml?.mappings[0]?.contentFilterSelectors).toEqual(['h1', '.share'])
+    expect(imported.xml?.mappings[0]).toMatchObject({
+      selectorType: 'markers',
+      startMarker: '<time>',
+      endMarker: '</time>',
+      includeMarkers: true
+    })
   })
 
   it('rejects malformed task entries with a field-specific reason', () => {

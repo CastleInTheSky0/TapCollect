@@ -29,6 +29,7 @@ export const selectMappingNodes = (
   root: QueryRoot,
   mapping: PageExtractionConfig
 ): Node[] => {
+  if (mapping.selectorType === 'markers') return []
   const matches = selectNodes(root, mapping.selectorType, mapping.selector)
   const textPrefix = normalizeTextPrefix(mapping.textPrefix)
   if (mapping.extraction !== 'text' || !textPrefix) return matches

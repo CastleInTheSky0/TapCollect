@@ -1,4 +1,5 @@
 export type SelectorType = 'css' | 'xpath'
+export type PageLocatorType = SelectorType | 'markers'
 export type PaginationMode = 'url' | 'click'
 export type DetailNavigationMode = 'link' | 'click'
 export type PageSource = 'list' | 'detail'
@@ -133,8 +134,11 @@ export interface SpreadsheetFieldDefinition extends OutputFieldDefinition {
 
 export interface PageExtractionConfig {
   pageSource: PageSource
-  selectorType: SelectorType
+  selectorType: PageLocatorType
   selector: string
+  startMarker: string
+  endMarker: string
+  includeMarkers: boolean
   textPrefix: string
   extraction: ExtractionType
   attribute: string

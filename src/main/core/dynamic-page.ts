@@ -1,4 +1,7 @@
-import type { SelectorConfig, TaskConfig } from '@shared/types'
+import type { PageExtractionConfig, SelectorConfig, TaskConfig } from '@shared/types'
+
+export type DynamicDetailLocator = Pick<PageExtractionConfig, 'selectorType' | 'selector'> &
+  Partial<Pick<PageExtractionConfig, 'startMarker' | 'endMarker'>>
 
 export interface DynamicPageSnapshot {
   html: string
@@ -39,10 +42,40 @@ export type DynamicDetailDomActionResult =
 
 export const countDynamicSelectorMatches = (
   root: Document,
-  selectors: SelectorConfig[]
+  selectors: DynamicDetailLocator[]
 ): number => {
+  // 本函数会被序列化到隔离页面执行，标记匹配逻辑必须保持在函数内部。
+  const createLiteralMarkerPattern = (marker: string): RegExp => {
+    const pattern = marker
+      .replace(/\r\n?/g, '\n')
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\n/g, '(?:\\r\\n|\\r|\\n)')
+    return new RegExp(pattern, 'g')
+  }
+
   let count = 0
   for (const config of selectors) {
+    if (config.selectorType === 'markers') {
+      const source = root.documentElement?.outerHTML ?? ''
+      const startMarker = config.startMarker ?? ''
+      const endMarker = config.endMarker ?? ''
+      if (!startMarker.length || !endMarker.length) continue
+      const startPattern = createLiteralMarkerPattern(startMarker)
+      const endPattern = createLiteralMarkerPattern(endMarker)
+      let cursor = 0
+      while (cursor <= source.length) {
+        startPattern.lastIndex = cursor
+        const start = startPattern.exec(source)
+        if (!start) break
+        const contentStart = start.index + start[0].length
+        endPattern.lastIndex = contentStart
+        const end = endPattern.exec(source)
+        if (!end) break
+        count += 1
+        cursor = end.index + end[0].length
+      }
+      continue
+    }
     const expression = config.selector.trim()
     if (!expression) continue
     if (config.selectorType === 'css') {

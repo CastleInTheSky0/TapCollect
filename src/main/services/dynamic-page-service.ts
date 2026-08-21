@@ -8,6 +8,7 @@ import {
   resolveDynamicDetailClick,
   resolveDynamicDomAction,
   type DynamicDetailDomActionResult,
+  type DynamicDetailLocator,
   type DynamicDomActionResult,
   type DynamicPageAdvance,
   type DynamicPageProvider,
@@ -51,7 +52,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   private latestSnapshot: DynamicPageSnapshot | null = null
   private blockedNavigation = ''
   private closed = false
-  private readonly detailSelectors: TaskConfig['listItem'][]
+  private readonly detailLocators: DynamicDetailLocator[]
 
   constructor(
     private readonly hostWindow: BrowserWindow,
@@ -60,14 +61,26 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     private readonly startUrl: string,
     private readonly allowedHostname: string
   ) {
-    this.detailSelectors = taskOutputMappings(task).flatMap((mapping) => {
+    this.detailLocators = taskOutputMappings(task).flatMap((mapping) => {
       if (mapping.mode === 'page' && mapping.pageSource === 'detail') {
-        return [{ selectorType: mapping.selectorType, selector: mapping.selector }]
+        return [
+          {
+            selectorType: mapping.selectorType,
+            selector: mapping.selector,
+            startMarker: mapping.startMarker,
+            endMarker: mapping.endMarker
+          }
+        ]
       }
       if (mapping.mode !== 'merge') return []
       return mapping.mergeValues
         .filter((value) => value.mode === 'page' && value.pageSource === 'detail')
-        .map((value) => ({ selectorType: value.selectorType, selector: value.selector }))
+        .map((value) => ({
+          selectorType: value.selectorType,
+          selector: value.selector,
+          startMarker: value.startMarker,
+          endMarker: value.endMarker
+        }))
     })
   }
 
@@ -209,7 +222,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
         snapshot.url !== listSnapshot.url ||
         (snapshot.html !== listSnapshot.html &&
           (detailMatchCount > 0 ||
-            (this.detailSelectors.length === 0 && snapshot.itemCount === 0)))
+            (this.detailLocators.length === 0 && snapshot.itemCount === 0)))
       ) {
         await wait(POLL_INTERVAL_MS * 2)
         this.assertAlive()
@@ -286,9 +299,9 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   }
 
   private async readDetailMatchCount(): Promise<number> {
-    if (this.detailSelectors.length === 0) return 0
+    if (this.detailLocators.length === 0) return 0
     return this.executeInMainFrame<number>(
-      `(${dynamicSelectorCountSource})(document,${JSON.stringify(this.detailSelectors)})`,
+      `(${dynamicSelectorCountSource})(document,${JSON.stringify(this.detailLocators)})`,
       true
     )
   }

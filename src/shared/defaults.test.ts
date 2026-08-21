@@ -112,6 +112,19 @@ describe('taskConfigurationIssues', () => {
     ])
   })
 
+  it('accepts complete marker boundaries without requiring a CSS/XPath selector', () => {
+    const task = createRunnableTask()
+    const mapping = task.xml!.mappings[1]!
+    mapping.selectorType = 'markers'
+    mapping.selector = ''
+    mapping.startMarker = '<div class="details">'
+    mapping.endMarker = '</div>'
+
+    expect(taskConfigurationIssues(task)).toEqual([])
+    mapping.endMarker = ''
+    expect(taskConfigurationIssues(task)).toEqual(['请完成 XML 字段映射：text'])
+  })
+
   it('validates only the selected spreadsheet template and its column mappings', () => {
     const task = createRunnableSpreadsheetTask()
     task.xml!.mappings[0]!.mode = 'unconfigured'

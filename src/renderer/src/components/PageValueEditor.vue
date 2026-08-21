@@ -25,6 +25,14 @@ const addReplacement = (): void => {
   model.value.replacements.push({ id: crypto.randomUUID(), from: '', to: '' })
 }
 
+const changeLocatorType = (value: unknown): void => {
+  if (value !== 'css' && value !== 'xpath' && value !== 'markers') return
+  model.value.selectorType = value
+  if (value === 'markers' && model.value.extraction === 'attribute') {
+    model.value.extraction = 'html'
+  }
+}
+
 const contentFilterOptions = CONTENT_FILTER_SELECTOR_PRESETS.map((selector) => ({
   label: selector,
   value: selector
@@ -99,13 +107,14 @@ const setContentFilterSelectors = (value: unknown): void => {
       </t-select>
     </div>
     <div class="field">
-      <span>选择器类型</span>
-      <t-select v-model="model.selectorType">
+      <span>定位方式</span>
+      <t-select v-model="model.selectorType" @change="changeLocatorType">
         <t-option value="css" label="CSS" />
         <t-option value="xpath" label="XPath 1.0" />
+        <t-option value="markers" label="前后标记" />
       </t-select>
     </div>
-    <div class="field selector-field full">
+    <div v-if="model.selectorType !== 'markers'" class="field selector-field full">
       <span>选择器</span>
       <div class="inline-control">
         <t-input v-model="model.selector" class="code-input" :spell-check="false" placeholder="例如 .title 或 .//h1" />
@@ -127,24 +136,64 @@ const setContentFilterSelectors = (value: unknown): void => {
         </t-tooltip>
       </div>
     </div>
+    <template v-else>
+      <div class="field marker-field full">
+        <span>内容前标记</span>
+        <t-textarea
+          v-model="model.startMarker" class="code-input" :spell-check="false"
+          :autosize="{ minRows: 2, maxRows: 8 }" placeholder="例如 <div class=&quot;details&quot;>"
+        />
+      </div>
+      <div class="field marker-field full">
+        <span>内容后标记</span>
+        <t-textarea
+          v-model="model.endMarker" class="code-input" :spell-check="false"
+          :autosize="{ minRows: 3, maxRows: 10 }"
+          placeholder="可输入包含注释、换行和多个标签的完整原文"
+        />
+      </div>
+      <small class="marker-note full">
+        按页面 HTML 原文匹配（区分大小写，空格和缩进需一致；CRLF/LF 换行可互相识别）；请使用“测试采集”查看结果。
+      </small>
+      <div class="switch-control full">
+        <div>
+          <strong>保存前后标记</strong>
+          <span>关闭时只保存两个标记之间的内容；开启时将两个边界标记一并保存</span>
+        </div>
+        <t-switch v-model="model.includeMarkers" />
+      </div>
+    </template>
     <div class="field">
       <span>提取内容</span>
       <t-select v-model="model.extraction">
         <t-option value="text" label="文字内容（不含 HTML 标签）" />
         <t-option value="html" label="HTML 内容（保留排版和标签）" />
-        <t-option value="attribute" label="标签属性（如链接、图片地址）" />
+        <t-option
+          v-if="model.selectorType !== 'markers'"
+          value="attribute"
+          label="标签属性（如链接、图片地址）"
+        />
       </t-select>
     </div>
-    <div v-if="model.extraction === 'attribute'" class="field">
+    <div
+      v-if="model.selectorType !== 'markers' && model.extraction === 'attribute'"
+      class="field"
+    >
       <span>属性名</span>
       <t-input v-model="model.attribute" placeholder="href / src / content" />
     </div>
-    <div v-else-if="model.extraction === 'text'" class="field text-prefix-field">
+    <div
+      v-else-if="model.selectorType !== 'markers' && model.extraction === 'text'"
+      class="field text-prefix-field"
+    >
       <span>文字标签定位（可选）</span>
       <t-input v-model="model.textPrefix" clearable placeholder="例如：发布时间" />
       <small>只填写标签文字，无需输入中文或英文冒号；同一节点有多个“标签：值”时会按标签区分，其他连接符暂不支持</small>
     </div>
-    <div v-if="model.extraction !== 'attribute'" class="field content-filter-field full">
+    <div
+      v-if="model.extraction !== 'attribute'"
+      class="field content-filter-field full"
+    >
       <span>过滤标签及内容</span>
       <t-select
         :value="model.contentFilterSelectors"
@@ -164,10 +213,14 @@ const setContentFilterSelectors = (value: unknown): void => {
       />
     </div>
     <div class="field">
-      <span>多元素处理</span>
+      <span>{{ model.selectorType === 'markers' ? '多段处理' : '多元素处理' }}</span>
       <t-select v-model="model.matchMode">
-        <t-option value="first" label="只取第一个" />
-        <t-option value="all" label="合并全部" />
+        <t-option
+          value="first" :label="model.selectorType === 'markers' ? '只取第一段' : '只取第一个'"
+        />
+        <t-option
+          value="all" :label="model.selectorType === 'markers' ? '合并全部匹配段' : '合并全部'"
+        />
       </t-select>
     </div>
     <div v-if="model.matchMode === 'all'" class="field">
@@ -177,7 +230,10 @@ const setContentFilterSelectors = (value: unknown): void => {
     <div class="check-line full">
       <t-checkbox v-if="showRequired" v-model="model.required">必填，无值时跳过记录</t-checkbox>
       <t-checkbox v-model="model.trim">去除首尾空白</t-checkbox>
-      <t-checkbox v-if="model.extraction === 'text'" v-model="model.collapseWhitespace">
+      <t-checkbox
+        v-if="model.extraction === 'text'"
+        v-model="model.collapseWhitespace"
+      >
         合并连续空白
       </t-checkbox>
     </div>
@@ -254,8 +310,15 @@ const setContentFilterSelectors = (value: unknown): void => {
   flex: 1;
 }
 
-.code-input :deep(input) {
+.code-input :deep(input),
+.code-input :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.marker-note {
+  color: #7a878d;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .content-filter-field :deep(.t-tag-input) {
@@ -279,7 +342,8 @@ const setContentFilterSelectors = (value: unknown): void => {
   font-size: 10px;
 }
 
-.timestamp-control {
+.timestamp-control,
+.switch-control {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -291,19 +355,22 @@ const setContentFilterSelectors = (value: unknown): void => {
   gap: 12px;
 }
 
-.timestamp-control>div {
+.timestamp-control>div,
+.switch-control>div {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 2px;
 }
 
-.timestamp-control strong {
+.timestamp-control strong,
+.switch-control strong {
   color: var(--ink);
   font-size: 11px;
 }
 
-.timestamp-control span {
+.timestamp-control span,
+.switch-control span {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.5;

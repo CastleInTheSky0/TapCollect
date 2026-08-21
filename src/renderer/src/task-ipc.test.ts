@@ -28,7 +28,10 @@ describe('snapshotTaskForIpc', () => {
     const mapping = createFieldMapping(field)
     const mergeValue = createMergeValue('body')
     mergeValue.pageSource = 'detail'
-    mergeValue.selector = '#content'
+    mergeValue.selectorType = 'markers'
+    mergeValue.startMarker = '<div class="details">'
+    mergeValue.endMarker = '</div>'
+    mergeValue.includeMarkers = true
     mergeValue.textPrefix = '发布时间'
     mergeValue.contentFilterSelectors = ['h1', '.share']
     mergeValue.convertToTimestamp = true
@@ -99,6 +102,12 @@ describe('snapshotTaskForIpc', () => {
       '.share'
     ])
     expect(snapshot.xml?.mappings[0]?.mergeValues[0]?.textPrefix).toBe('发布时间')
+    expect(snapshot.xml?.mappings[0]?.mergeValues[0]).toMatchObject({
+      selectorType: 'markers',
+      startMarker: '<div class="details">',
+      endMarker: '</div>',
+      includeMarkers: true
+    })
     expect(snapshot.spreadsheet).toMatchObject({
       fileName: 'sample.xlsx',
       contentBase64: 'UEsDBAoAAAAA',

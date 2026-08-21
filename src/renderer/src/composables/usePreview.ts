@@ -292,6 +292,10 @@ export const usePreview = (deps: PreviewDeps) => {
   const pickMapping = async (path: string, mergeValueId?: string): Promise<void> => {
     const pageMapping = pageMappingByPath(path, mergeValueId)
     if (!pageMapping || !deps.getActiveTask()) return
+    if (pageMapping.selectorType === 'markers') {
+      deps.showNotice('前后标记定位不支持点选，请直接填写标记并使用测试采集验证')
+      return
+    }
     if (pageMapping.pageSource === 'list' && !ensureListItemSelector()) return
     if (!(await ensurePreview())) return
     pickingLabel.value = `正在点选字段 ${path}${mergeValueId ? ' 的合并项' : ''}，按 Esc 取消`
@@ -321,11 +325,16 @@ export const usePreview = (deps: PreviewDeps) => {
   const evaluateMapping = async (path: string, mergeValueId?: string): Promise<void> => {
     const pageMapping = pageMappingByPath(path, mergeValueId)
     if (!pageMapping || !deps.getActiveTask()) return
+    const selectorType = pageMapping.selectorType
+    if (selectorType === 'markers') {
+      deps.showNotice('前后标记定位请使用测试采集验证')
+      return
+    }
     if (pageMapping.pageSource === 'list' && !ensureListItemSelector()) return
     if (!(await ensurePreview())) return
     try {
       const result = await api.previewEvaluate({
-        selectorType: pageMapping.selectorType,
+        selectorType,
         selector: pageMapping.selector,
         scopeSelector: previewScopeForMapping(pageMapping),
         ancestorAttribute: '',

@@ -172,6 +172,9 @@ describe('TaskStore', () => {
     delete legacyXml.mappings[0]!.mergeSeparator
     delete legacyXml.mappings[0]!.mergeValues
     delete legacyXml.mappings[0]!.textPrefix
+    delete legacyXml.mappings[0]!.startMarker
+    delete legacyXml.mappings[0]!.endMarker
+    delete legacyXml.mappings[0]!.includeMarkers
     const taskDirectory = join(root, 'tasks', task.id)
     await mkdir(taskDirectory, { recursive: true })
     await writeFile(join(taskDirectory, 'task.json'), JSON.stringify(legacy), 'utf8')
@@ -182,8 +185,40 @@ describe('TaskStore', () => {
       mode: 'page',
       selector: '.title',
       textPrefix: '',
+      startMarker: '',
+      endMarker: '',
+      includeMarkers: false,
       mergeSeparator: '',
       mergeValues: []
+    })
+  })
+
+  it('preserves marker locator configuration across save and reload', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-store-marker-locator-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    const task = createTask('marker-locator-task')
+    task.xml = configureXmlRecord(
+      '<book><article><text/></article></book>',
+      'template.xml',
+      '/book/article'
+    )
+    const mapping = task.xml.mappings[0]!
+    mapping.mode = 'page'
+    mapping.pageSource = 'detail'
+    mapping.selectorType = 'markers'
+    mapping.startMarker = '<div class="details">'
+    mapping.endMarker = '</div>\n<!--主体结束-->\n<br />\n<br />'
+    mapping.includeMarkers = true
+
+    await store.saveTask(task)
+    const loaded = await store.loadTask(task.id)
+
+    expect(loaded?.xml?.mappings[0]).toMatchObject({
+      selectorType: 'markers',
+      startMarker: '<div class="details">',
+      endMarker: '</div>\n<!--主体结束-->\n<br />\n<br />',
+      includeMarkers: true
     })
   })
 
