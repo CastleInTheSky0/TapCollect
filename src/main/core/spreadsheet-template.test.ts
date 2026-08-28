@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import type { ExtractedRecord, SpreadsheetFormat } from '@shared/types'
@@ -7,6 +10,24 @@ import {
   renderSpreadsheetBatch,
   validateSpreadsheetBatch
 } from './spreadsheet-template'
+
+const sheetJsDirectory = dirname(createRequire(import.meta.url).resolve('xlsx'))
+const biff8PatchMarkers = [
+  'TapCollect BIFF8 long-string chunk patch',
+  'TapCollect BIFF8 SST part-boundary patch',
+  'TapCollect BIFF8 forced-boundary patch'
+]
+
+const assertSafeBiff8LongStringWriter = (): void => {
+  for (const entry of ['xlsx.js', 'xlsx.mjs']) {
+    const source = readFileSync(resolve(sheetJsDirectory, entry), 'utf8')
+    if (biff8PatchMarkers.every((marker) => source.includes(marker))) continue
+    throw new Error(
+      `拒绝运行 XLS 长字符串回归测试：${entry} 未应用 SheetJS BIFF8 补丁。` +
+        '请先执行 node scripts/patch-sheetjs-biff8.mjs 或重新安装依赖'
+    )
+  }
+}
 
 const createWorkbook = (
   format: SpreadsheetFormat,
@@ -110,6 +131,8 @@ describe('spreadsheet template', () => {
   it.each<SpreadsheetFormat>(['xlsx', 'xls'])(
     'writes long HTML markup as literal text without truncating %s cells',
     (format) => {
+      // Stock SheetJS 0.20.3 loops without advancing here and can exhaust host memory.
+      if (format === 'xls') assertSafeBiff8LongStringWriter()
       const template = importSpreadsheetTemplate(
         createWorkbook(format),
         `新闻模板.${format}`
