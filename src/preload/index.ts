@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CollectorApi,
+  PreviewNavigationState,
   RunLog,
   RunProgress,
   RunResult,
@@ -57,10 +58,14 @@ const api: CollectorApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openErrorLog, taskId, path),
   previewOpen: (url, bounds) => ipcRenderer.invoke(IPC_CHANNELS.previewOpen, url, bounds),
   previewNavigate: (url) => ipcRenderer.invoke(IPC_CHANNELS.previewNavigate, url),
+  previewGoBack: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoBack),
+  previewGoForward: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoForward),
   previewSetBounds: (bounds) => ipcRenderer.invoke(IPC_CHANNELS.previewSetBounds, bounds),
   previewClose: () => ipcRenderer.invoke(IPC_CHANNELS.previewClose),
   previewPick: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewPick, request),
   previewEvaluate: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewEvaluate, request),
+  onPreviewNavigation: (listener) =>
+    eventSubscription<PreviewNavigationState>(IPC_CHANNELS.previewNavigation, listener),
   onRunProgress: (listener) => eventSubscription<RunProgress>(IPC_CHANNELS.runProgress, listener),
   onRunLog: (listener) => eventSubscription<RunLog>(IPC_CHANNELS.runLog, listener),
   onRunFinished: (listener) => eventSubscription<RunResult>(IPC_CHANNELS.runFinished, listener),

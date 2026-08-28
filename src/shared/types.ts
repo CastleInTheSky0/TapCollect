@@ -437,6 +437,13 @@ export interface PreviewBounds {
   height: number
 }
 
+export interface PreviewNavigationState {
+  url: string
+  canGoBack: boolean
+  canGoForward: boolean
+  isLoading: boolean
+}
+
 export interface PreviewPickRequest {
   selectorType: SelectorType
   scopeSelector: string
@@ -578,10 +585,13 @@ export interface CollectorApi {
   openErrorLog: (taskId: string, path: string) => Promise<boolean>
   previewOpen: (url: string, bounds: PreviewBounds) => Promise<boolean>
   previewNavigate: (url: string) => Promise<boolean>
+  previewGoBack: () => Promise<boolean>
+  previewGoForward: () => Promise<boolean>
   previewSetBounds: (bounds: PreviewBounds) => Promise<boolean>
   previewClose: () => Promise<boolean>
   previewPick: (request: PreviewPickRequest) => Promise<PreviewPickResult>
   previewEvaluate: (request: PreviewEvaluateRequest) => Promise<PreviewEvaluateResult>
+  onPreviewNavigation: (listener: (state: PreviewNavigationState) => void) => () => void
   onRunProgress: (listener: (progress: RunProgress) => void) => () => void
   onRunLog: (listener: (log: RunLog) => void) => () => void
   onRunFinished: (listener: (result: RunResult) => void) => () => void

@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events'
 import { BrowserWindow, WebContentsView } from 'electron'
 import type {
   PreviewBounds,
   PreviewEvaluateRequest,
   PreviewEvaluateResult,
+  PreviewNavigationState,
   PreviewPickRequest,
   PreviewPickResult
 } from '@shared/types'
@@ -81,11 +83,13 @@ const normalizeBounds = (bounds: PreviewBounds): PreviewBounds => ({
   height: Math.max(1, Math.round(bounds.height))
 })
 
-export class PreviewService {
+export class PreviewService extends EventEmitter {
   private view: WebContentsView | null = null
   private pickSequence = 0
 
-  constructor(private readonly window: BrowserWindow) {}
+  constructor(private readonly window: BrowserWindow) {
+    super()
+  }
 
   async open(url: string, bounds: PreviewBounds): Promise<boolean> {
     const target = validatePreviewUrl(url)
@@ -101,6 +105,20 @@ export class PreviewService {
     return true
   }
 
+  goBack(): boolean {
+    const webContents = this.activeWebContents()
+    if (!webContents?.navigationHistory.canGoBack()) return false
+    webContents.navigationHistory.goBack()
+    return true
+  }
+
+  goForward(): boolean {
+    const webContents = this.activeWebContents()
+    if (!webContents?.navigationHistory.canGoForward()) return false
+    webContents.navigationHistory.goForward()
+    return true
+  }
+
   setBounds(bounds: PreviewBounds): boolean {
     if (!this.view) return false
     this.view.setBounds(normalizeBounds(bounds))
@@ -109,10 +127,17 @@ export class PreviewService {
 
   close(): boolean {
     if (!this.view) return false
-    this.window.contentView.removeChildView(this.view)
-    this.view.webContents.close()
+    const view = this.view
     this.view = null
+    this.window.contentView.removeChildView(view)
+    view.webContents.close()
+    this.emitNavigationState()
     return true
+  }
+
+  onNavigation(listener: (state: PreviewNavigationState) => void): () => void {
+    this.on('navigation', listener)
+    return () => this.off('navigation', listener)
   }
 
   async pick(request: PreviewPickRequest): Promise<PreviewPickResult> {
@@ -392,7 +417,7 @@ export class PreviewService {
   }
 
   private createView(): void {
-    this.view = new WebContentsView({
+    const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -401,19 +426,57 @@ export class PreviewService {
         partition: 'web-info-collector-preview'
       }
     })
-    this.view.setBackgroundColor('#ffffff')
-    this.view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    this.view.webContents.session.setPermissionCheckHandler(() => false)
-    this.view.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
+    this.view = view
+    view.setBackgroundColor('#ffffff')
+    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    view.webContents.session.setPermissionCheckHandler(() => false)
+    view.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
       callback(false)
     )
-    this.view.webContents.on('will-navigate', (event, url) => {
+    view.webContents.on('will-navigate', (event, url) => {
       try {
         validatePreviewUrl(url)
       } catch {
         event.preventDefault()
       }
     })
-    this.window.contentView.addChildView(this.view)
+    view.webContents.on('did-navigate', () => {
+      if (this.view === view) this.emitNavigationState()
+    })
+    view.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+      if (isMainFrame && this.view === view) this.emitNavigationState()
+    })
+    view.webContents.on('did-start-loading', () => {
+      if (this.view !== view) return
+      view.setVisible(false)
+      this.emitNavigationState()
+    })
+    view.webContents.on('did-stop-loading', () => {
+      if (this.view !== view) return
+      view.setVisible(true)
+      this.emitNavigationState()
+    })
+    // 原生 WebContentsView 始终绘制在渲染器 DOM 上方；首次加载前先隐藏，
+    // 让 PreviewPane 的半透明 Loading 蒙层能够显示并拦截误操作。
+    view.setVisible(false)
+    this.window.contentView.addChildView(view)
+  }
+
+  private activeWebContents(): Electron.WebContents | null {
+    const webContents = this.view?.webContents
+    return webContents && !webContents.isDestroyed() ? webContents : null
+  }
+
+  private emitNavigationState(): void {
+    const webContents = this.activeWebContents()
+    const state: PreviewNavigationState = webContents
+      ? {
+          url: webContents.getURL(),
+          canGoBack: webContents.navigationHistory.canGoBack(),
+          canGoForward: webContents.navigationHistory.canGoForward(),
+          isLoading: webContents.isLoading()
+        }
+      : { url: '', canGoBack: false, canGoForward: false, isLoading: false }
+    this.emit('navigation', state)
   }
 }

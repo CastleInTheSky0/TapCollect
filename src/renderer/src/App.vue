@@ -185,9 +185,14 @@ const {
   previewOpenAction,
   pickingLabel,
   previewOpening,
+  previewLoading,
+  previewCanGoBack,
+  previewCanGoForward,
   openPreview,
   openConfiguredListPreview,
-  closePreview
+  closePreview,
+  goBackPreview,
+  goForwardPreview
 } = previewStore
 const {
   sidebarCollapsed,
@@ -296,9 +301,11 @@ onBeforeUnmount(() => {
 
     <PreviewPane
       v-model:preview-url="previewUrl" :inactive="previewCollapsed || appView === 'run-center'"
+      :can-go-back="previewCanGoBack" :can-go-forward="previewCanGoForward"
       :picking-label="pickingLabel" :preview-status="previewStatus" :preview-visible="previewVisible"
-      :preview-opening="previewOpening" :preview-open-action="previewOpenAction"
+      :preview-opening="previewOpening" :loading="previewLoading" :preview-open-action="previewOpenAction"
       :show-list-button="Boolean(activeTask && firstTaskListPageUrl(activeTask))" :surface-ref="setPreviewSurface"
+      @go-back="goBackPreview" @go-forward="goForwardPreview"
       @open-preview="openPreview" @open-list-preview="openConfiguredListPreview('placeholder-list')"
       @close-preview="closePreview"
     />

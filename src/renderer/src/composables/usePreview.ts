@@ -1,9 +1,10 @@
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Ref } from 'vue'
 import type {
   FieldMapping,
   PageExtractionConfig,
   PreviewBounds,
+  PreviewNavigationState,
   TaskConfig
 } from '@shared/types'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
@@ -29,9 +30,17 @@ export interface PreviewDeps {
 
 type BaseSelectorTarget = 'list-item' | 'next-button' | 'detail-link'
 
+const emptyPreviewNavigationState = (): PreviewNavigationState => ({
+  url: '',
+  canGoBack: false,
+  canGoForward: false,
+  isLoading: false
+})
+
 export const usePreview = (deps: PreviewDeps) => {
   const api = window.collector
   const previewUrl = ref('')
+  const previewNavigationState = ref<PreviewNavigationState>(emptyPreviewNavigationState())
   const previewStatus = ref('尚未打开预览')
   const previewOpenAction = ref<PreviewOpenAction | null>(null)
   const pickingLabel = ref('')
@@ -39,6 +48,44 @@ export const usePreview = (deps: PreviewDeps) => {
   const detailSampleIndex = ref(-1)
 
   const previewOpening = computed(() => previewOpenAction.value !== null)
+  const previewLoading = computed(
+    () => previewOpening.value || previewNavigationState.value.isLoading
+  )
+  const previewCanGoBack = computed(
+    () =>
+      deps.previewVisible.value &&
+      !previewLoading.value &&
+      previewNavigationState.value.canGoBack
+  )
+  const previewCanGoForward = computed(
+    () =>
+      deps.previewVisible.value &&
+      !previewLoading.value &&
+      previewNavigationState.value.canGoForward
+  )
+
+  const applyPreviewNavigationState = (state: PreviewNavigationState): void => {
+    previewNavigationState.value = { ...state }
+    if (state.url) {
+      previewUrl.value = state.url
+      return
+    }
+    // 首次导航开始时 Chromium 可能尚未提交目标 URL。此时保留地址栏和预览可见性，
+    // 只有明确停止加载的空状态（关闭预览）才执行重置。
+    if (!state.isLoading) {
+      previewUrl.value = ''
+      deps.previewVisible.value = false
+    }
+  }
+
+  let removePreviewNavigationListener: (() => void) | null = null
+  onMounted(() => {
+    removePreviewNavigationListener = api.onPreviewNavigation(applyPreviewNavigationState)
+  })
+  onBeforeUnmount(() => {
+    removePreviewNavigationListener?.()
+    removePreviewNavigationListener = null
+  })
 
   const setPreviewUrl = (url: string): void => {
     previewUrl.value = url
@@ -46,6 +93,24 @@ export const usePreview = (deps: PreviewDeps) => {
 
   const navigate = async (url: string): Promise<void> => {
     await api.previewNavigate(url)
+  }
+
+  const goBackPreview = async (): Promise<void> => {
+    if (!previewCanGoBack.value) return
+    try {
+      await api.previewGoBack()
+    } catch (error) {
+      deps.showError(error)
+    }
+  }
+
+  const goForwardPreview = async (): Promise<void> => {
+    if (!previewCanGoForward.value) return
+    try {
+      await api.previewGoForward()
+    } catch (error) {
+      deps.showError(error)
+    }
   }
 
   const resetDetailSamples = (): void => {
@@ -73,8 +138,8 @@ export const usePreview = (deps: PreviewDeps) => {
       await nextTick()
       const bounds = deps.layout.previewBounds()
       if (!bounds) throw new Error('无法确定网页预览区域，请调整窗口后重试')
-      await api.previewOpen(value, bounds)
       previewUrl.value = value
+      await api.previewOpen(value, bounds)
     } catch (error) {
       deps.previewVisible.value = false
       throw error
@@ -122,6 +187,7 @@ export const usePreview = (deps: PreviewDeps) => {
   const closePreview = async (): Promise<void> => {
     if (previewOpening.value) return
     await api.previewClose()
+    applyPreviewNavigationState(emptyPreviewNavigationState())
     deps.previewVisible.value = false
     previewStatus.value = '预览已关闭'
   }
@@ -356,14 +422,20 @@ export const usePreview = (deps: PreviewDeps) => {
 
   return {
     previewUrl,
+    previewNavigationState,
     previewStatus,
     previewOpenAction,
     pickingLabel,
     detailSamples,
     detailSampleIndex,
     previewOpening,
+    previewLoading,
+    previewCanGoBack,
+    previewCanGoForward,
     setPreviewUrl,
     navigate,
+    goBackPreview,
+    goForwardPreview,
     resetDetailSamples,
     loadPreviewUrl,
     openPreview,

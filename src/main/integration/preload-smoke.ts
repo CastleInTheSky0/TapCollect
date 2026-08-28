@@ -12,7 +12,11 @@ import { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
 import { UpdateService } from '@main/services/update-service'
 import { createTask } from '@shared/defaults'
-import type { PreviewEvaluateResult, PreviewPickResult } from '@shared/types'
+import type {
+  PreviewEvaluateResult,
+  PreviewNavigationState,
+  PreviewPickResult
+} from '@shared/types'
 
 interface PreloadSmokeResult {
   hasCollector: boolean
@@ -32,6 +36,7 @@ interface PreloadSmokeResult {
   deleteTaskWorks: boolean
   taskConfigExportWorks: boolean
   taskConfigImportWorks: boolean
+  previewNavigationWorks: boolean
   previewPickWorks: boolean
   dynamicPartialLoadWorks: boolean
   consoleErrors: string[]
@@ -74,6 +79,277 @@ const withTimeout = async <T>(promise: Promise<T>, message: string): Promise<T> 
 
 const rejectionMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
+
+const previewNavigationStatesKey = '__tapcollectPreviewNavigationSmokeStates'
+const previewNavigationCleanupKey = '__tapcollectPreviewNavigationSmokeCleanup'
+
+const readPreviewNavigationStates = async (
+  window: BrowserWindow
+): Promise<PreviewNavigationState[]> =>
+  window.webContents.executeJavaScript(`window[${JSON.stringify(previewNavigationStatesKey)}] || []`)
+
+const waitForPreviewNavigationState = async (
+  window: BrowserWindow,
+  predicate: (state: PreviewNavigationState) => boolean,
+  message: string
+): Promise<PreviewNavigationState> => {
+  let states: PreviewNavigationState[] = []
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    states = await readPreviewNavigationStates(window)
+    const state = states.at(-1)
+    if (state && predicate(state)) return state
+    await delay(25)
+  }
+  throw new Error(`${message}：${JSON.stringify(states.slice(-6))}`)
+}
+
+const waitForPreviewCondition = async (
+  view: WebContentsView,
+  source: string,
+  message: string
+): Promise<void> => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const matched = await view.webContents.executeJavaScript(`Boolean(${source})`, true)
+    if (matched) return
+    await delay(25)
+  }
+  throw new Error(message)
+}
+
+const verifyPreviewNavigation = async (
+  window: BrowserWindow,
+  baseUrl: string
+): Promise<boolean> => {
+  const listUrl = new URL('history-list', baseUrl).toString()
+  const detailUrl = new URL('history-detail', baseUrl).toString()
+  const detailHashUrl = `${detailUrl}#section`
+  const manualUrl = new URL('history-manual', baseUrl).toString()
+  const manualNavigationPromiseKey = '__tapcollectPreviewManualNavigationPromise'
+  const apiReady = await window.webContents.executeJavaScript(`
+    (() => {
+      const api = window.collector;
+      if (
+        typeof api?.previewGoBack !== 'function' ||
+        typeof api?.previewGoForward !== 'function' ||
+        typeof api?.onPreviewNavigation !== 'function'
+      ) return false;
+      const cleanupKey = ${JSON.stringify(previewNavigationCleanupKey)};
+      const previousCleanup = window[cleanupKey];
+      if (typeof previousCleanup === 'function') previousCleanup();
+      const statesKey = ${JSON.stringify(previewNavigationStatesKey)};
+      window[statesKey] = [];
+      window[cleanupKey] = api.onPreviewNavigation((state) => {
+        window[statesKey].push(state);
+      });
+      return true;
+    })()
+  `)
+  if (!apiReady) return false
+
+  try {
+    const unavailableBack = await window.webContents.executeJavaScript(
+      'window.collector.previewGoBack()'
+    )
+    const unavailableForward = await window.webContents.executeJavaScript(
+      'window.collector.previewGoForward()'
+    )
+    const opened = await window.webContents.executeJavaScript(`
+      window.collector.previewOpen(${JSON.stringify(listUrl)}, {
+        x: 0, y: 0, width: 960, height: 640
+      })
+    `)
+    const initialState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === listUrl &&
+        !state.canGoBack &&
+        !state.canGoForward &&
+        !state.isLoading,
+      'Electron 预览初始导航状态未同步'
+    )
+    const previewView = window.contentView.children.find(
+      (child): child is WebContentsView =>
+        child instanceof WebContentsView && child.webContents.getURL() === listUrl
+    )
+    if (!previewView) throw new Error('Electron 预览历史冒烟未找到 WebContentsView')
+    await waitForPreviewCondition(
+      previewView,
+      "document.querySelector('#history-detail-link')",
+      'Electron 预览历史列表页未完成渲染'
+    )
+    await previewView.webContents.executeJavaScript(`
+      (() => {
+        history.replaceState({ marker: 'list-state' }, '');
+        const input = document.querySelector('#history-state');
+        const link = document.querySelector('#history-detail-link');
+        if (!input || !link) throw new Error('预览历史冒烟列表节点不存在');
+        input.value = '保留的列表状态';
+        link.click();
+        return true;
+      })()
+    `, true)
+    const detailState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === detailUrl && state.canGoBack && !state.canGoForward && !state.isLoading,
+      'Electron 预览进入详情页后的历史状态未同步'
+    )
+
+    const wentBack = await window.webContents.executeJavaScript(
+      'window.collector.previewGoBack()'
+    )
+    const backState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === listUrl && !state.canGoBack && state.canGoForward && !state.isLoading,
+      'Electron 预览后退状态未同步'
+    )
+    await waitForPreviewCondition(
+      previewView,
+      "document.querySelector('#history-state')",
+      'Electron 预览后退后未恢复列表页'
+    )
+    const listStateRestored = await previewView.webContents.executeJavaScript(`
+      history.state?.marker === 'list-state' &&
+        document.querySelector('#history-state')?.value === '保留的列表状态'
+    `, true)
+
+    const wentForward = await window.webContents.executeJavaScript(
+      'window.collector.previewGoForward()'
+    )
+    const forwardState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === detailUrl && state.canGoBack && !state.canGoForward && !state.isLoading,
+      'Electron 预览前进状态未同步'
+    )
+    await previewView.webContents.executeJavaScript(
+      `location.hash = ${JSON.stringify('section')}; true`,
+      true
+    )
+    const hashState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === detailHashUrl &&
+        state.canGoBack &&
+        !state.canGoForward &&
+        !state.isLoading,
+      'Electron 预览页内导航状态未同步'
+    )
+
+    const wentBackFromHash = await window.webContents.executeJavaScript(
+      'window.collector.previewGoBack()'
+    )
+    const detailAfterHashBack = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === detailUrl && state.canGoBack && state.canGoForward && !state.isLoading,
+      'Electron 预览页内导航后退状态未同步'
+    )
+    const manualNavigationStarted = await window.webContents.executeJavaScript(
+      `window[${JSON.stringify(manualNavigationPromiseKey)}] =
+        window.collector.previewNavigate(${JSON.stringify(manualUrl)});
+      true`
+    )
+    const loadingState = await waitForPreviewNavigationState(
+      window,
+      (state) => state.isLoading,
+      'Electron 预览加载状态未同步'
+    )
+    const hiddenWhileLoading = !previewView.getVisible()
+    const manualState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === manualUrl && state.canGoBack && !state.canGoForward && !state.isLoading,
+      'Electron 预览手工导航未清除前进历史'
+    )
+    const manuallyNavigated = await window.webContents.executeJavaScript(`
+      (() => {
+        const key = ${JSON.stringify(manualNavigationPromiseKey)};
+        const promise = window[key];
+        delete window[key];
+        return promise;
+      })()
+    `)
+    const visibleAfterLoading = previewView.getVisible()
+
+    const closed = await window.webContents.executeJavaScript(
+      'window.collector.previewClose()'
+    )
+    const closedState = await waitForPreviewNavigationState(
+      window,
+      (state) =>
+        state.url === '' &&
+        !state.canGoBack &&
+        !state.canGoForward &&
+        !state.isLoading,
+      'Electron 预览关闭状态未重置'
+    )
+    const closedBack = await window.webContents.executeJavaScript(
+      'window.collector.previewGoBack()'
+    )
+    const closedForward = await window.webContents.executeJavaScript(
+      'window.collector.previewGoForward()'
+    )
+
+    const checks = {
+      apiReady,
+      unavailableBack,
+      unavailableForward,
+      opened,
+      initialState,
+      detailState,
+      wentBack,
+      backState,
+      listStateRestored,
+      wentForward,
+      forwardState,
+      hashState,
+      wentBackFromHash,
+      detailAfterHashBack,
+      manualNavigationStarted,
+      loadingState,
+      hiddenWhileLoading,
+      manuallyNavigated,
+      manualState,
+      visibleAfterLoading,
+      closed,
+      closedState,
+      closedBack,
+      closedForward
+    }
+    if (
+      unavailableBack !== false ||
+      unavailableForward !== false ||
+      opened !== true ||
+      wentBack !== true ||
+      listStateRestored !== true ||
+      wentForward !== true ||
+      wentBackFromHash !== true ||
+      manualNavigationStarted !== true ||
+      hiddenWhileLoading !== true ||
+      manuallyNavigated !== true ||
+      visibleAfterLoading !== true ||
+      closed !== true ||
+      closedBack !== false ||
+      closedForward !== false
+    ) {
+      throw new Error(`Electron 预览历史分支验证失败：${JSON.stringify(checks)}`)
+    }
+    return true
+  } finally {
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const cleanupKey = ${JSON.stringify(previewNavigationCleanupKey)};
+        const cleanup = window[cleanupKey];
+        if (typeof cleanup === 'function') cleanup();
+        delete window[cleanupKey];
+        delete window[${JSON.stringify(previewNavigationStatesKey)}];
+        return window.collector.previewClose();
+      })()
+    `)
+  }
+}
 
 const verifyPreviewPick = async (
   window: BrowserWindow,
@@ -476,6 +752,25 @@ const run = async (): Promise<PreloadSmokeResult> => {
 
     previewServer = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      if (request.url === '/history-list') {
+        response.end(`<!doctype html><html lang="zh-CN"><body>
+          <input id="history-state" value="初始列表状态">
+          <a id="history-detail-link" href="/history-detail">进入详情页</a>
+        </body></html>`)
+        return
+      }
+      if (request.url === '/history-detail') {
+        response.end(`<!doctype html><html lang="zh-CN"><body>
+          <h1>历史详情页</h1>
+          <section id="section">页内定位目标</section>
+        </body></html>`)
+        return
+      }
+      if (request.url === '/history-manual') {
+        response.write('<!doctype html><html lang="zh-CN"><body>')
+        setTimeout(() => response.end('手工导航目标</body></html>'), 250)
+        return
+      }
       if (request.url === '/partial-load') {
         response.end(`<!doctype html><html lang="zh-CN"><body>
           <div class="stream-item">流式记录一</div>
@@ -662,10 +957,15 @@ const run = async (): Promise<PreloadSmokeResult> => {
       })()
     `)) as Omit<
       PreloadSmokeResult,
-      'consoleErrors' | 'previewPickWorks' | 'dynamicPartialLoadWorks'
+      | 'consoleErrors'
+      | 'previewNavigationWorks'
+      | 'previewPickWorks'
+      | 'dynamicPartialLoadWorks'
     >
     writeStage('renderer-evaluated')
 
+    const previewNavigationWorks = await verifyPreviewNavigation(window, previewUrl)
+    writeStage('preview-navigation-verified')
     const previewPickWorks = await verifyPreviewPick(window, preview, previewUrl)
     writeStage('preview-picker-verified')
     const dynamicPartialLoadWorks = await verifyDynamicPartialLoad(
@@ -674,7 +974,13 @@ const run = async (): Promise<PreloadSmokeResult> => {
     )
     writeStage('dynamic-partial-load-verified')
 
-    return { ...result, previewPickWorks, dynamicPartialLoadWorks, consoleErrors }
+    return {
+      ...result,
+      previewNavigationWorks,
+      previewPickWorks,
+      dynamicPartialLoadWorks,
+      consoleErrors
+    }
   } finally {
     writeStage('cleanup')
     preview?.close()
@@ -707,6 +1013,7 @@ const main = async (): Promise<void> => {
       !result.deleteTaskWorks ||
       !result.taskConfigExportWorks ||
       !result.taskConfigImportWorks ||
+      !result.previewNavigationWorks ||
       !result.previewPickWorks ||
       !result.dynamicPartialLoadWorks ||
       result.consoleErrors.some((message) =>

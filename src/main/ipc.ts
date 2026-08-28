@@ -231,6 +231,8 @@ export const registerIpcHandlers = (
     preview.open(url, bounds)
   )
   ipcMain.handle(IPC_CHANNELS.previewNavigate, (_event, url: string) => preview.navigate(url))
+  ipcMain.handle(IPC_CHANNELS.previewGoBack, () => preview.goBack())
+  ipcMain.handle(IPC_CHANNELS.previewGoForward, () => preview.goForward())
   ipcMain.handle(IPC_CHANNELS.previewSetBounds, (_event, bounds: PreviewBounds) =>
     preview.setBounds(bounds)
   )
@@ -255,11 +257,17 @@ export const registerIpcHandlers = (
   const removeUpdateProgress = updateService.onDownloadProgress((progress) =>
     window.webContents.send(IPC_CHANNELS.updateDownloadProgress, progress)
   )
+  const removePreviewNavigation = preview.onNavigation((state) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(IPC_CHANNELS.previewNavigation, state)
+    }
+  })
   window.once('closed', () => {
     removeProgress()
     removeLog()
     removeFinished()
     removeSession()
     removeUpdateProgress()
+    removePreviewNavigation()
   })
 }
