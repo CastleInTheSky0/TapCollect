@@ -86,9 +86,15 @@
 }
 
 .preview-loading-wrap > .t-loading {
-  background: rgba(239, 246, 246, 0.78);
-  backdrop-filter: blur(1.5px);
+  flex-direction: column;
+  gap: 12px;
+  background: #eff6f6;
   color: var(--accent-dark);
+  text-align: center;
+}
+
+.preview-loading-wrap > .t-loading > .t-loading__text {
+  margin-left: 0;
 }
 
 .preview-placeholder {
