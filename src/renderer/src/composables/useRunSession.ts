@@ -28,8 +28,6 @@ export interface RunSessionDeps {
   getActiveId: () => string
   refreshTasks: () => Promise<void>
   loadTask: (id: string) => Promise<void>
-  closePreview: () => Promise<void>
-  getPreviewVisible: () => boolean
   getActiveTask: () => TaskConfig | null
   getHasUnsavedChanges: () => boolean
   getConfigurationIssues: () => string[]
@@ -152,7 +150,6 @@ export const useRunSession = (deps: RunSessionDeps) => {
     if (!taskId) return
     resumePrompt.value = false
     pendingRunTaskId.value = ''
-    if (deps.getPreviewVisible()) await deps.closePreview()
     selectedRunTaskId.value = taskId
     dismissedRunTaskIds.value = new Set(
       [...dismissedRunTaskIds.value].filter((candidate) => candidate !== taskId)
