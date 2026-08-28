@@ -8,9 +8,9 @@ import type {
   TaskConfig
 } from '@shared/types'
 import {
-  processAttributeValue,
   processAttributeValueWithResources,
   processHtmlWithResources,
+  processTextValueWithResources,
   type ProcessedResourceValue
 } from './html-processing'
 import {
@@ -170,24 +170,6 @@ const extractMappingValue = (
     )
   }
   if (mapping.extraction === 'attribute') {
-    if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
-      return applyTimestampConversion(
-        {
-          value: applyFieldCleanup(
-            processAttributeValue(
-              raw,
-              baseUrl,
-              task.html.absolutizeResources,
-              task.resourceReplacements
-            ),
-            mapping
-          ),
-          resources: []
-        },
-        mapping,
-        matchCount
-      )
-    }
     const matches = selectMappingNodes(root, mapping)
     const selected = mapping.matchMode === 'all' ? matches : matches.slice(0, 1)
     const processedValues = selected.map((node) => {
@@ -227,8 +209,17 @@ const extractMappingValue = (
       matchCount
     )
   }
+  const processed = processTextValueWithResources(
+    applyFieldCleanup(raw, mapping),
+    baseUrl,
+    pageUrl,
+    task
+  )
   return applyTimestampConversion(
-    { value: applyFieldCleanup(raw, mapping), resources: [] },
+    {
+      value: processed.value,
+      resources: processed.resources.filter((plan) => processed.value.includes(plan.xmlUrl))
+    },
     mapping,
     matchCount
   )

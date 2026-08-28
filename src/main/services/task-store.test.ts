@@ -102,6 +102,7 @@ describe('TaskStore', () => {
     expect(loaded?.resources).toEqual({
       addressMode: 'absolute-replace',
       urlPrefix: '',
+      encodeUrls: false,
       download: { enabled: false, rootDirectory: '', urlPrefix: '' }
     })
     expect(loaded?.output.format).toBe('xml')
@@ -135,6 +136,7 @@ describe('TaskStore', () => {
     const task = createTask('resource-task')
     task.resources.addressMode = 'prefix'
     task.resources.urlPrefix = '/resources///'
+    task.resources.encodeUrls = true
     task.resources.download = {
       enabled: true,
       rootDirectory: ' D:/resource-root ',
@@ -147,6 +149,7 @@ describe('TaskStore', () => {
     expect(loaded?.resources).toEqual({
       addressMode: 'prefix',
       urlPrefix: '/resources',
+      encodeUrls: true,
       download: {
         enabled: true,
         rootDirectory: 'D:/resource-root',

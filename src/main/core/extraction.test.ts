@@ -698,4 +698,45 @@ describe('page extraction', () => {
     expect(list.candidates[0]?.values.image).toBe('/resources/images/a.jpg')
     expect(list.candidates[0]?.resources).toHaveLength(1)
   })
+
+  it('processes complete file paths in text fields without rewriting prose fragments', () => {
+    const task = createTask('resource-text-value-task')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.enabled = false
+    task.xml = configureXmlRecord(
+      '<book><article><file/><sentence/></article></book>',
+      'text-resources.xml',
+      '/book/article'
+    )
+    const fileMapping = task.xml.mappings.find((mapping) => mapping.fieldPath === 'file')!
+    fileMapping.mode = 'page'
+    fileMapping.pageSource = 'list'
+    fileMapping.selector = '.file'
+    fileMapping.extraction = 'text'
+    const sentenceMapping = task.xml.mappings.find((mapping) => mapping.fieldPath === 'sentence')!
+    sentenceMapping.mode = 'page'
+    sentenceMapping.pageSource = 'list'
+    sentenceMapping.selector = '.sentence'
+    sentenceMapping.extraction = 'text'
+    task.resources.download.enabled = true
+    task.resources.download.rootDirectory = 'D:/resources'
+    task.resources.download.urlPrefix = '/resources'
+
+    const html =
+      '<div class="item"><span class="file">/附件/会议材料.xls</span>' +
+      '<span class="sentence">说明里出现 .jpg 但不是文件路径</span></div>'
+    const readable = extractListPage(task, html, task.listUrl, 1, 0)
+
+    expect(readable.candidates[0]?.values.file).toBe('/resources/附件/会议材料.xls')
+    expect(readable.candidates[0]?.values.sentence).toBe('说明里出现 .jpg 但不是文件路径')
+    expect(readable.candidates[0]?.resources).toHaveLength(1)
+
+    task.resources.encodeUrls = true
+    const encoded = extractListPage(task, html, task.listUrl, 1, 0)
+    expect(encoded.candidates[0]?.values.file).toBe(
+      '/resources/%E9%99%84%E4%BB%B6/%E4%BC%9A%E8%AE%AE%E6%9D%90%E6%96%99.xls'
+    )
+    expect(encoded.candidates[0]?.resources).toHaveLength(1)
+  })
 })

@@ -13,6 +13,7 @@ describe('snapshotTaskForIpc', () => {
     task.request.headers.push({ id: 'referer', key: 'Referer', value: 'https://example.com' })
     task.resources.addressMode = 'prefix'
     task.resources.urlPrefix = '/resources'
+    task.resources.encodeUrls = true
     task.resources.download = {
       enabled: true,
       rootDirectory: 'D:/resources',
@@ -84,6 +85,7 @@ describe('snapshotTaskForIpc', () => {
     expect(snapshot.resources).toEqual({
       addressMode: 'prefix',
       urlPrefix: '/resources',
+      encodeUrls: true,
       download: {
         enabled: true,
         rootDirectory: 'D:/resources',

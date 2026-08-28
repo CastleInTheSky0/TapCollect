@@ -5,10 +5,14 @@ import { createMergeValue, isFieldMappingConfigured } from '@shared/field-mappin
 import type { FieldMapping, OutputFieldDefinition, XmlFieldDefinition } from '@shared/types'
 import PageValueEditor from '@renderer/components/PageValueEditor/index.vue'
 
-const props = defineProps<{
-  fields: OutputFieldDefinition[]
-  mappings: FieldMapping[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    fields: OutputFieldDefinition[]
+    mappings: FieldMapping[]
+    detailEnabled?: boolean
+  }>(),
+  { detailEnabled: true }
+)
 
 const emit = defineEmits<{
   pick: [fieldPath: string, mergeValueId?: string]
@@ -120,6 +124,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 
         <PageValueEditor
           v-if="mapping.mode === 'page'" :model-value="mapping" show-required
+          :detail-enabled="detailEnabled"
           @pick="$emit('pick', mapping.fieldPath)" @evaluate="$emit('evaluate', mapping.fieldPath)"
         />
 
@@ -171,6 +176,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
             </div>
             <PageValueEditor
               v-if="value.mode === 'page'" :model-value="value"
+              :detail-enabled="detailEnabled"
               @pick="$emit('pick', mapping.fieldPath, value.id)"
               @evaluate="$emit('evaluate', mapping.fieldPath, value.id)"
             />

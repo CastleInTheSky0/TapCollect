@@ -56,6 +56,7 @@ describe('task config bundle', () => {
     const source = createTask('source-id', '2025-01-01T00:00:00.000Z')
     source.name = '导入任务'
     source.listPageRules = ['https://example.com/list.html']
+    source.resources.encodeUrls = true
     const field = {
       path: 'published',
       name: '发布时间',
@@ -96,6 +97,7 @@ describe('task config bundle', () => {
       updatedAt: '2026-08-09T02:00:00.000Z'
     })
     expect(imported.xml?.content).toBe(source.xml.content)
+    expect(imported.resources.encodeUrls).toBe(true)
     expect(imported.xml?.mappings[0]?.convertToTimestamp).toBe(true)
     expect(imported.xml?.mappings[0]?.textPrefix).toBe('自定义发布日期')
     expect(imported.xml?.mappings[0]?.contentFilterSelectors).toEqual(['h1', '.share'])
@@ -122,6 +124,12 @@ describe('task config bundle', () => {
     ;(invalidNavigation.detail as Record<string, unknown>).navigationMode = 'script'
     expect(() => prepareImportedTaskConfig(invalidNavigation, 'new-id')).toThrow(
       '任务配置.detail.navigationMode 只能是 link 或 click'
+    )
+
+    const invalidEncoding = createTask('invalid-encoding') as unknown as Record<string, unknown>
+    ;(invalidEncoding.resources as Record<string, unknown>).encodeUrls = 'yes'
+    expect(() => prepareImportedTaskConfig(invalidEncoding, 'new-id')).toThrow(
+      '任务配置.resources.encodeUrls 必须是布尔值'
     )
   })
 })

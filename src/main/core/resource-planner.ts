@@ -89,6 +89,54 @@ const safeDecodeSegment = (value: string): string => {
   }
 }
 
+export const formatResourcePath = (value: string, encodeUrls: boolean): string => {
+  if (!encodeUrls) {
+    try {
+      return decodeURI(value)
+    } catch {
+      return value
+    }
+  }
+  return value
+    .split('/')
+    .map((segment) => encodeURIComponent(safeDecodeSegment(segment)))
+    .join('/')
+}
+
+const formattedAbsoluteResourceUrl = (
+  url: URL,
+  encodeUrls: boolean,
+  protocolRelative: boolean
+): string => {
+  const authentication =
+    url.username || url.password
+      ? `${url.username}${url.password ? `:${url.password}` : ''}@`
+      : ''
+  const authority = `${authentication}${url.host}`
+  const protocol = protocolRelative ? '//' : `${url.protocol}//`
+  return `${protocol}${authority}${formatResourcePath(url.pathname, encodeUrls)}${url.search}${url.hash}`
+}
+
+export const formatResourceReferenceUrl = (value: string, encodeUrls: boolean): string => {
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      return formattedAbsoluteResourceUrl(new URL(value), encodeUrls, false)
+    }
+    if (value.startsWith('//')) {
+      return formattedAbsoluteResourceUrl(new URL(`https:${value}`), encodeUrls, true)
+    }
+  } catch {
+    return value
+  }
+
+  const queryIndex = value.indexOf('?')
+  const hashIndex = value.indexOf('#')
+  const suffixIndex = [queryIndex, hashIndex]
+    .filter((index) => index >= 0)
+    .reduce((minimum, index) => Math.min(minimum, index), value.length)
+  return `${formatResourcePath(value.slice(0, suffixIndex), encodeUrls)}${value.slice(suffixIndex)}`
+}
+
 const sanitizeResourceSegment = (value: string): string => {
   const decoded = safeDecodeSegment(value)
   if (!decoded || decoded === '.' || decoded === '..') return '_'
@@ -142,7 +190,7 @@ export const buildResourceMirrorPath = (
     normalizedUrl,
     sourceUrl: source.toString(),
     relativePath: segments.join('/'),
-    encodedPath: segments.map((segment) => encodeURIComponent(segment)).join('/')
+    encodedPath: formatResourcePath(segments.join('/'), true)
   }
 }
 
@@ -155,11 +203,12 @@ export const joinResourcePrefix = (prefix: string, encodedPath: string): string 
 export const rewriteInternalResourceWithPrefix = (
   absoluteUrl: string,
   ownerPageUrl: string,
-  prefix: string
+  prefix: string,
+  encodeUrls = false
 ): string => {
   if (!hasSameHostname(ownerPageUrl, absoluteUrl)) return absoluteUrl
   const pathname = new URL(absoluteUrl).pathname.replace(/^\/+/, '')
-  return joinResourcePrefix(prefix, pathname)
+  return joinResourcePrefix(prefix, formatResourcePath(pathname, encodeUrls))
 }
 
 export const createResourcePlan = (
@@ -168,7 +217,8 @@ export const createResourcePlan = (
   ownerPageUrl: string,
   rootDirectory: string,
   urlPrefix: string,
-  kind: ResourceKind
+  kind: ResourceKind,
+  encodeUrls = false
 ): ResourcePlan | null => {
   const absoluteUrl = resolveHttpUrl(sourceValue, resolutionBaseUrl)
   if (!absoluteUrl || !hasSameHostname(ownerPageUrl, absoluteUrl)) return null
@@ -190,7 +240,7 @@ export const createResourcePlan = (
     sourcePageUrl: ownerPageUrl,
     relativePath: mirror.relativePath,
     localPath,
-    xmlUrl: joinResourcePrefix(urlPrefix, mirror.encodedPath),
+    xmlUrl: joinResourcePrefix(urlPrefix, formatResourcePath(mirror.encodedPath, encodeUrls)),
     kind
   }
 }

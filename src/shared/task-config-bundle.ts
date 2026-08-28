@@ -118,6 +118,9 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
     const resources = requireRecord(task, 'resources', '任务配置')
     requireString(resources, 'addressMode', '任务配置.resources')
     requireString(resources, 'urlPrefix', '任务配置.resources')
+    if (resources.encodeUrls !== undefined) {
+      requireBoolean(resources, 'encodeUrls', '任务配置.resources')
+    }
     const download = requireRecord(resources, 'download', '任务配置.resources')
     requireBoolean(download, 'enabled', '任务配置.resources.download')
     requireString(download, 'rootDirectory', '任务配置.resources.download')

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   createFieldMapping,
   createTask,
+  disabledDetailPageMappingIssues,
   isTaskRunnable,
   normalizeTaskConfig,
   taskConfigurationIssues
 } from './defaults'
+import { createMergeValue } from './field-mapping'
 import type { SpreadsheetFieldDefinition, TaskConfig, XmlFieldDefinition } from './types'
 
 const fields: XmlFieldDefinition[] = [
@@ -76,6 +78,16 @@ const createRunnableSpreadsheetTask = (): TaskConfig => {
 }
 
 describe('taskConfigurationIssues', () => {
+  it('defaults resource URL encoding off and migrates legacy tasks to the same behavior', () => {
+    const task = createTask('resource-url-encoding-default')
+    expect(task.resources.encodeUrls).toBe(false)
+
+    const legacy = JSON.parse(JSON.stringify(task)) as Record<string, unknown>
+    delete (legacy.resources as Record<string, unknown>).encodeUrls
+
+    expect(normalizeTaskConfig(legacy as unknown as TaskConfig).resources.encodeUrls).toBe(false)
+  })
+
   it('returns no issues for a runnable task and remains the source of runnable truth', () => {
     const task = createRunnableTask()
 
@@ -139,6 +151,49 @@ describe('taskConfigurationIssues', () => {
     expect(taskConfigurationIssues(task)).toEqual(['表格模板第一行没有可映射列，请重新导入'])
     task.spreadsheet = null
     expect(taskConfigurationIssues(task)).toEqual(['请导入 XLSX 或 XLS 表格模板'])
+  })
+
+  it('reports active top-level detail-page mappings when detail collection is disabled', () => {
+    const task = createRunnableTask()
+    task.detail.enabled = false
+    task.dedupeFieldPath = 'title'
+
+    expect(disabledDetailPageMappingIssues(task)).toEqual([
+      '关闭详情页采集后，页面来源不能选择“详情页”：text'
+    ])
+    expect(taskConfigurationIssues(task)).toContain(
+      '关闭详情页采集后，页面来源不能选择“详情页”：text'
+    )
+
+    task.xml!.mappings[1]!.pageSource = 'list'
+    expect(disabledDetailPageMappingIssues(task)).toEqual([])
+    expect(taskConfigurationIssues(task)).toEqual([])
+  })
+
+  it('checks active merge page children but ignores inactive templates and stale non-page values', () => {
+    const task = createRunnableSpreadsheetTask()
+    task.detail.enabled = false
+    task.dedupeFieldPath = 'A'
+    task.spreadsheet!.mappings[0]!.mode = 'fixed'
+    task.spreadsheet!.mappings[0]!.pageSource = 'detail'
+
+    const mapping = task.spreadsheet!.mappings[1]!
+    const fixedValue = createMergeValue('fixed-value')
+    fixedValue.mode = 'fixed'
+    fixedValue.pageSource = 'detail'
+    const detailValue = createMergeValue('detail-value')
+    detailValue.pageSource = 'detail'
+    detailValue.selector = '.content'
+    mapping.mode = 'merge'
+    mapping.mergeValues = [fixedValue, detailValue]
+
+    expect(disabledDetailPageMappingIssues(task)).toEqual([
+      '关闭详情页采集后，页面来源不能选择“详情页”：B（合并项 2）'
+    ])
+
+    detailValue.pageSource = 'list'
+    expect(disabledDetailPageMappingIssues(task)).toEqual([])
+    expect(taskConfigurationIssues(task)).toEqual([])
   })
 
   it('migrates legacy tasks to XML output without requiring spreadsheet configuration', () => {

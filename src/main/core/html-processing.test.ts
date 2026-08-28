@@ -70,6 +70,98 @@ describe('processHtml', () => {
     expect(result.resources).toHaveLength(3)
   })
 
+  it('preserves mixed-case extensions across downloaded paths and rewritten URLs', () => {
+    const task = createTask('resource-extension-case-task')
+    task.resources.download.enabled = true
+    task.resources.download.rootDirectory = 'D:/resource-root'
+    task.resources.download.urlPrefix = '/resources'
+
+    const result = processHtmlWithResources(
+      '<a href="/files/Report.PDF">附件</a>',
+      'https://www.example.com/news/1.html',
+      'https://www.example.com/news/1.html',
+      task
+    )
+
+    expect(result.value).toContain('href="/resources/files/Report.PDF"')
+    expect(result.resources[0]).toMatchObject({
+      sourceUrl: 'https://www.example.com/files/Report.PDF',
+      relativePath: 'files/Report.PDF',
+      xmlUrl: '/resources/files/Report.PDF'
+    })
+    expect(result.resources[0]?.localPath.replaceAll('\\', '/')).toMatch(
+      /\/files\/Report\.PDF$/
+    )
+  })
+
+  it('applies URL encoding only to recognized file-resource paths', () => {
+    const task = createTask('resource-url-encoding-task')
+    task.resources.download.enabled = true
+    task.resources.download.rootDirectory = 'D:/resource-root'
+    task.resources.download.urlPrefix = '/resources'
+    const html =
+      '<img src="/图片/封面.JPG">' +
+      '<a href="/附件/会议材料.DOC">附件</a>' +
+      '<a href="/新闻/中文页面.html">普通链接</a>'
+
+    const readable = processHtmlWithResources(
+      html,
+      'https://www.example.com/news/1.html',
+      'https://www.example.com/news/1.html',
+      task
+    )
+
+    expect(readable.value).toContain('src="/resources/图片/封面.JPG"')
+    expect(readable.value).toContain('href="/resources/附件/会议材料.DOC"')
+    expect(readable.value).toContain(
+      'href="https://www.example.com/%E6%96%B0%E9%97%BB/%E4%B8%AD%E6%96%87%E9%A1%B5%E9%9D%A2.html"'
+    )
+
+    task.resources.encodeUrls = true
+    const encoded = processHtmlWithResources(
+      html,
+      'https://www.example.com/news/1.html',
+      'https://www.example.com/news/1.html',
+      task
+    )
+    expect(encoded.value).toContain(
+      'src="/resources/%E5%9B%BE%E7%89%87/%E5%B0%81%E9%9D%A2.JPG"'
+    )
+    expect(encoded.value).toContain(
+      'href="/resources/%E9%99%84%E4%BB%B6/%E4%BC%9A%E8%AE%AE%E6%9D%90%E6%96%99.DOC"'
+    )
+    expect(encoded.value).toContain(
+      'href="https://www.example.com/%E6%96%B0%E9%97%BB/%E4%B8%AD%E6%96%87%E9%A1%B5%E9%9D%A2.html"'
+    )
+  })
+
+  it('uses the same encoding switch in absolute-replace mode', () => {
+    const task = createTask('absolute-resource-url-encoding-task')
+    const html = '<img src="/图片/封面.jpg"><a href="/新闻/中文页面.html">普通链接</a>'
+
+    const readable = processHtmlWithResources(
+      html,
+      'https://www.example.com/news/1.html',
+      'https://www.example.com/news/1.html',
+      task
+    )
+    expect(readable.value).toContain('src="https://www.example.com/图片/封面.jpg"')
+    expect(readable.value).toContain(
+      'href="https://www.example.com/%E6%96%B0%E9%97%BB/%E4%B8%AD%E6%96%87%E9%A1%B5%E9%9D%A2.html"'
+    )
+
+    task.resources.encodeUrls = true
+    const encoded = processHtmlWithResources(
+      html,
+      'https://www.example.com/news/1.html',
+      'https://www.example.com/news/1.html',
+      task
+    )
+    expect(encoded.value).toContain(
+      'src="https://www.example.com/%E5%9B%BE%E7%89%87/%E5%B0%81%E9%9D%A2.jpg"'
+    )
+  })
+
   it('supports prefix rewriting without downloading or applying legacy replacements', () => {
     const task = createTask('prefix-task')
     task.resources.addressMode = 'prefix'

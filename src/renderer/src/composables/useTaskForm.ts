@@ -8,7 +8,11 @@ import type {
   TestCollectionResult,
   XmlTreeNode
 } from '@shared/types'
-import { createTask, taskConfigurationIssues } from '@shared/defaults'
+import {
+  createTask,
+  disabledDetailPageMappingIssues,
+  taskConfigurationIssues
+} from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
 import { isFieldMappingConfigured } from '@shared/field-mapping'
 import { taskOutputTemplate } from '@shared/output-template'
@@ -232,6 +236,16 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     if (!activeTask.value) return null
     if (deps.isActiveTaskLocked()) {
       if (!silent) deps.showWarning('当前任务正在运行、暂停、排队或测试，暂时不能保存配置')
+      return null
+    }
+    const detailMappingIssues = disabledDetailPageMappingIssues(activeTask.value)
+    if (detailMappingIssues.length > 0) {
+      deps.showWarning(
+        deps.formatConfigurationIssues(
+          '当前字段映射与详情页采集设置冲突，无法保存草稿',
+          detailMappingIssues
+        )
+      )
       return null
     }
     saving.value = true

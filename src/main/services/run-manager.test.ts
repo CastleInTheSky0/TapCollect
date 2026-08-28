@@ -253,6 +253,29 @@ describe('RunManager', () => {
     await flushTasks()
   })
 
+  it('rejects a saved disabled-detail mapping conflict before the collector starts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-detail-source-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    await store.initialize()
+    const task = runnableTask('task-a', root)
+    const mapping = task.xml!.mappings[0]!
+    mapping.mode = 'page'
+    mapping.pageSource = 'detail'
+    mapping.selector = '#content'
+    await store.saveTask(task)
+    const engine = new FakeCollectorEngine(store)
+    const manager = new RunManager(store, null, engine)
+    await manager.initialize()
+
+    await expect(manager.start(task.id, false)).rejects.toThrow(
+      '页面来源不能选择“详情页”：title'
+    )
+
+    expect(engine.started).toEqual([])
+    expect(manager.getSessionSnapshot().items).toEqual([])
+  })
+
   it('keeps output-conflicting work queued while starting a later independent task', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-output-lock-'))
     temporaryDirectories.push(root)

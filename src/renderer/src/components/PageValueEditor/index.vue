@@ -12,8 +12,9 @@ type PageEditorModel = PageExtractionConfig & { required?: boolean }
 
 const model = defineModel<PageEditorModel>({ required: true })
 
-withDefaults(defineProps<{ showRequired?: boolean }>(), {
-  showRequired: false
+withDefaults(defineProps<{ showRequired?: boolean; detailEnabled?: boolean }>(), {
+  showRequired: false,
+  detailEnabled: true
 })
 
 defineEmits<{
@@ -103,8 +104,11 @@ const setContentFilterSelectors = (value: unknown): void => {
       <span>页面来源</span>
       <t-select v-model="model.pageSource">
         <t-option value="list" label="列表页（相对列表项）" />
-        <t-option value="detail" label="详情页" />
+        <t-option value="detail" label="详情页" :disabled="!detailEnabled" />
       </t-select>
+      <small v-if="!detailEnabled && model.pageSource === 'detail'" class="detail-source-error">
+        详情页采集已关闭，当前来源不可用，请改选“列表页”。
+      </small>
     </div>
     <div class="field">
       <span>定位方式</span>
@@ -329,6 +333,12 @@ const setContentFilterSelectors = (value: unknown): void => {
   color: #7a878d;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.detail-source-error {
+  color: var(--td-error-color, #c64747);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .check-line {

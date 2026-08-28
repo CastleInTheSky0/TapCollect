@@ -17,7 +17,7 @@ import {
   normalizeResourceAddressMode,
   normalizeResourceUrlPrefix
 } from './resource-config'
-import { taskOutputFields, taskOutputTemplate } from './output-template'
+import { taskOutputFields, taskOutputMappings, taskOutputTemplate } from './output-template'
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -94,6 +94,7 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
   resources: {
     addressMode: 'absolute-replace',
     urlPrefix: '',
+    encodeUrls: false,
     download: {
       enabled: false,
       rootDirectory: '',
@@ -174,6 +175,7 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
   const resources = {
     addressMode: normalizeResourceAddressMode(task.resources?.addressMode),
     urlPrefix: normalizeResourceUrlPrefix(task.resources?.urlPrefix ?? ''),
+    encodeUrls: Boolean(task.resources?.encodeUrls),
     download: {
       enabled: Boolean(task.resources?.download?.enabled),
       rootDirectory: task.resources?.download?.rootDirectory?.trim() ?? '',
@@ -207,6 +209,26 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
   }
 }
 
+export const disabledDetailPageMappingIssues = (task: TaskConfig): string[] => {
+  if (task.detail.enabled) return []
+
+  const conflicts = taskOutputMappings(task).flatMap((mapping) => {
+    if (mapping.mode === 'page' && mapping.pageSource === 'detail') {
+      return [mapping.fieldPath]
+    }
+    if (mapping.mode !== 'merge') return []
+    return mapping.mergeValues.flatMap((value, index) =>
+      value.mode === 'page' && value.pageSource === 'detail'
+        ? [`${mapping.fieldPath}（合并项 ${index + 1}）`]
+        : []
+    )
+  })
+
+  return conflicts.length > 0
+    ? [`关闭详情页采集后，页面来源不能选择“详情页”：${conflicts.join('、')}`]
+    : []
+}
+
 export const taskConfigurationIssues = (task: TaskConfig): string[] => {
   const issues: string[] = []
   const listPages = analyzeTaskListPageRules(task)
@@ -236,6 +258,7 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
       issues.push(`去重字段“${task.dedupeFieldPath}”不在当前输出模板中，请重新选择`)
     }
   }
+  issues.push(...disabledDetailPageMappingIssues(task))
 
   const outputTemplate = taskOutputTemplate(task)
   if (task.output.format === 'xml' && !task.xml) {

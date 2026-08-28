@@ -206,6 +206,39 @@ const verifyPreviewPick = async (
       ancestorLinkEvaluation.matchCount === 3 &&
       ancestorLinkEvaluation.error === ''
 
+    const repeatedIdPickPromise = preview.pick({
+      selectorType: 'css',
+      scopeSelector: ':root',
+      ancestorAttribute: ''
+    })
+    await waitForPicker()
+    await previewView.webContents.executeJavaScript(`
+      document.querySelector('#page_11 > button#nextPage')
+        .dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      true;
+    `, true)
+    const repeatedIdPick = await withTimeout(
+      repeatedIdPickPromise,
+      'Electron 重复 ID 控件点选等待超时'
+    )
+    const repeatedIdEvaluation = (await window.webContents.executeJavaScript(`
+      window.collector.previewEvaluate({
+        selectorType: 'css',
+        selector: '#page_11 > button#nextPage',
+        scopeSelector: ':root',
+        ancestorAttribute: ''
+      })
+    `)) as PreviewEvaluateResult
+    const repeatedIdWorks =
+      repeatedIdPick.selector === '#page_11 > button#nextPage' &&
+      repeatedIdPick.matchCount === 1 &&
+      repeatedIdEvaluation.matchCount === 1 &&
+      repeatedIdEvaluation.error === ''
+
     const textPrefixPickPromise = preview.pick({
       selectorType: 'css',
       scopeSelector: ':root',
@@ -320,6 +353,7 @@ const verifyPreviewPick = async (
       successWorks,
       rootLinkWorks,
       ancestorLinkWorks,
+      repeatedIdWorks,
       textPrefixWorks,
       cancelWorks,
       resolverError,
@@ -330,6 +364,7 @@ const verifyPreviewPick = async (
       !successWorks ||
       !rootLinkWorks ||
       !ancestorLinkWorks ||
+      !repeatedIdWorks ||
       !textPrefixWorks ||
       !cancelWorks ||
       !resolverError.includes('当前点击位置不在已配置的列表项范围内') ||
@@ -465,6 +500,14 @@ const run = async (): Promise<PreloadSmokeResult> => {
             <a href="/wrapped/one"><li><span>包装标题一</span></li></a>
             <a href="/wrapped/two"><li><span>包装标题二</span></li></a>
             <a href="/wrapped/three"><li><span>包装标题三</span></li></a>
+          </div>
+          <div id="page_9"><button id="nextPage">下一页</button></div>
+          <div id="page_10"><button id="nextPage">下一页</button></div>
+          <div id="page_11">
+            <button>首页</button><button>上一页</button>
+            <button>1</button><button>2</button><button>3</button>
+            <button>4</button><button>5</button><button>尾页</button>
+            <button>更多</button><button id="nextPage">下一页</button>
           </div>
           <h2 id="preview-metadata">
             <span>作者：周锋生</span>

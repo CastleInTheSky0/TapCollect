@@ -53,53 +53,132 @@ export function resolvePreviewSelection(
     reusableAcrossScopes: boolean,
     allowUniqueId: boolean
   ): string => {
-    if (allowUniqueId && element.id) {
-      const idSelector = `#${cssEscape(element.id)}`
+    const parent = element.parentElement
+    const tag = element.tagName.toLowerCase()
+    const reusableCandidate = (selector: string): boolean => {
+      if (!reusableAcrossScopes) return true
       try {
-        if (ownerDocument.querySelectorAll(idSelector).length === 1) return idSelector
+        const scopes = Array.from(ownerDocument.querySelectorAll(scopeSelector))
+        return (
+          scopes.length > 0 &&
+          scopes.every((scope) => scope.querySelectorAll(selector).length === 1) &&
+          scopes.some((scope) => Array.from(scope.querySelectorAll(selector)).includes(element))
+        )
       } catch {
-        // Fall through to a structural selector for malformed page IDs.
+        return false
       }
     }
 
-    let result = element.tagName.toLowerCase()
-    let classes = Array.from(element.classList)
-    if (reusableAcrossScopes) {
-      classes = classes.filter(
-        (className) => ownerDocument.getElementsByClassName(className).length > 1
-      )
-    }
-    classes = classes.slice(0, 2)
-    if (classes.length) {
-      result += classes.map((className) => `.${cssEscape(className)}`).join('')
+    const candidates: string[] = []
+    if (allowUniqueId && element.id) {
+      const idSelector = `#${cssEscape(element.id)}`
+      let globallyUnique = false
+      try {
+        globallyUnique = ownerDocument.querySelectorAll(idSelector).length === 1
+      } catch {
+        // Continue with class and structural candidates for malformed page IDs.
+      }
+      const candidate = globallyUnique ? idSelector : `${tag}${idSelector}`
+      if (reusableCandidate(candidate)) candidates.push(candidate)
     }
 
-    const parent = element.parentElement
-    if (!parent) return result
-    const equivalentSiblings = Array.from(parent.children).filter((sibling) =>
-      safeMatches(sibling, result)
+    const classes = Array.from(element.classList).slice(0, 3)
+    const classCandidates = classes.map((className) => `.${cssEscape(className)}`)
+    for (let left = 0; left < classes.length; left += 1) {
+      for (let right = left + 1; right < classes.length; right += 1) {
+        const leftClass = classes[left]
+        const rightClass = classes[right]
+        if (!leftClass || !rightClass) continue
+        classCandidates.push(
+          `.${cssEscape(leftClass)}.${cssEscape(rightClass)}`
+        )
+      }
+    }
+    if (classes.length === 3) {
+      classCandidates.push(classes.map((className) => `.${cssEscape(className)}`).join(''))
+    }
+    const reusableClassCandidates = Array.from(new Set(classCandidates)).filter(
+      reusableCandidate
     )
-    if (equivalentSiblings.length <= 1) return result
+    candidates.push(
+      ...reusableClassCandidates,
+      ...reusableClassCandidates.map((candidate) => `${tag}${candidate}`),
+      tag
+    )
 
+    const siblingMatches = (selector: string): Element[] =>
+      parent
+        ? Array.from(parent.children).filter((sibling) => safeMatches(sibling, selector))
+        : [element]
+
+    const uniqueCandidate = candidates.find(
+      (candidate) =>
+        safeMatches(element, candidate) && siblingMatches(candidate).length === 1
+    )
+    if (uniqueCandidate) return uniqueCandidate
+
+    if (!parent) return candidates[0] || tag
     const sameTagSiblings = Array.from(parent.children).filter(
       (sibling) => sibling.tagName === element.tagName
     )
-    return `${result}:nth-of-type(${sameTagSiblings.indexOf(element) + 1})`
+    const position = sameTagSiblings.indexOf(element) + 1
+    const positionalCandidate = candidates
+      .map((candidate) => `${candidate}:nth-of-type(${position})`)
+      .find(
+        (candidate) =>
+          safeMatches(element, candidate) && siblingMatches(candidate).length === 1
+      )
+    return positionalCandidate || `${tag}:nth-of-type(${position})`
   }
 
   const exactSelectorFor = (
     element: Element,
     root: Document | Element,
     reusableAcrossScopes: boolean,
-    allowUniqueId: boolean
+    allowUniqueId: boolean,
+    allowElementAsAnchor = false
   ): string => {
     if (element === root) return ':scope'
+    const documentRoot = root === ownerDocument || root === ownerDocument.documentElement
+    let boundary: Element | null = null
+    let boundarySelector = ''
+
+    if (documentRoot) {
+      let candidate: Element | null = allowElementAsAnchor ? element : element.parentElement
+      while (candidate) {
+        if (allowUniqueId && candidate.id) {
+          const idSelector = `#${cssEscape(candidate.id)}`
+          try {
+            if (ownerDocument.querySelectorAll(idSelector).length === 1) {
+              boundary = candidate
+              boundarySelector = idSelector
+              break
+            }
+          } catch {
+            // Continue toward body when the page ID cannot form a valid selector.
+          }
+        }
+        candidate = candidate.parentElement
+      }
+
+      if (!boundary) {
+        const body = ownerDocument.body
+        boundary = body && (body === element || body.contains(element))
+          ? body
+          : ownerDocument.documentElement
+        boundarySelector = boundary === body ? 'body' : 'html'
+      }
+    }
+
     const parts: string[] = []
     let current: Element | null = element
     while (current && current !== root) {
+      if (current === boundary) {
+        parts.unshift(boundarySelector)
+        break
+      }
       const part = exactSegment(current, reusableAcrossScopes, allowUniqueId)
       parts.unshift(part)
-      if (allowUniqueId && part.startsWith('#')) break
       current = current.parentElement
     }
     return parts.join(' > ')
@@ -172,10 +251,24 @@ export function resolvePreviewSelection(
       similarSiblings.every((sibling) => sibling.classList.contains(className))
     )
     if (universalClasses.length) {
-      return `${tag}${universalClasses
+      const classSelectors = universalClasses
         .slice(0, 2)
         .map((className) => `.${cssEscape(className)}`)
-        .join('')}`
+      for (const classSelector of classSelectors) {
+        const matches = Array.from(parent.children).filter((sibling) =>
+          safeMatches(sibling, classSelector)
+        )
+        if (
+          matches.length >= 2 &&
+          matches.every(
+            (match) =>
+              match.tagName === element.tagName && structureSignature(match) === signature
+          )
+        ) {
+          return classSelector
+        }
+      }
+      return `${tag}${classSelectors.join('')}`
     }
 
     const semanticRepeatTags = ['tr', 'li', 'article', 'dt', 'dd']
@@ -225,7 +318,13 @@ export function resolvePreviewSelection(
 
       candidates.sort((left, right) => right.score - left.score)
       for (const candidate of candidates) {
-        const parentSelector = exactSelectorFor(candidate.parent, ownerDocument, false, true)
+        const parentSelector = exactSelectorFor(
+          candidate.parent,
+          ownerDocument,
+          false,
+          true,
+          true
+        )
         const selector = `${parentSelector} > ${candidate.segment}`
         let matches: Element[] = []
         try {
@@ -252,7 +351,7 @@ export function resolvePreviewSelection(
       const parent = current.parentElement
       const repeatedSegment = repeatedSegmentFor(current)
       if (parent && repeatedSegment) {
-        const parentSelector = exactSelectorFor(parent, ownerDocument, false, true)
+        const parentSelector = exactSelectorFor(parent, ownerDocument, false, true, true)
         const selector = `${parentSelector} > ${repeatedSegment}`
         let matches: Element[] = []
         try {
@@ -301,7 +400,7 @@ export function resolvePreviewSelection(
       return { selector: ':scope', matches }
     }
     if (attributedTarget && scopedRoot.contains(attributedTarget)) {
-      const exact = exactSelectorFor(attributedTarget, scopedRoot, true, false)
+      const exact = exactSelectorFor(attributedTarget, scopedRoot, true, true)
       const selector = `${exact}[${cssEscape(attribute)}]`
       return {
         selector,
@@ -317,6 +416,6 @@ export function resolvePreviewSelection(
     }
   }
 
-  const selector = exactSelectorFor(target, root, !documentScope, documentScope)
+  const selector = exactSelectorFor(target, root, !documentScope, true)
   return generalizedTextSelection(selector) ?? { selector, matches: uniqueMatches(selector) }
 }

@@ -10,6 +10,7 @@ import { applyReplacementRules, hasSameHostname, resolveHttpUrl } from './url-ut
 import {
   classifyResourceReference,
   createResourcePlan,
+  formatResourceReferenceUrl,
   rewriteInternalResourceWithPrefix,
   type ResourceReferenceContext
 } from './resource-planner'
@@ -27,21 +28,54 @@ const removeControlWhitespace = (value: string): string =>
 const hasExecutableUrlProtocol = (value: string): boolean =>
   EXECUTABLE_URL_PROTOCOL.test(removeControlWhitespace(value))
 
-const rewriteSrcset = (value: string, baseUrl: string): string =>
+const elementReferenceContext = (
+  element: Element | null,
+  attributeName: string,
+  customAttributes: Set<string>,
+  styleUrl = false
+): ResourceReferenceContext => ({
+  tagName: element?.tagName ?? '',
+  parentTagName: element?.parentElement?.tagName ?? '',
+  attributeName,
+  hasDownloadAttribute: element?.hasAttribute('download') ?? false,
+  customAttribute: customAttributes.has(attributeName.toLowerCase()),
+  styleUrl
+})
+
+const rewriteSrcset = (
+  value: string,
+  element: Element,
+  baseUrl: string,
+  shouldAbsolutize: boolean,
+  encodeUrls: boolean
+): string =>
   value
     .split(',')
     .map((candidate) => {
       const parts = candidate.trim().split(/\s+/)
       const source = parts.shift() ?? ''
-      const absolute = resolveHttpUrl(source, baseUrl) || source
-      return [absolute, ...parts].join(' ')
+      const absolute = resolveHttpUrl(source, baseUrl)
+      if (!absolute) return [source, ...parts].join(' ')
+      const output = shouldAbsolutize ? absolute : source
+      const kind = classifyResourceReference(
+        absolute,
+        elementReferenceContext(element, 'srcset', new Set())
+      )
+      return [kind ? formatResourceReferenceUrl(output, encodeUrls) : output, ...parts].join(' ')
     })
     .join(', ')
 
-const rewriteStyleUrls = (value: string, baseUrl: string): string =>
+const rewriteStyleUrls = (
+  value: string,
+  baseUrl: string,
+  shouldAbsolutize: boolean,
+  encodeUrls: boolean
+): string =>
   value.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (match, quote: string, source: string) => {
     const absolute = resolveHttpUrl(source, baseUrl)
-    return absolute ? `url(${quote}${absolute}${quote})` : match
+    if (!absolute) return match
+    const output = shouldAbsolutize ? absolute : source
+    return `url(${quote}${formatResourceReferenceUrl(output, encodeUrls)}${quote})`
   })
 
 const removeComments = (document: Document): void => {
@@ -110,22 +144,43 @@ export const processHtml = (
   html: string,
   baseUrl: string,
   config: HtmlProcessingConfig,
-  replacements: ReplacementRule[]
+  replacements: ReplacementRule[],
+  encodeUrls = true
 ): string => {
   const { document, attributes } = createHtmlDocument(html, baseUrl, config)
+  const customAttributes = new Set(
+    config.customResourceAttributes.map((attribute) => attribute.trim().toLowerCase()).filter(Boolean)
+  )
 
   document.body.querySelectorAll('*').forEach((element) => {
-    if (config.absolutizeResources) {
-      for (const attribute of attributes) {
-        const current = element.getAttribute(attribute)
-        if (!current) continue
-        const absolute = resolveHttpUrl(current, baseUrl)
-        if (absolute) element.setAttribute(attribute, absolute)
-      }
-      const srcset = element.getAttribute('srcset')
-      if (srcset) element.setAttribute('srcset', rewriteSrcset(srcset, baseUrl))
-      const style = element.getAttribute('style')
-      if (style) element.setAttribute('style', rewriteStyleUrls(style, baseUrl))
+    for (const attribute of attributes) {
+      const current = element.getAttribute(attribute)
+      if (!current) continue
+      const absolute = resolveHttpUrl(current, baseUrl)
+      if (!absolute) continue
+      const output = config.absolutizeResources ? absolute : current
+      const kind = classifyResourceReference(
+        absolute,
+        elementReferenceContext(element, attribute, customAttributes)
+      )
+      element.setAttribute(
+        attribute,
+        kind ? formatResourceReferenceUrl(output, encodeUrls) : output
+      )
+    }
+    const srcset = element.getAttribute('srcset')
+    if (srcset) {
+      element.setAttribute(
+        'srcset',
+        rewriteSrcset(srcset, element, baseUrl, config.absolutizeResources, encodeUrls)
+      )
+    }
+    const style = element.getAttribute('style')
+    if (style) {
+      element.setAttribute(
+        'style',
+        rewriteStyleUrls(style, baseUrl, config.absolutizeResources, encodeUrls)
+      )
     }
   })
 
@@ -161,20 +216,6 @@ const assertResourceConfiguration = (task: TaskConfig): void => {
   }
 }
 
-const elementReferenceContext = (
-  element: Element | null,
-  attributeName: string,
-  customAttributes: Set<string>,
-  styleUrl = false
-): ResourceReferenceContext => ({
-  tagName: element?.tagName ?? '',
-  parentTagName: element?.parentElement?.tagName ?? '',
-  attributeName,
-  hasDownloadAttribute: element?.hasAttribute('download') ?? false,
-  customAttribute: customAttributes.has(attributeName.toLowerCase()),
-  styleUrl
-})
-
 const processResourceReference = (
   sourceValue: string,
   element: Element | null,
@@ -195,6 +236,17 @@ const processResourceReference = (
     absoluteUrl,
     elementReferenceContext(element, attributeName, customAttributes, styleUrl)
   )
+
+  if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
+    const output = task.html.absolutizeResources ? absoluteUrl : sourceValue
+    return {
+      value: applyReplacementRules(
+        kind ? formatResourceReferenceUrl(output, task.resources.encodeUrls) : output,
+        task.resourceReplacements
+      ),
+      resources: []
+    }
+  }
 
   if (!kind) {
     const value = task.html.absolutizeResources ? absoluteUrl : sourceValue
@@ -217,7 +269,8 @@ const processResourceReference = (
       ownerPageUrl,
       task.resources.download.rootDirectory,
       task.resources.download.urlPrefix,
-      kind
+      kind,
+      task.resources.encodeUrls
     )
     return plan ? { value: plan.xmlUrl, resources: [plan] } : { value: sourceValue, resources: [] }
   }
@@ -226,7 +279,8 @@ const processResourceReference = (
     value: rewriteInternalResourceWithPrefix(
       absoluteUrl,
       ownerPageUrl,
-      task.resources.urlPrefix
+      task.resources.urlPrefix,
+      task.resources.encodeUrls
     ),
     resources: []
   }
@@ -296,7 +350,13 @@ export const processHtmlWithResources = (
 ): ProcessedResourceValue => {
   if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
     return {
-      value: processHtml(html, resolutionBaseUrl, task.html, task.resourceReplacements),
+      value: processHtml(
+        html,
+        resolutionBaseUrl,
+        task.html,
+        task.resourceReplacements,
+        task.resources.encodeUrls
+      ),
       resources: []
     }
   }
@@ -364,17 +424,6 @@ export const processAttributeValueWithResources = (
   ownerPageUrl: string,
   task: TaskConfig
 ): ProcessedResourceValue => {
-  if (!task.resources.download.enabled && task.resources.addressMode === 'absolute-replace') {
-    return {
-      value: processAttributeValue(
-        value,
-        resolutionBaseUrl,
-        task.html.absolutizeResources,
-        task.resourceReplacements
-      ),
-      resources: []
-    }
-  }
   assertResourceConfiguration(task)
   const customAttributes = new Set(
     task.html.customResourceAttributes.map((attribute) => attribute.trim().toLowerCase()).filter(Boolean)
@@ -387,5 +436,34 @@ export const processAttributeValueWithResources = (
     ownerPageUrl,
     task,
     customAttributes
+  )
+}
+
+export const processTextValueWithResources = (
+  value: string,
+  resolutionBaseUrl: string,
+  ownerPageUrl: string,
+  task: TaskConfig
+): ProcessedResourceValue => {
+  const candidate = value.trim()
+  if (!candidate || /\s/.test(candidate) || /[<>"'`]/.test(candidate)) {
+    return { value, resources: [] }
+  }
+  const absoluteUrl = resolveHttpUrl(candidate, resolutionBaseUrl)
+  if (
+    !absoluteUrl ||
+    !classifyResourceReference(absoluteUrl, { tagName: '', attributeName: '' })
+  ) {
+    return { value, resources: [] }
+  }
+  assertResourceConfiguration(task)
+  return processResourceReference(
+    candidate,
+    null,
+    '',
+    resolutionBaseUrl,
+    ownerPageUrl,
+    task,
+    new Set()
   )
 }

@@ -9,6 +9,7 @@ import type {
   RunSessionSnapshot,
   TaskConfig
 } from '@shared/types'
+import { disabledDetailPageMappingIssues } from '@shared/defaults'
 import {
   isRunItemLocked,
   isTaskActivityLocked,
@@ -121,6 +122,16 @@ export const useRunSession = (deps: RunSessionDeps) => {
     }
     const task = deps.getActiveTask()
     if (!task) return
+    const detailMappingIssues = disabledDetailPageMappingIssues(task)
+    if (detailMappingIssues.length > 0) {
+      deps.showWarning(
+        deps.formatConfigurationIssues(
+          '当前字段映射与详情页采集设置冲突，无法开始正式采集',
+          detailMappingIssues
+        )
+      )
+      return
+    }
     if (deps.getHasUnsavedChanges()) {
       deps.showWarning('当前配置尚未保存，请先点击“保存草稿”，再开始正式采集')
       return

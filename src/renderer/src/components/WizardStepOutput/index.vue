@@ -64,9 +64,15 @@ const emit = defineEmits<{
           <t-option value="prefix" label="自定义前缀 + 原路径" />
         </t-select>
       </div>
-      <div class="switch-line compact-switch resource-download-switch">
-        <span><strong>下载资源</strong><small>默认关闭，仅处理最终输出引用</small></span>
-        <t-switch v-model="task.resources.download.enabled" />
+      <div class="resource-switch-stack">
+        <div class="switch-line compact-switch resource-download-switch">
+          <span><strong>下载资源</strong><small>默认关闭，仅处理最终输出引用</small></span>
+          <t-switch v-model="task.resources.download.enabled" />
+        </div>
+        <div class="switch-line compact-switch resource-download-switch">
+          <span><strong>资源路径 URL 转码</strong><small>默认关闭，中文文件名保持中文</small></span>
+          <t-switch v-model="task.resources.encodeUrls" />
+        </div>
       </div>
     </div>
     <div class="check-row resource-cleaning-row">

@@ -104,6 +104,7 @@ export interface ResourceDownloadConfig {
 export interface ResourceConfig {
   addressMode: ResourceAddressMode
   urlPrefix: string
+  encodeUrls: boolean
   download: ResourceDownloadConfig
 }
 

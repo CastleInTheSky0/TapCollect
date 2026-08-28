@@ -98,6 +98,7 @@ const updateXmlFieldCdata = (fieldPath: string, value: boolean): void => {
           v-if="task.xml.recordPath"
           :fields="task.xml.fields"
           :mappings="task.xml.mappings"
+          :detail-enabled="task.detail.enabled"
           @pick="forwardPick"
           @evaluate="forwardEvaluate"
           @update-cdata="updateXmlFieldCdata"
@@ -148,6 +149,7 @@ const updateXmlFieldCdata = (fieldPath: string, value: boolean): void => {
         <FieldMappingEditor
           :fields="task.spreadsheet.fields"
           :mappings="task.spreadsheet.mappings"
+          :detail-enabled="task.detail.enabled"
           @pick="forwardPick"
           @evaluate="forwardEvaluate"
         />

@@ -4,6 +4,7 @@ import {
   buildResourceMirrorPath,
   classifyResourceReference,
   createResourcePlan,
+  formatResourceReferenceUrl,
   joinResourcePrefix,
   rewriteInternalResourceWithPrefix
 } from './resource-planner'
@@ -38,6 +39,76 @@ describe('resource planner', () => {
     expect(first.relativePath).toMatch(/^a__[a-f0-9]{8}\.jpg$/)
     expect(reordered.relativePath).toBe(first.relativePath)
     expect(second.relativePath).not.toBe(first.relativePath)
+  })
+
+  it.each([
+    ['Report.PDF', 'attachment'],
+    ['Cover.JpG', 'image'],
+    ['Data.XLSX', 'attachment']
+  ] as const)(
+    'recognizes mixed-case extensions without changing their original spelling: %s',
+    (fileName, kind) => {
+      const root = resolve('D:/exports/resources')
+      const plan = createResourcePlan(
+        `/files/${fileName}`,
+        'https://example.com/list',
+        'https://example.com/detail',
+        root,
+        '/resources',
+        kind
+      )
+
+      expect(plan?.sourceUrl).toBe(`https://example.com/files/${fileName}`)
+      expect(plan?.relativePath).toBe(`files/${fileName}`)
+      expect(plan?.localPath).toBe(resolve(root, 'files', fileName))
+      expect(plan?.xmlUrl).toBe(`/resources/files/${fileName}`)
+    }
+  )
+
+  it('inserts a query hash before the original mixed-case extension', () => {
+    const mirror = buildResourceMirrorPath(
+      'https://example.com/files/Report.PDF?download=1',
+      true
+    )
+
+    expect(mirror.sourceUrl).toBe('https://example.com/files/Report.PDF?download=1')
+    expect(mirror.relativePath).toMatch(/^files\/Report__[a-f0-9]{8}\.PDF$/)
+    expect(mirror.encodedPath).toBe(mirror.relativePath)
+  })
+
+  it('keeps readable resource paths by default and URL-encodes them only when enabled', () => {
+    const root = resolve('D:/exports/resources')
+    const readable = createResourcePlan(
+      '/附件/会议材料.doc',
+      'https://example.com/list',
+      'https://example.com/detail',
+      root,
+      '/resources',
+      'attachment'
+    )
+    const encoded = createResourcePlan(
+      '/附件/会议材料.doc',
+      'https://example.com/list',
+      'https://example.com/detail',
+      root,
+      '/resources',
+      'attachment',
+      true
+    )
+
+    expect(readable).toMatchObject({
+      relativePath: '附件/会议材料.doc',
+      xmlUrl: '/resources/附件/会议材料.doc'
+    })
+    expect(encoded?.xmlUrl).toBe(
+      '/resources/%E9%99%84%E4%BB%B6/%E4%BC%9A%E8%AE%AE%E6%9D%90%E6%96%99.doc'
+    )
+    expect(formatResourceReferenceUrl('/附件/a%2Fb.pdf?download=1', false)).toBe(
+      '/附件/a%2Fb.pdf?download=1'
+    )
+    expect(formatResourceReferenceUrl('/附件/a%2Fb.pdf?download=1', true)).toBe(
+      '/%E9%99%84%E4%BB%B6/a%2Fb.pdf?download=1'
+    )
   })
 
   it('keeps decoded traversal and Windows-invalid names inside the selected root', () => {
@@ -97,6 +168,14 @@ describe('resource planner', () => {
         hasDownloadAttribute: true
       })
     ).toBe('attachment')
+    expect(
+      ['a.PNG', 'b.jpg', 'c.DOC', 'd.xls', 'e.pdf', 'f.zip'].map((fileName) =>
+        classifyResourceReference(`https://example.com/files/${fileName}`, {
+          tagName: '',
+          attributeName: ''
+        })
+      )
+    ).toEqual(['image', 'image', 'attachment', 'attachment', 'attachment', 'attachment'])
   })
 
   it('rewrites only same-host resources in non-download prefix mode', () => {
@@ -125,5 +204,23 @@ describe('resource planner', () => {
         '/resources'
       )
     ).toBe('/resources/files/a%2Fb.pdf')
+  })
+
+  it('applies the URL-encoding switch to non-download prefix paths', () => {
+    expect(
+      rewriteInternalResourceWithPrefix(
+        'https://www.example.com/files/%E4%B8%AD%E6%96%87%E6%9D%90%E6%96%99.pdf',
+        'https://www.example.com/detail/1',
+        '/resources'
+      )
+    ).toBe('/resources/files/中文材料.pdf')
+    expect(
+      rewriteInternalResourceWithPrefix(
+        'https://www.example.com/files/中文材料.pdf',
+        'https://www.example.com/detail/1',
+        '/resources',
+        true
+      )
+    ).toBe('/resources/files/%E4%B8%AD%E6%96%87%E6%9D%90%E6%96%99.pdf')
   })
 })
