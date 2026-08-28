@@ -15,7 +15,7 @@ import type {
   UpdateCheckResult,
   UpdateDownloadProgress
 } from '@shared/types'
-import appIconUrl from '../assets/tapcollect-icon.png'
+import appIconUrl from '@renderer/assets/images/tapcollect-icon.png'
 
 const props = defineProps<{
   visible: boolean

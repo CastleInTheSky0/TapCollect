@@ -13,8 +13,8 @@ import {
   isRunItemLocked,
   isTaskActivityLocked,
   resolveRunTaskSelection
-} from '../collector-runtime'
-import type { AppView } from './useAppView'
+} from '@renderer/utils/collector-runtime'
+import type { AppView } from '@renderer/router'
 
 export interface RunSessionDeps {
   showError: (error: unknown) => void
@@ -22,8 +22,8 @@ export interface RunSessionDeps {
   showWarning: (message: string) => void
   formatConfigurationIssues: (intro: string, issues: string[]) => string
   settings: Ref<AppSettings>
-  appView: Ref<AppView>
-  schedulePreviewBoundsUpdate: () => void
+  appView: Readonly<Ref<AppView>>
+  openRunCenter: (taskId?: string) => Promise<void>
   getActiveId: () => string
   refreshTasks: () => Promise<void>
   loadTask: (id: string) => Promise<void>
@@ -95,14 +95,13 @@ export const useRunSession = (deps: RunSessionDeps) => {
   }
 
   const showRunCenter = (): void => {
-    deps.appView.value = 'run-center'
     selectedRunTaskId.value = resolveRunTaskSelection(
       selectedRunTaskId.value,
       runSession.value.items,
       runSession.value.items,
       true
     )
-    deps.schedulePreviewBoundsUpdate()
+    void deps.openRunCenter(selectedRunTaskId.value)
   }
 
   const requestRun = async (id?: string): Promise<void> => {

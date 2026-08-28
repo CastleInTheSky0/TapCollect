@@ -1,0 +1,40 @@
+.dialog-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.dialog-copy + .dialog-copy {
+  margin-top: 10px;
+}
+
+.task-import-failures {
+  max-height: 260px;
+  margin-top: 16px;
+  overflow: auto;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.task-import-failures strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.task-import-failures ol {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.task-import-failures li + li {
+  margin-top: 6px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}

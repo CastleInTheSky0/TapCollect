@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CloseIcon, InternetIcon } from 'tdesign-icons-vue-next'
 import type { VNodeRef } from 'vue'
-import type { PreviewOpenAction } from '../preview-open-guard'
+import type { PreviewOpenAction } from '@renderer/utils/preview-open-guard'
 
 // 预览地址通过 v-model 与 App.vue 双向绑定
 const previewUrl = defineModel<string>('previewUrl', { required: true })
@@ -88,3 +88,5 @@ const emit = defineEmits<{
     </footer>
   </aside>
 </template>
+
+<style src="./style.css"></style>

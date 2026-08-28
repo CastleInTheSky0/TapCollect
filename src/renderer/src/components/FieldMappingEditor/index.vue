@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { createMergeValue, isFieldMappingConfigured } from '@shared/field-mapping'
 import type { FieldMapping, OutputFieldDefinition, XmlFieldDefinition } from '@shared/types'
-import PageValueEditor from './PageValueEditor.vue'
+import PageValueEditor from '@renderer/components/PageValueEditor/index.vue'
 
 const props = defineProps<{
   fields: OutputFieldDefinition[]

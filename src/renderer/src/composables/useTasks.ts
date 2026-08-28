@@ -6,7 +6,7 @@ import type {
   TaskConfigImportResult,
   TaskSummary
 } from '@shared/types'
-import { isRunItemLocked } from '../collector-runtime'
+import { isRunItemLocked } from '@renderer/utils/collector-runtime'
 
 export interface TasksDeps {
   showError: (error: unknown) => void

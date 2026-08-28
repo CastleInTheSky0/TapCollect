@@ -12,21 +12,11 @@ import { createTask, taskConfigurationIssues } from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
 import { isFieldMappingConfigured } from '@shared/field-mapping'
 import { taskOutputTemplate } from '@shared/output-template'
-import { snapshotTaskForIpc, taskDraftFingerprint } from '../task-ipc'
-import type { AppView } from './useAppView'
-
-export const steps = ['基本信息', '列表与分页', '详情页', '模板映射', '输出与测试']
-
-export const resourceKindLabels = {
-  image: '图片',
-  audio: '音频',
-  video: '视频',
-  attachment: '附件',
-  other: '其他资源'
-} as const
+import { RESOURCE_KIND_LABELS, WIZARD_STEPS } from '@renderer/constants/task'
+import { snapshotTaskForIpc, taskDraftFingerprint } from '@renderer/utils/task-ipc'
 
 export interface TaskFormNavigation {
-  setAppView: (view: AppView) => void
+  openTask: (taskId: string) => Promise<void>
   selectRunTask: (id: string) => void
   setPreviewUrl: (url: string) => void
   getPreviewVisible: () => boolean
@@ -58,6 +48,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
   const paginationDetectionLineIndex = ref(-1)
   const testResult = ref<TestCollectionResult | null>(null)
   const testing = ref(false)
+  let loadTaskSequence = 0
 
   const activeId = computed(() => activeTask.value?.id ?? '')
   const configurationIssues = computed(() =>
@@ -137,7 +128,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     (testResult.value?.resourcePlans ?? []).map((plan, index) => ({
       __rowKey: `${plan.normalizedUrl}-${index}`,
       __index: index + 1,
-      kind: resourceKindLabels[plan.kind],
+      kind: RESOURCE_KIND_LABELS[plan.kind],
       sourceUrl: plan.sourceUrl,
       localPath: plan.localPath,
       xmlUrl: plan.xmlUrl
@@ -168,13 +159,15 @@ export const useTaskForm = (deps: TaskFormDeps) => {
 
   const selectStep = (value: string | number): void => {
     const next = Number(value)
-    if (Number.isInteger(next) && next >= 1 && next <= steps.length) currentStep.value = next
+    if (Number.isInteger(next) && next >= 1 && next <= WIZARD_STEPS.length) {
+      currentStep.value = next
+    }
   }
 
   const loadTask = async (id: string): Promise<void> => {
-    deps.navigation.setAppView('task')
-    deps.navigation.selectRunTask(id)
+    const sequence = ++loadTaskSequence
     if (id === activeTask.value?.id) {
+      busy.value = false
       void nextTick(deps.navigation.schedulePreviewBounds)
       return
     }
@@ -182,7 +175,11 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     try {
       const task = await api.loadTask(id)
       if (!task) throw new Error('找不到任务配置')
+      if (sequence !== loadTaskSequence) return
+      const inspectedXmlTree = task.xml ? await api.inspectXmlTemplate(task.xml.content) : []
+      if (sequence !== loadTaskSequence) return
       activeTask.value = task
+      deps.navigation.selectRunTask(id)
       savedTaskFingerprint.value = taskDraftFingerprint(task)
       const previewUrl = firstTaskListPageUrl(task)
       deps.navigation.setPreviewUrl(previewUrl)
@@ -190,23 +187,25 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       deps.navigation.resetDetailSamples()
       testResult.value = null
       currentStep.value = 1
-      xmlTree.value = task.xml ? await api.inspectXmlTemplate(task.xml.content) : []
+      xmlTree.value = inspectedXmlTree
       if (deps.navigation.getPreviewVisible() && previewUrl) {
         await deps.navigation.navigatePreview(previewUrl)
       }
+      if (sequence !== loadTaskSequence) return
       void nextTick(deps.navigation.schedulePreviewBounds)
     } catch (error) {
-      deps.showError(error)
+      if (sequence === loadTaskSequence) deps.showError(error)
     } finally {
-      busy.value = false
+      if (sequence === loadTaskSequence) busy.value = false
     }
   }
 
   const createNewTask = (): void => {
+    loadTaskSequence += 1
+    busy.value = false
     const task = createTask(crypto.randomUUID())
     task.output.rootDirectory = deps.settings.value.defaultOutputDirectory
     activeTask.value = task
-    deps.navigation.setAppView('task')
     deps.navigation.selectRunTask(task.id)
     savedTaskFingerprint.value = null
     currentStep.value = 1
@@ -216,11 +215,14 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     testResult.value = null
     deps.navigation.setPreviewUrl('')
     paginationDetectionLineIndex.value = -1
+    void deps.navigation.openTask(task.id)
     void nextTick(deps.navigation.schedulePreviewBounds)
   }
 
   const clearActiveTask = (id: string): void => {
     if (activeTask.value?.id === id) {
+      loadTaskSequence += 1
+      busy.value = false
       activeTask.value = null
       savedTaskFingerprint.value = null
     }

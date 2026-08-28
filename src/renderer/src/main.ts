@@ -1,8 +1,9 @@
 import { createApp } from 'vue'
 import 'tdesign-vue-next/es/style/index.css'
 import App from './App.vue'
-import { hasCollectorRuntime } from './collector-runtime'
-import './styles.css'
+import { createAppRouter } from '@renderer/router'
+import { hasCollectorRuntime } from '@renderer/utils/collector-runtime'
+import '@renderer/assets/styles/index.css'
 
 const root = document.querySelector<HTMLElement>('#app')
 if (!root) throw new Error('找不到应用挂载节点')
@@ -34,5 +35,5 @@ if (!hasCollectorRuntime(window.collector)) {
   shell.append(card)
   root.replaceChildren(shell)
 } else {
-  createApp(App).mount(root)
+  createApp(App).use(createAppRouter()).mount(root)
 }

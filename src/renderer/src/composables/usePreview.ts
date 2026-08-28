@@ -7,9 +7,9 @@ import type {
   TaskConfig
 } from '@shared/types'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
-import { runPreviewOpenGuard } from '../preview-open-guard'
-import type { PreviewOpenAction } from '../preview-open-guard'
-import { snapshotTaskForIpc } from '../task-ipc'
+import { runPreviewOpenGuard } from '@renderer/utils/preview-open-guard'
+import type { PreviewOpenAction } from '@renderer/utils/preview-open-guard'
+import { snapshotTaskForIpc } from '@renderer/utils/task-ipc'
 
 export interface PreviewDeps {
   showError: (error: unknown) => void

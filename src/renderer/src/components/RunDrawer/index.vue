@@ -2,8 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { CloseIcon, FolderOpenIcon } from 'tdesign-icons-vue-next'
 import type { RunLog, RunProgress, RunResult, RunSessionItem } from '@shared/types'
-import { isRunItemLocked } from '../collector-runtime'
-import { resizeRunLogHeight, RUN_LOG_LAYOUT } from '../pane-layout'
+import { isRunItemLocked } from '@renderer/utils/collector-runtime'
+import { resizeRunLogHeight, RUN_LOG_LAYOUT } from '@renderer/utils/pane-layout'
 
 interface RunLogResizeStart {
   pointerId: number
@@ -204,3 +204,5 @@ const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
     </div>
   </section>
 </template>
+
+<style src="./style.css"></style>

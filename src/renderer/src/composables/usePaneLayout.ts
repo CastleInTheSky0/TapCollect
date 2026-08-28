@@ -9,9 +9,9 @@ import {
   PANE_LAYOUT,
   resizePaneWidths,
   RUN_LOG_LAYOUT
-} from '../pane-layout'
-import type { PaneVisibility, PaneWidths, ResizablePane } from '../pane-layout'
-import type { AppView } from './useAppView'
+} from '@renderer/utils/pane-layout'
+import type { PaneVisibility, PaneWidths, ResizablePane } from '@renderer/utils/pane-layout'
+import type { AppView } from '@renderer/router'
 
 interface PaneResizeStart {
   pane: ResizablePane
@@ -20,7 +20,7 @@ interface PaneResizeStart {
 }
 
 export interface PaneLayoutDeps {
-  appView: Ref<AppView>
+  appView: Readonly<Ref<AppView>>
   previewVisible: Ref<boolean>
   previewSurface: Ref<HTMLElement | null>
 }

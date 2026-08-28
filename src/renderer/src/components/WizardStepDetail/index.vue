@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ChevronRightIcon, CursorIcon, InternetIcon, LinkIcon, SearchIcon } from 'tdesign-icons-vue-next'
 import type { OutputFieldDefinition, TaskConfig } from '@shared/types'
-import type { PreviewOpenAction } from '../preview-open-guard'
+import type { PreviewOpenAction } from '@renderer/utils/preview-open-guard'
 
 // 任务草稿通过 v-model 传入；子组件直接编辑嵌套字段（与 FieldMappingEditor 的约定一致）
 const task = defineModel<TaskConfig>({ required: true })

@@ -1,0 +1,140 @@
+.preview-pane {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  background: var(--preview-surface);
+}
+
+.preview-header {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid #d4dddd;
+}
+
+.preview-header span,
+.preview-header strong {
+  display: block;
+}
+
+.preview-header span {
+  color: #65747a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.preview-header strong {
+  overflow: hidden;
+  max-width: 330px;
+  margin-top: 4px;
+  color: #344147;
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-address {
+  display: flex;
+  gap: 7px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #d4dddd;
+  background: #f5f7f7;
+}
+
+.preview-address .t-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.preview-surface {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background-color: #eef2f2;
+  background-image: linear-gradient(#dde5e5 1px, transparent 1px), linear-gradient(90deg, #dde5e5 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.preview-surface.active {
+  background: #fff;
+}
+
+.preview-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  padding: 30px;
+  color: #6f7c81;
+  text-align: center;
+}
+
+.preview-placeholder strong {
+  margin-top: 15px;
+  color: #344147;
+  font-size: 13px;
+}
+
+.preview-placeholder p {
+  margin: 7px 0 16px;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.browser-glyph {
+  display: flex;
+  width: 106px;
+  height: 70px;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid #aebbbc;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 26px rgba(28, 46, 52, 0.08);
+}
+
+.browser-glyph::after {
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin-top: 14px;
+  background: #c5d0d1;
+  content: '';
+}
+
+.browser-glyph span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #93a2a6;
+}
+
+.preview-footer {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-top: 1px solid #d4dddd;
+  color: #6c797e;
+  font-size: 8px;
+}
+
+.status-light {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(47, 125, 93, 0.12);
+}

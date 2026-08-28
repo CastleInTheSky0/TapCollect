@@ -125,3 +125,5 @@ const emit = defineEmits<{
     </div>
   </t-dialog>
 </template>
+
+<style src="./style.css"></style>

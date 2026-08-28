@@ -1,0 +1,279 @@
+:root {
+  color: #172126;
+  background: #eef1f1;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  --ink: #172126;
+  --muted: #69767c;
+  --line: #dce2e2;
+  --soft-line: #e9eded;
+  --accent: #0f6f7c;
+  --accent-dark: #0a5963;
+  --accent-soft: #e9f3f4;
+  --surface: #ffffff;
+  --sidebar-surface: #f2f4f4;
+  --preview-surface: #e9eeee;
+  --warning: #c27a1a;
+  --success: #2f7d5d;
+
+  --td-brand-color-1: #eef8f8;
+  --td-brand-color-2: #d7eeee;
+  --td-brand-color-3: #b9e0e2;
+  --td-brand-color-4: #88c9cc;
+  --td-brand-color-5: #55adb3;
+  --td-brand-color-6: #2a8f98;
+  --td-brand-color-7: #0f6f7c;
+  --td-brand-color-8: #0a5e69;
+  --td-brand-color-9: #064d56;
+  --td-brand-color-10: #033c43;
+  --td-brand-color: var(--td-brand-color-7);
+  --td-brand-color-hover: var(--td-brand-color-6);
+  --td-brand-color-active: var(--td-brand-color-8);
+  --td-brand-color-focus: var(--td-brand-color-2);
+  --td-brand-color-light: var(--td-brand-color-1);
+  --td-font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --td-font-family-medium: "Segoe UI Semibold", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --td-radius-default: 6px;
+  --td-radius-medium: 8px;
+  --td-radius-large: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--ink);
+  background: #eef1f1;
+}
+
+body.pane-resizing,
+body.pane-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c4cdcf;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-shell {
+  --sidebar-divider-size: 10px;
+  --preview-divider-size: 10px;
+
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-columns:
+    var(--sidebar-width, 246px)
+    var(--sidebar-divider-size)
+    minmax(0, 1fr)
+    var(--preview-divider-size)
+    var(--preview-width, 570px);
+  grid-template-rows: minmax(0, 1fr);
+  background: #eef1f1;
+  animation: app-in 220ms ease both;
+  transition: grid-template-columns 170ms ease;
+}
+
+.app-shell.run-center-view {
+  --preview-divider-size: 0px;
+}
+
+.run-center-view .preview-divider,
+.run-center-view .preview-pane {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell.pane-is-resizing {
+  transition: none;
+}
+
+.pane-divider {
+  position: relative;
+  z-index: 20;
+  min-height: 0;
+  outline: none;
+  background: #eef1f1;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pane-divider::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: #d6dede;
+  content: '';
+  transform: translateX(-50%);
+  transition: width 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.pane-divider:hover::before,
+.pane-divider:focus-visible::before,
+.pane-is-resizing .pane-divider::before {
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 111, 124, 0.08);
+}
+
+.pane-toggle {
+  position: absolute !important;
+  top: 50%;
+  z-index: 2;
+  width: 24px !important;
+  height: 34px !important;
+  min-width: 24px !important;
+  padding: 0 !important;
+  border-color: #cbd6d7 !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  box-shadow: 0 5px 16px rgba(27, 45, 51, 0.12);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-divider .pane-toggle {
+  top: 34px;
+  left: calc(100% + 25px);
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+  border-color: transparent !important;
+  background: var(--accent-soft) !important;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.preview-divider .pane-toggle {
+  left: calc(50% - 8px);
+}
+
+.pane-divider:hover .pane-toggle,
+.pane-divider:focus-within .pane-toggle,
+.sidebar-collapsed .sidebar-divider .pane-toggle,
+.preview-collapsed .preview-divider .pane-toggle {
+  opacity: 1;
+}
+
+.pane-toggle:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.app-shell .task-sidebar,
+.preview-pane {
+  transition: opacity 140ms ease;
+}
+
+.preview-collapsed .preview-pane {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.run-center-view .run-center-header {
+  padding-left: 72px;
+}
+
+.workspace {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+@keyframes app-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.runtime-unavailable-shell {
+  display: grid;
+  min-height: 100vh;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(15, 111, 124, 0.12), transparent 30%),
+    #eef1f1;
+  place-items: center;
+}
+
+.runtime-unavailable-card {
+  display: flex;
+  width: min(620px, 100%);
+  padding: 34px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(23, 33, 38, 0.1);
+  flex-direction: column;
+  gap: 14px;
+}
+
+.runtime-unavailable-card > span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.runtime-unavailable-card h1,
+.runtime-unavailable-card p {
+  margin: 0;
+}
+
+.runtime-unavailable-card h1 {
+  color: var(--ink);
+  font-size: 24px;
+}
+
+.runtime-unavailable-card p,
+.runtime-unavailable-card small {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.runtime-unavailable-card code {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+}

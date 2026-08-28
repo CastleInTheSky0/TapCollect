@@ -1,0 +1,98 @@
+.run-center {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.run-center-header {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 15px 28px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.run-center-header > div:first-child > span {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.run-center-header h1 {
+  margin: 3px 0 2px;
+  font-size: 25px;
+  letter-spacing: -0.04em;
+}
+
+.run-center-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.run-center-settings,
+.run-center-settings label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-center-settings label > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.run-center-settings :deep(.t-input-number) {
+  width: 82px;
+}
+
+.run-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(90px, 135px)) minmax(260px, 1fr);
+  align-items: stretch;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfc;
+}
+
+.run-overview > div:not(.overview-actions) {
+  padding: 16px 18px 15px 0;
+}
+
+.run-overview > div:not(:first-child):not(.overview-actions) {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+
+.run-overview span,
+.run-overview strong {
+  display: block;
+}
+
+.run-overview span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.run-overview strong {
+  margin-top: 4px;
+  font-size: 19px;
+}
+
+.run-overview > div:first-child strong {
+  color: var(--accent);
+}
+
+.overview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}

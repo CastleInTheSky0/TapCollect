@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, provide, ref } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
+import { RouterView } from 'vue-router'
 import MessagePlugin from 'tdesign-vue-next/es/message/plugin'
 import {
   ChevronLeftIcon,
@@ -9,33 +10,36 @@ import {
   MenuUnfoldIcon
 } from 'tdesign-icons-vue-next'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
-import AboutUpdateDialog from './components/AboutUpdateDialog.vue'
-import PreviewPane from './components/PreviewPane.vue'
-import RunCenter from './components/RunCenter.vue'
-import WelcomeEmpty from './components/WelcomeEmpty.vue'
-import RunDrawer from './components/RunDrawer.vue'
-import TaskDialogs from './components/TaskDialogs.vue'
-import TaskSidebar from './components/TaskSidebar.vue'
-import WorkspaceHeader from './components/WorkspaceHeader.vue'
-import WizardStepBasic from './components/WizardStepBasic.vue'
-import WizardStepList from './components/WizardStepList.vue'
-import WizardStepDetail from './components/WizardStepDetail.vue'
-import WizardStepTemplate from './components/WizardStepTemplate.vue'
-import WizardStepOutput from './components/WizardStepOutput.vue'
-import { useFeedback } from './composables/useFeedback'
-import { useAppView } from './composables/useAppView'
-import { useAppSettings } from './composables/useAppSettings'
-import { usePaneLayout } from './composables/usePaneLayout'
-import { useRunSession } from './composables/useRunSession'
-import { useTasks } from './composables/useTasks'
-import { useTaskForm, steps } from './composables/useTaskForm'
-import { usePreview } from './composables/usePreview'
+import { appStoreKey } from '@renderer/store'
+import AboutUpdateDialog from '@renderer/components/AboutUpdateDialog/index.vue'
+import PreviewPane from '@renderer/components/PreviewPane/index.vue'
+import RunDrawer from '@renderer/components/RunDrawer/index.vue'
+import TaskDialogs from '@renderer/components/TaskDialogs/index.vue'
+import TaskSidebar from '@renderer/components/TaskSidebar/index.vue'
+import { useFeedback } from '@renderer/composables/useFeedback'
+import { useAppNavigation } from '@renderer/composables/useAppNavigation'
+import { useAppSettings } from '@renderer/composables/useAppSettings'
+import { usePaneLayout } from '@renderer/composables/usePaneLayout'
+import { useRunSession } from '@renderer/composables/useRunSession'
+import { useTasks } from '@renderer/composables/useTasks'
+import { useTaskForm } from '@renderer/composables/useTaskForm'
+import { usePreview } from '@renderer/composables/usePreview'
 
 const api = window.collector
 const aboutUpdateVisible = ref(false)
 
 const feedback = useFeedback()
-const { appView, setAppView } = useAppView()
+const navigationStore = useAppNavigation({
+  showError: feedback.showError,
+  getTasks: () => tasksStore.tasks.value,
+  getRunItems: () => runSessionStore.runSession.value.items,
+  getActiveTaskId: () => taskFormStore.activeId.value,
+  getSelectedRunTaskId: () => runSessionStore.selectedRunTaskId.value,
+  loadTask: (id) => taskFormStore.loadTask(id),
+  selectRunTask: (id) => runSessionStore.selectRunTask(id),
+  schedulePreviewBoundsUpdate: () => layoutStore.schedulePreviewBoundsUpdate()
+})
+const { appView, routeTaskId, openTask } = navigationStore
 
 // 预览边界元素按规范由 App.vue 持有 ref，组件通过函数型 ref 写回
 const previewVisible = ref(false)
@@ -63,10 +67,10 @@ const runSessionStore = useRunSession({
   formatConfigurationIssues: feedback.formatConfigurationIssues,
   settings: settingsStore.settings,
   appView,
-  schedulePreviewBoundsUpdate: layoutStore.schedulePreviewBoundsUpdate,
+  openRunCenter: (taskId) => navigationStore.openRunCenter(taskId),
   getActiveId: () => taskFormStore.activeId.value,
   refreshTasks: () => tasksStore.refreshTasks(),
-  loadTask: (id) => taskFormStore.loadTask(id),
+  loadTask: (id) => navigationStore.openTask(id),
   closePreview: () => previewStore.closePreview(),
   getPreviewVisible: () => previewVisible.value,
   getActiveTask: () => taskFormStore.activeTask.value,
@@ -83,7 +87,7 @@ const taskFormStore = useTaskForm({
   refreshTasks: () => tasksStore.refreshTasks(),
   isActiveTaskLocked: () => runSessionStore.activeTaskLocked.value,
   navigation: {
-    setAppView,
+    openTask: (id) => navigationStore.openTask(id),
     selectRunTask: runSessionStore.selectRunTask,
     setPreviewUrl: (url) => previewStore.setPreviewUrl(url),
     getPreviewVisible: () => previewVisible.value,
@@ -102,7 +106,7 @@ const tasksStore = useTasks({
   clearDismissedTask: runSessionStore.clearDismissedTask,
   getRunItem: runSessionStore.getRunItem,
   getTestingTaskId: () => runSessionStore.runSession.value.testingTaskId,
-  loadTask: taskFormStore.loadTask,
+  loadTask: (id) => navigationStore.openTask(id),
   clearActiveTask: taskFormStore.clearActiveTask
 })
 
@@ -122,14 +126,19 @@ const previewStore = usePreview({
   isClickDetail: () => taskFormStore.isClickDetail.value
 })
 
+provide(appStoreKey, {
+  navigationStore,
+  settingsStore,
+  runSessionStore,
+  taskFormStore,
+  previewStore
+})
+
 // 模板绑定（保持原有命名）
-const { settings, settingsSaving, saveDefaultOutputDirectory, changeMaxConcurrentRuns } =
-  settingsStore
+const { settings } = settingsStore
 const {
   runSession,
-  selectedRunTaskId,
   runActionTaskId,
-  batchRunAction,
   resumePrompt,
   cancelPromptTaskId,
   cancelAllPrompt,
@@ -143,60 +152,18 @@ const {
   resumeRun,
   cancelRun,
   confirmCancelRun,
-  pauseAllRuns,
-  resumeAllRuns,
-  requestCancelAllRuns,
   confirmCancelAllRuns,
-  selectRunTask,
   dismissRunDrawer,
   openOutput,
   openErrorLog
 } = runSessionStore
 const {
   activeTask,
-  currentStep,
   busy,
   saving,
-  paginationSuggestions,
-  testResult,
-  testing,
   activeId,
-  runnable,
   hasUnsavedChanges,
-  listPageRulesText,
-  listPageRuleAnalysis,
-  isClickPagination,
-  isClickDetail,
-  hasPaginationTemplate,
-  fixedListPageCount,
-  activeOutputTemplate,
-  unresolvedMappings,
-  testMatchSummaries,
-  testTableData,
-  testTableColumns,
-  testResourceTableData,
-  testResourceTableColumns,
-  listHostname,
-  flatXmlTree,
-  outputFieldLabel,
-  selectStep,
-  synchronizeListPageMetadata,
-  loadTask,
-  createNewTask,
-  saveCurrent,
-  detectPagination,
-  applyPaginationSuggestion,
-  changePaginationMode,
-  importXml,
-  importSpreadsheet,
-  changeOutputFormat,
-  selectRecordNode,
-  addResourceReplacement,
-  addHeader,
-  setCustomAttributes,
-  chooseOutputDirectory,
-  chooseResourceDirectory,
-  runTest
+  createNewTask
 } = taskFormStore
 const {
   tasks,
@@ -217,17 +184,10 @@ const {
   previewStatus,
   previewOpenAction,
   pickingLabel,
-  detailSamples,
-  detailSampleIndex,
   previewOpening,
   openPreview,
   openConfiguredListPreview,
-  closePreview,
-  pickBaseSelector,
-  evaluateBaseSelector,
-  openDetailSample,
-  pickMapping,
-  evaluateMapping
+  closePreview
 } = previewStore
 const {
   sidebarCollapsed,
@@ -253,7 +213,7 @@ onMounted(async () => {
     settings.value = await api.getSettings()
     runSessionStore.applyRunSession(await api.getRunSession())
     await refreshTasks()
-    if (tasks.value[0]) await loadTask(tasks.value[0].id)
+    await navigationStore.start()
   } catch (error) {
     feedback.showError(error)
   }
@@ -290,9 +250,9 @@ onBeforeUnmount(() => {
     }" :style="appShellStyle"
   >
     <TaskSidebar
-      :collapsed="sidebarCollapsed" :tasks="tasks" :active-id="activeId" :view="appView"
+      :collapsed="sidebarCollapsed" :tasks="tasks" :active-id="routeTaskId || activeId" :view="appView"
       :run-items="runSession.items" :testing-task-id="runSession.testingTaskId"
-      :disabled="busy || saving || taskConfigTransferring" @select="loadTask" @show-run-center="showRunCenter"
+      :disabled="busy || saving || taskConfigTransferring" @select="openTask" @show-run-center="showRunCenter"
       @create="createNewTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
       @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="aboutUpdateVisible = true"
     />
@@ -314,96 +274,7 @@ onBeforeUnmount(() => {
     </div>
 
     <section class="workspace" :class="{ 'configuration-locked': activeTaskLocked }">
-      <RunCenter
-        v-if="appView === 'run-center'" :snapshot="runSession" :selected-task-id="selectedRunTaskId"
-        :action-task-id="runActionTaskId" :batch-action="batchRunAction" :settings-saving="settingsSaving"
-        @select="selectRunTask" @pause="pauseRun" @resume="resumeRun" @cancel="cancelRun" @pause-all="pauseAllRuns"
-        @resume-all="resumeAllRuns" @cancel-all="requestCancelAllRuns" @change-concurrency="changeMaxConcurrentRuns"
-        @create="createNewTask" @open-output="openOutput" @open-error="openErrorLog"
-      />
-      <WorkspaceHeader
-        v-if="appView === 'task'" :task-name="activeTask?.name || '尚未选择任务'"
-        :has-task="Boolean(activeTask)" :active-task-locked="activeTaskLocked"
-        :testing-task-id="runSession.testingTaskId" :active-id="activeId" :has-unsaved-changes="hasUnsavedChanges"
-        :runnable="runnable" :busy="busy" :saving="saving" @save="saveCurrent(false)" @run="requestRun()"
-      />
-
-      <template v-if="appView === 'task' && activeTask">
-        <t-steps
-          :current="currentStep" class="wizard-nav" :readonly="activeTaskLocked" :inert="activeTaskLocked"
-          separator="line" @change="selectStep"
-        >
-          <t-step-item v-for="(label, index) in steps" :key="label" :value="index + 1" :title="label" />
-        </t-steps>
-
-        <div class="step-scroll" :inert="activeTaskLocked">
-          <Transition name="step" mode="out-in">
-            <section :key="currentStep" class="step-content">
-              <WizardStepBasic
-                v-if="currentStep === 1" v-model="activeTask"
-                v-model:list-page-rules-text="listPageRulesText" :is-click-pagination="isClickPagination"
-                :preview-opening="previewOpening" :preview-open-action="previewOpenAction"
-                :fixed-list-page-count="fixedListPageCount" :has-pagination-template="hasPaginationTemplate"
-                :list-page-rule-analysis="listPageRuleAnalysis"
-                @open-list-preview="openConfiguredListPreview('step-list')"
-              />
-              <WizardStepList
-                v-else-if="currentStep === 2" v-model="activeTask"
-                :is-click-pagination="isClickPagination" :has-pagination-template="hasPaginationTemplate"
-                :list-page-rule-analysis="listPageRuleAnalysis" :pagination-suggestions="paginationSuggestions"
-                @change-pagination-mode="changePaginationMode" @evaluate="evaluateBaseSelector" @pick="pickBaseSelector"
-                @detect-pagination="detectPagination" @apply-suggestion="applyPaginationSuggestion"
-                @sync-metadata="synchronizeListPageMetadata"
-              />
-              <WizardStepDetail
-                v-else-if="currentStep === 3" v-model="activeTask" :is-click-detail="isClickDetail"
-                :list-hostname="listHostname" :preview-opening="previewOpening" :preview-open-action="previewOpenAction"
-                :detail-samples="detailSamples" :detail-sample-index="detailSampleIndex"
-                :active-output-template="activeOutputTemplate" :output-field-label="outputFieldLabel"
-                @evaluate="evaluateBaseSelector" @pick="pickBaseSelector" @open-detail-first="openDetailSample(false)"
-                @open-detail-next="openDetailSample(true)"
-              />
-              <WizardStepTemplate
-                v-else-if="currentStep === 4" v-model="activeTask"
-                :unresolved-mappings="unresolvedMappings" :flat-xml-tree="flatXmlTree"
-                @change-output-format="changeOutputFormat" @import-xml="importXml" @select-record="selectRecordNode"
-                @import-spreadsheet="importSpreadsheet" @pick="pickMapping" @evaluate="evaluateMapping"
-              />
-              <WizardStepOutput
-                v-else v-model="activeTask" :is-click-detail="isClickDetail" :testing="testing"
-                :active-task-locked="activeTaskLocked" :busy="busy" :saving="saving"
-                :active-output-template="activeOutputTemplate" :test-result="testResult"
-                :test-match-summaries="testMatchSummaries" :test-table-data="testTableData"
-                :test-table-columns="testTableColumns" :test-resource-table-data="testResourceTableData"
-                :test-resource-table-columns="testResourceTableColumns" @set-custom-attributes="setCustomAttributes"
-                @choose-resource-directory="chooseResourceDirectory" @add-resource-replacement="addResourceReplacement"
-                @choose-output-directory="chooseOutputDirectory"
-                @save-default-output-directory="saveDefaultOutputDirectory" @add-header="addHeader" @run-test="runTest"
-                @request-run="requestRun()"
-              />
-            </section>
-          </Transition>
-        </div>
-
-        <footer class="wizard-footer" :inert="activeTaskLocked">
-          <t-button theme="default" variant="text" :disabled="currentStep === 1" @click="currentStep -= 1">
-            <template #icon>
-              <ChevronLeftIcon />
-            </template>
-            上一步
-          </t-button>
-          <span>第 {{ currentStep }} 步，共 5 步</span>
-          <t-button
-            class="wizard-next-button" theme="default" variant="outline" :disabled="currentStep === 5"
-            @click="currentStep += 1"
-          >
-            下一步
-            <ChevronRightIcon />
-          </t-button>
-        </footer>
-      </template>
-
-      <WelcomeEmpty v-else-if="appView === 'task'" @create="createNewTask" />
+      <RouterView />
     </section>
 
     <div
@@ -451,8 +322,3 @@ onBeforeUnmount(() => {
     />
   </main>
 </template>
-<style>
-.section-line .full {
-  margin-bottom: 13px;
-}
-</style>

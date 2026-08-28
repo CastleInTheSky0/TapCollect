@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { FileCodeIcon, FileExcelIcon, FolderOpenIcon } from 'tdesign-icons-vue-next'
 import type { TaskConfig, XmlTreeNode } from '@shared/types'
-import FieldMappingEditor from './FieldMappingEditor.vue'
+import FieldMappingEditor from '@renderer/components/FieldMappingEditor/index.vue'
 
 // 任务草稿通过 v-model 传入；子组件直接编辑嵌套字段（与 FieldMappingEditor 的约定一致）
 const task = defineModel<TaskConfig>({ required: true })
