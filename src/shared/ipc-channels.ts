@@ -38,6 +38,7 @@ export const IPC_CHANNELS = {
   previewNavigate: 'preview:navigate',
   previewGoBack: 'preview:go-back',
   previewGoForward: 'preview:go-forward',
+  previewSetOpening: 'preview:set-opening',
   previewSetBounds: 'preview:set-bounds',
   previewClose: 'preview:close',
   previewPick: 'preview:pick',

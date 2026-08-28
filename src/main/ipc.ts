@@ -233,6 +233,9 @@ export const registerIpcHandlers = (
   ipcMain.handle(IPC_CHANNELS.previewNavigate, (_event, url: string) => preview.navigate(url))
   ipcMain.handle(IPC_CHANNELS.previewGoBack, () => preview.goBack())
   ipcMain.handle(IPC_CHANNELS.previewGoForward, () => preview.goForward())
+  ipcMain.handle(IPC_CHANNELS.previewSetOpening, (_event, opening: boolean) =>
+    preview.setOpening(opening)
+  )
   ipcMain.handle(IPC_CHANNELS.previewSetBounds, (_event, bounds: PreviewBounds) =>
     preview.setBounds(bounds)
   )

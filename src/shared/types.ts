@@ -587,6 +587,7 @@ export interface CollectorApi {
   previewNavigate: (url: string) => Promise<boolean>
   previewGoBack: () => Promise<boolean>
   previewGoForward: () => Promise<boolean>
+  previewSetOpening: (opening: boolean) => Promise<boolean>
   previewSetBounds: (bounds: PreviewBounds) => Promise<boolean>
   previewClose: () => Promise<boolean>
   previewPick: (request: PreviewPickRequest) => Promise<PreviewPickResult>

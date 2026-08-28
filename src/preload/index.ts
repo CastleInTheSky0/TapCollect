@@ -60,6 +60,7 @@ const api: CollectorApi = {
   previewNavigate: (url) => ipcRenderer.invoke(IPC_CHANNELS.previewNavigate, url),
   previewGoBack: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoBack),
   previewGoForward: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoForward),
+  previewSetOpening: (opening) => ipcRenderer.invoke(IPC_CHANNELS.previewSetOpening, opening),
   previewSetBounds: (bounds) => ipcRenderer.invoke(IPC_CHANNELS.previewSetBounds, bounds),
   previewClose: () => ipcRenderer.invoke(IPC_CHANNELS.previewClose),
   previewPick: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewPick, request),

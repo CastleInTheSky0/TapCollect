@@ -128,7 +128,16 @@ export const usePreview = (deps: PreviewDeps) => {
       return false
     }
     previewStatus.value = status
-    return runPreviewOpenGuard(previewOpenAction, action, operation)
+    return runPreviewOpenGuard(previewOpenAction, action, async () => {
+      try {
+        // WebContentsView 绘制在渲染器 DOM 之上。详情样例 URL 尚在查询时页面还未触发
+        // did-start-loading，因此要先通知主进程隐藏旧视图，才能立即看到 Loading 蒙层。
+        await api.previewSetOpening(true)
+        await operation()
+      } finally {
+        await api.previewSetOpening(false)
+      }
+    })
   }
 
   const loadPreviewUrl = async (value: string): Promise<void> => {

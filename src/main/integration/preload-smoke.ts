@@ -131,6 +131,7 @@ const verifyPreviewNavigation = async (
       if (
         typeof api?.previewGoBack !== 'function' ||
         typeof api?.previewGoForward !== 'function' ||
+        typeof api?.previewSetOpening !== 'function' ||
         typeof api?.onPreviewNavigation !== 'function'
       ) return false;
       const cleanupKey = ${JSON.stringify(previewNavigationCleanupKey)};
@@ -177,6 +178,24 @@ const verifyPreviewNavigation = async (
       "document.querySelector('#history-detail-link')",
       'Electron 预览历史列表页未完成渲染'
     )
+    const openingStarted = await window.webContents.executeJavaScript(
+      'window.collector.previewSetOpening(true)'
+    )
+    const openingState = await waitForPreviewNavigationState(
+      window,
+      (state) => state.url === listUrl && state.isLoading,
+      'Electron 预览打开准备状态未同步'
+    )
+    const hiddenDuringOpening = !previewView.getVisible()
+    const openingStopped = await window.webContents.executeJavaScript(
+      'window.collector.previewSetOpening(false)'
+    )
+    const openingStoppedState = await waitForPreviewNavigationState(
+      window,
+      (state) => state.url === listUrl && !state.isLoading,
+      'Electron 预览打开准备完成状态未同步'
+    )
+    const visibleAfterOpening = previewView.getVisible()
     await previewView.webContents.executeJavaScript(`
       (() => {
         history.replaceState({ marker: 'list-state' }, '');
@@ -298,6 +317,12 @@ const verifyPreviewNavigation = async (
       unavailableForward,
       opened,
       initialState,
+      openingStarted,
+      openingState,
+      hiddenDuringOpening,
+      openingStopped,
+      openingStoppedState,
+      visibleAfterOpening,
       detailState,
       wentBack,
       backState,
@@ -322,6 +347,10 @@ const verifyPreviewNavigation = async (
       unavailableBack !== false ||
       unavailableForward !== false ||
       opened !== true ||
+      openingStarted !== true ||
+      hiddenDuringOpening !== true ||
+      openingStopped !== true ||
+      visibleAfterOpening !== true ||
       wentBack !== true ||
       listStateRestored !== true ||
       wentForward !== true ||

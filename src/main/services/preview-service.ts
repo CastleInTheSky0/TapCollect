@@ -86,6 +86,7 @@ const normalizeBounds = (bounds: PreviewBounds): PreviewBounds => ({
 export class PreviewService extends EventEmitter {
   private view: WebContentsView | null = null
   private pickSequence = 0
+  private opening = false
 
   constructor(private readonly window: BrowserWindow) {
     super()
@@ -119,6 +120,13 @@ export class PreviewService extends EventEmitter {
     return true
   }
 
+  setOpening(opening: boolean): boolean {
+    this.opening = opening
+    this.syncViewVisibility()
+    this.emitNavigationState()
+    return true
+  }
+
   setBounds(bounds: PreviewBounds): boolean {
     if (!this.view) return false
     this.view.setBounds(normalizeBounds(bounds))
@@ -126,8 +134,12 @@ export class PreviewService extends EventEmitter {
   }
 
   close(): boolean {
-    if (!this.view) return false
     const view = this.view
+    this.opening = false
+    if (!view) {
+      this.emitNavigationState()
+      return false
+    }
     this.view = null
     this.window.contentView.removeChildView(view)
     view.webContents.close()
@@ -448,12 +460,12 @@ export class PreviewService extends EventEmitter {
     })
     view.webContents.on('did-start-loading', () => {
       if (this.view !== view) return
-      view.setVisible(false)
+      this.syncViewVisibility(view)
       this.emitNavigationState()
     })
     view.webContents.on('did-stop-loading', () => {
       if (this.view !== view) return
-      view.setVisible(true)
+      this.syncViewVisibility(view)
       this.emitNavigationState()
     })
     // 原生 WebContentsView 始终绘制在渲染器 DOM 上方；首次加载前先隐藏，
@@ -467,6 +479,12 @@ export class PreviewService extends EventEmitter {
     return webContents && !webContents.isDestroyed() ? webContents : null
   }
 
+  private syncViewVisibility(view = this.view): void {
+    if (!view || this.view !== view) return
+    const webContents = view.webContents
+    view.setVisible(!this.opening && !webContents.isDestroyed() && !webContents.isLoading())
+  }
+
   private emitNavigationState(): void {
     const webContents = this.activeWebContents()
     const state: PreviewNavigationState = webContents
@@ -474,9 +492,9 @@ export class PreviewService extends EventEmitter {
           url: webContents.getURL(),
           canGoBack: webContents.navigationHistory.canGoBack(),
           canGoForward: webContents.navigationHistory.canGoForward(),
-          isLoading: webContents.isLoading()
+          isLoading: this.opening || webContents.isLoading()
         }
-      : { url: '', canGoBack: false, canGoForward: false, isLoading: false }
+      : { url: '', canGoBack: false, canGoForward: false, isLoading: this.opening }
     this.emit('navigation', state)
   }
 }
