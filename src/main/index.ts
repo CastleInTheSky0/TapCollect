@@ -39,13 +39,9 @@ const createWindow = async (): Promise<void> => {
   if (!IS_DEVELOPMENT_PREVIEW) window.removeMenu()
   mainWindow = window
   const dataDirectory = await prepareDataDirectory({
-    isPackaged: app.isPackaged,
     platform: process.platform,
-    appPath: app.getAppPath(),
-    executablePath: app.getPath('exe'),
-    legacyRootDirectory: join(app.getPath('userData'), 'collector-data')
+    userDataDirectory: app.getPath('userData')
   })
-  if (dataDirectory.warning) console.warn(dataDirectory.warning)
   const store = new TaskStore(dataDirectory.rootDirectory)
   await store.initialize()
   const runManager = new RunManager(store, new ElectronDynamicPageProvider(window))

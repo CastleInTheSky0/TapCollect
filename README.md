@@ -201,12 +201,20 @@ https://www.example.com/list.aspx?classid=5&page={page}
 写入地址：/resources/upload/2026/a.jpg
 ```
 
-## 本地数据与任务迁移
+## 本地数据目录
 
-配置优先保存在应用同级的 `data` 目录。开发预览使用项目根目录的 `data`；打包后的 Windows 和 UOS/Linux 应用使用可执行程序同级的 `data`；macOS 使用 `.app` 同级的 `data`。
+配置统一保存在 Electron 用户数据目录下的 `collector-data`，与安装目录分离。覆盖安装或升级 TapCollect 时，安装器只替换程序文件，不会删除这里的任务配置。
+
+常见位置如下；实际路径以操作系统和当前用户配置为准：
 
 ```text
-data/
+Windows：%APPDATA%\TapCollect\collector-data
+macOS：~/Library/Application Support/TapCollect/collector-data
+Linux/UOS：~/.config/TapCollect/collector-data
+```
+
+```text
+collector-data/
 ├── settings.json
 ├── tasks/<task-id>/task.json
 ├── checkpoints/<task-id>/checkpoint.json
@@ -214,7 +222,7 @@ data/
 └── manifests/<task-id>.json
 ```
 
-首次启动新版本时，如果 `data` 为空且旧的 Electron `userData/collector-data` 中存在任务，应用会自动复制旧设置、任务、检查点和运行清单。旧目录会保留；应用同级目录不可写时，会回退到系统数据目录并在主进程日志中记录原因。
+旧版应用同级的 `data` 不会被自动读取、迁移或删除。需要继续使用其中的任务时，可通过任务管理菜单导出后再导入。
 
 需要跨机器迁移任务时，使用任务管理菜单中的“导出全部任务配置”生成 JSON。导出的 `tasks` 数组可复制或调整后重新导入；导入的每个任务会分配新的本地 ID，不会覆盖现有任务。换到其他设备后，应重新核对输出目录和资源存放目录。
 

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, WebContentsView } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
+import { prepareDataDirectory } from '@main/services/data-directory'
 import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
 import { PreviewService } from '@main/services/preview-service'
 import { RunManager } from '@main/services/run-manager'
@@ -23,6 +24,7 @@ interface PreloadSmokeResult {
   hasUpdateApi: boolean
   hasRunSubscription: boolean
   hasTaskConfigTransfer: boolean
+  usesUserDataTaskStore: boolean
   settingsDirectory: string
   maxConcurrentRuns: number
   runSessionCapacity: number
@@ -733,6 +735,10 @@ const run = async (): Promise<PreloadSmokeResult> => {
   await app.whenReady()
   writeStage('app-ready')
   const dataRoot = await mkdtemp(join(tmpdir(), 'tapcollect-preload-smoke-'))
+  const taskDataDirectory = await prepareDataDirectory({
+    platform: process.platform,
+    userDataDirectory: app.getPath('userData')
+  })
   let window: BrowserWindow | null = null
   let preview: PreviewService | null = null
   let previewServer: Server | null = null
@@ -755,7 +761,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
     window.webContents.on('console-message', (_event, level, message) => {
       if (level >= 3) consoleErrors.push(message)
     })
-    const store = new TaskStore(dataRoot)
+    const store = new TaskStore(taskDataDirectory.rootDirectory)
     await store.initialize()
     const runManager = new RunManager(store)
     await runManager.initialize()
@@ -990,6 +996,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       | 'previewNavigationWorks'
       | 'previewPickWorks'
       | 'dynamicPartialLoadWorks'
+      | 'usesUserDataTaskStore'
     >
     writeStage('renderer-evaluated')
 
@@ -1008,6 +1015,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
       previewNavigationWorks,
       previewPickWorks,
       dynamicPartialLoadWorks,
+      usesUserDataTaskStore:
+        taskDataDirectory.rootDirectory === join(app.getPath('userData'), 'collector-data'),
       consoleErrors
     }
   } finally {
@@ -1029,6 +1038,7 @@ const main = async (): Promise<void> => {
       !result.hasUpdateApi ||
       !result.hasRunSubscription ||
       !result.hasTaskConfigTransfer ||
+      !result.usesUserDataTaskStore ||
       result.settingsDirectory !== '' ||
       result.maxConcurrentRuns !== 3 ||
       result.runSessionCapacity !== 3 ||
