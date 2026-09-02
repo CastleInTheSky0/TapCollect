@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import type { VNodeRef } from 'vue'
 import { CloseIcon, FolderOpenIcon } from 'tdesign-icons-vue-next'
 import type { RunLog, RunProgress, RunResult, RunSessionItem } from '@shared/types'
 import { isRunItemLocked } from '@renderer/utils/collector-runtime'
@@ -17,6 +18,7 @@ const props = defineProps<{
   runActionTaskId: string
   runLogHeight: number
   runLogMaxHeight: number
+  surfaceRef: VNodeRef
 }>()
 
 const emit = defineEmits<{
@@ -105,7 +107,7 @@ const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
 </script>
 
 <template>
-  <section class="run-drawer">
+  <section :ref="surfaceRef" class="run-drawer">
     <header>
       <div>
         <span>{{ item?.taskName || '采集运行' }}</span>

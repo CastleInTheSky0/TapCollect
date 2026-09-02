@@ -16,6 +16,7 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  closed: []
   'launch-run': [resume: boolean]
   'confirm-remove': []
   'export-configs': []
@@ -32,6 +33,7 @@ const emit = defineEmits<{
     :footer="false"
     :close-on-overlay-click="false"
     width="480px"
+    @closed="emit('closed')"
   >
     <p class="dialog-copy">继续会从上次页码、未满批次和资源统计恢复；重新开始会放弃检查点，并按当前覆盖设置处理旧输出文件与资源。</p>
     <div class="dialog-actions">
@@ -47,6 +49,7 @@ const emit = defineEmits<{
     theme="danger"
     :footer="false"
     width="440px"
+    @closed="emit('closed')"
     @close="pendingDeleteTaskId = ''"
   >
     <p class="dialog-copy">任务配置和运行中心记录会从本机删除；已经生成的 XML、表格、附件及其他采集输出文件不会被删除。</p>
@@ -62,6 +65,7 @@ const emit = defineEmits<{
     theme="warning"
     :footer="false"
     width="500px"
+    @closed="emit('closed')"
   >
     <p class="dialog-copy">将导出当前全部已保存任务的完整配置，包括 XML/表格模板、本地目录和请求头。Cookie、Authorization 等请求头可能包含敏感信息，请妥善保管导出的 JSON 文件。</p>
     <p v-if="hasUnsavedChanges" class="dialog-copy">当前任务存在未保存修改，本次只会导出上次保存的版本。</p>
@@ -76,6 +80,7 @@ const emit = defineEmits<{
     header="任务配置导入结果"
     :footer="false"
     width="560px"
+    @closed="emit('closed')"
     @close="taskConfigImportResult = null"
   >
     <t-alert
@@ -101,6 +106,7 @@ const emit = defineEmits<{
     theme="warning"
     :footer="false"
     width="440px"
+    @closed="emit('closed')"
     @close="cancelPromptTaskId = ''"
   >
     <p class="dialog-copy">运行或暂停中的任务会写出当前有效记录并清除检查点；尚未启动的排队任务只会移出队列。</p>
@@ -117,6 +123,7 @@ const emit = defineEmits<{
     :footer="false"
     width="460px"
     :close-on-overlay-click="false"
+    @closed="emit('closed')"
   >
     <p class="dialog-copy">确认后会取消所有运行中和暂停中的任务，并清空等待队列。各任务会按当前安全进度处理检查点和有效记录。</p>
     <div class="dialog-actions">

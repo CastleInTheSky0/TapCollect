@@ -23,6 +23,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  closed: []
   'update:visible': [visible: boolean]
 }>()
 
@@ -172,6 +173,7 @@ onBeforeUnmount(removeProgressListener)
     :header="false"
     :close-on-overlay-click="action !== 'installing'"
     :confirm-on-enter="false"
+    @closed="emit('closed')"
     @close="closeDialog"
   >
     <div class="about-shell">

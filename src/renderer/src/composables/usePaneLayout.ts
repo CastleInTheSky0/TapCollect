@@ -1,8 +1,9 @@
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import type { PreviewBounds } from '@shared/types'
 import {
   defaultPaneWidths,
+  clipPaneBoundsAboveBottomOverlay,
   fitRunLogHeight,
   fitPaneWidths,
   maxRunLogHeight,
@@ -21,8 +22,10 @@ interface PaneResizeStart {
 
 export interface PaneLayoutDeps {
   appView: Readonly<Ref<AppView>>
+  previewBlocked: Readonly<Ref<boolean>>
   previewVisible: Ref<boolean>
   previewSurface: Ref<HTMLElement | null>
+  runDrawerSurface: Readonly<Ref<HTMLElement | null>>
 }
 
 // 分栏宽度、折叠状态与预览边界调度；运行日志面板的拖拽已迁移到 RunDrawer 组件
@@ -56,19 +59,43 @@ export const usePaneLayout = (deps: PaneLayoutDeps) => {
     }
   }
 
+  const hiddenPreviewBounds = (): PreviewBounds => ({
+    x: window.innerWidth + 2,
+    y: 0,
+    width: 1,
+    height: 1
+  })
+
   const previewBounds = (): PreviewBounds | null => {
     const element = deps.previewSurface.value
     if (!element) return null
+    if (
+      deps.previewBlocked.value ||
+      deps.appView.value === 'run-center' ||
+      previewCollapsed.value
+    ) {
+      return hiddenPreviewBounds()
+    }
     const rect = element.getBoundingClientRect()
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    const bounds = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    const drawer = deps.runDrawerSurface.value
+    if (!drawer) return bounds
+
+    const drawerRect = drawer.getBoundingClientRect()
+    // RunDrawer 从底部进入时带有 translateY 动画；用最终布局高度计算上沿，
+    // 避免动画期间原生预览短暂盖住抽屉顶部。
+    const drawerTop = Math.min(drawerRect.top, window.innerHeight - drawer.offsetHeight)
+    return (
+      clipPaneBoundsAboveBottomOverlay(bounds, {
+        left: drawerRect.left,
+        right: drawerRect.right,
+        top: drawerTop
+      }) ?? hiddenPreviewBounds()
+    )
   }
 
   const updatePreviewBounds = (): void => {
     if (!deps.previewVisible.value) return
-    if (deps.appView.value === 'run-center' || previewCollapsed.value) {
-      void api.previewSetBounds({ x: window.innerWidth + 2, y: 0, width: 1, height: 1 })
-      return
-    }
     const bounds = previewBounds()
     if (bounds) void api.previewSetBounds(bounds)
   }
@@ -86,6 +113,10 @@ export const usePaneLayout = (deps: PaneLayoutDeps) => {
     window.cancelAnimationFrame(previewBoundsFrame)
     previewBoundsFrame = null
   }
+
+  watch([deps.previewBlocked, deps.runDrawerSurface], () => {
+    void nextTick(schedulePreviewBoundsUpdate)
+  })
 
   const toggleSidebarPane = (): void => {
     sidebarCollapsed.value = !sidebarCollapsed.value

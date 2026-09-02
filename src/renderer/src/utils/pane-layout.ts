@@ -10,6 +10,19 @@ export interface PaneVisibility {
   preview: boolean
 }
 
+export interface PaneBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface BottomOverlayBounds {
+  left: number
+  right: number
+  top: number
+}
+
 export const PANE_LAYOUT = {
   dividerSize: 10,
   workspaceMin: 480,
@@ -48,6 +61,18 @@ export const resizeRunLogHeight = (
   pointerDeltaY: number,
   viewportHeight: number
 ): number => fitRunLogHeight(startHeight - pointerDeltaY, viewportHeight)
+
+export const clipPaneBoundsAboveBottomOverlay = (
+  bounds: PaneBounds,
+  overlay: BottomOverlayBounds
+): PaneBounds | null => {
+  const horizontallyOverlaps =
+    bounds.x < overlay.right && bounds.x + bounds.width > overlay.left
+  if (!horizontallyOverlaps || bounds.y + bounds.height <= overlay.top) return bounds
+
+  const availableHeight = Math.floor(overlay.top - bounds.y)
+  return availableHeight > 0 ? { ...bounds, height: availableHeight } : null
+}
 
 export const defaultPaneWidths = (viewportWidth: number): PaneWidths =>
   fitPaneWidths(

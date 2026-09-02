@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PANE_LAYOUT,
   RUN_LOG_LAYOUT,
+  clipPaneBoundsAboveBottomOverlay,
   defaultPaneWidths,
   fitRunLogHeight,
   fitPaneWidths,
@@ -70,5 +71,19 @@ describe('resizable pane layout', () => {
     expect(resizeRunLogHeight(176, 500, 720)).toBe(RUN_LOG_LAYOUT.minHeight)
     expect(maxRunLogHeight(720)).toBe(420)
     expect(fitRunLogHeight(900, 720)).toBe(420)
+  })
+
+  it('clips the native preview above an overlapping bottom drawer', () => {
+    const preview = { x: 720, y: 140, width: 560, height: 760 }
+
+    expect(
+      clipPaneBoundsAboveBottomOverlay(preview, { left: 220, right: 1280, top: 620 })
+    ).toEqual({ ...preview, height: 480 })
+    expect(
+      clipPaneBoundsAboveBottomOverlay(preview, { left: 0, right: 700, top: 620 })
+    ).toEqual(preview)
+    expect(
+      clipPaneBoundsAboveBottomOverlay(preview, { left: 220, right: 1280, top: 100 })
+    ).toBeNull()
   })
 })

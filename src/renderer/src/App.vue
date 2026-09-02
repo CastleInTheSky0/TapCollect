@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, provide, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { RouterView } from 'vue-router'
 import MessagePlugin from 'tdesign-vue-next/es/message/plugin'
@@ -43,10 +43,16 @@ const { appView, routeTaskId, openTask } = navigationStore
 
 // 预览边界元素按规范由 App.vue 持有 ref，组件通过函数型 ref 写回
 const previewVisible = ref(false)
+const previewBlocked = ref(false)
 const previewSurface = ref<HTMLElement | null>(null)
+const runDrawerSurface = ref<HTMLElement | null>(null)
 
 const setPreviewSurface = (element: Element | ComponentPublicInstance | null): void => {
   previewSurface.value = element instanceof HTMLElement ? element : null
+}
+
+const setRunDrawerSurface = (element: Element | ComponentPublicInstance | null): void => {
+  runDrawerSurface.value = element instanceof HTMLElement ? element : null
 }
 
 // 组合装配：跨功能调用以延迟绑定回调传入，各 composable 可独立阅读；
@@ -58,7 +64,13 @@ const settingsStore = useAppSettings({
   getActiveOutputRoot: () => taskFormStore.activeTask.value?.output.rootDirectory.trim() ?? ''
 })
 
-const layoutStore = usePaneLayout({ appView, previewVisible, previewSurface })
+const layoutStore = usePaneLayout({
+  appView,
+  previewBlocked,
+  previewVisible,
+  previewSurface,
+  runDrawerSurface
+})
 
 const runSessionStore = useRunSession({
   showError: feedback.showError,
@@ -209,7 +221,39 @@ const {
   fitCurrentPaneWidths
 } = layoutStore
 
+const blockingDialogVisible = computed(() =>
+  Boolean(
+    aboutUpdateVisible.value ||
+    resumePrompt.value ||
+    pendingDeleteTaskId.value ||
+    exportTaskConfigsPrompt.value ||
+    taskConfigImportResult.value ||
+    cancelPromptTaskId.value ||
+    cancelAllPrompt.value
+  )
+)
+
+// WebContentsView 天然位于渲染器 DOM 之上。弹窗打开时先移开预览，
+// 关闭时等待 TDesign 离场动画结束，再恢复原生视图。
+watch(
+  blockingDialogVisible,
+  (visible) => {
+    if (visible) previewBlocked.value = true
+  },
+  { immediate: true }
+)
+
+const releasePreviewAfterDialogClosed = (): void => {
+  if (!blockingDialogVisible.value) previewBlocked.value = false
+}
+
 let resizeObserver: ResizeObserver | null = null
+
+watch(runDrawerSurface, (current, previous) => {
+  if (previous) resizeObserver?.unobserve(previous)
+  if (current) resizeObserver?.observe(current)
+  layoutStore.schedulePreviewBoundsUpdate()
+})
 
 onMounted(async () => {
   try {
@@ -223,6 +267,7 @@ onMounted(async () => {
   fitCurrentPaneWidths()
   resizeObserver = new ResizeObserver(layoutStore.schedulePreviewBoundsUpdate)
   if (previewSurface.value) resizeObserver.observe(previewSurface.value)
+  if (runDrawerSurface.value) resizeObserver.observe(runDrawerSurface.value)
   window.addEventListener('resize', handleWindowResize)
   window.addEventListener('pointermove', handlePaneResize)
   window.addEventListener('pointerup', stopPaneResize)
@@ -310,12 +355,15 @@ onBeforeUnmount(() => {
 
     <RunDrawer
       v-if="showRunDrawer" :item="selectedRunItem" :run-action-task-id="runActionTaskId"
-      :run-log-height="runLogHeight" :run-log-max-height="runLogMaxHeight" @resize-log="runLogHeight = $event"
+      :run-log-height="runLogHeight" :run-log-max-height="runLogMaxHeight" :surface-ref="setRunDrawerSurface"
+      @resize-log="runLogHeight = $event"
       @dismiss="dismissRunDrawer" @pause="pauseRun()" @resume="resumeRun()" @cancel="cancelRun()"
       @open-output="openOutput()" @open-error="openErrorLog()"
     />
 
-    <AboutUpdateDialog v-model:visible="aboutUpdateVisible" :api="api" />
+    <AboutUpdateDialog
+      v-model:visible="aboutUpdateVisible" :api="api" @closed="releasePreviewAfterDialogClosed"
+    />
 
     <TaskDialogs
       v-model:resume-prompt="resumePrompt" v-model:pending-delete-task-id="pendingDeleteTaskId"
@@ -323,7 +371,7 @@ onBeforeUnmount(() => {
       v-model:task-config-import-result="taskConfigImportResult" v-model:cancel-prompt-task-id="cancelPromptTaskId"
       v-model:cancel-all-prompt="cancelAllPrompt" :has-unsaved-changes="hasUnsavedChanges" @launch-run="launchRun"
       @confirm-remove="confirmRemoveTask" @export-configs="exportTaskConfigs" @confirm-cancel-run="confirmCancelRun"
-      @confirm-cancel-all="confirmCancelAllRuns"
+      @confirm-cancel-all="confirmCancelAllRuns" @closed="releasePreviewAfterDialogClosed"
     />
   </main>
 </template>
