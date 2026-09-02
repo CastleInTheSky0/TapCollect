@@ -109,6 +109,43 @@ describe('spreadsheet template', () => {
     }
   )
 
+  it('drops unsupported WPS OLE system properties when writing XLS output', () => {
+    const workbook = XLSX.utils.book_new()
+    const unsupportedSystemProperties = {
+      Locale: 2052,
+      Behavior: 1,
+      undefined: 2052
+    }
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([['标题'], ['模板标题']]),
+      '数据'
+    )
+    workbook.Custprops = {
+      ...unsupportedSystemProperties,
+      CustomLabel: 'kept'
+    }
+    const source = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+    const template = importSpreadsheetTemplate(
+      Buffer.isBuffer(source) ? source : Buffer.from(source),
+      'WPS 模板.xls'
+    )
+    template.mappings[0]!.mode = 'fixed'
+    template.mappings[0]!.fixedValue = '采集标题'
+
+    const bytes = renderSpreadsheetBatch(template, [record()])
+    const output = XLSX.read(bytes, { type: 'buffer' })
+    const standardProperties = output.Props as Record<string, unknown> | undefined
+    const customProperties = output.Custprops as Record<string, unknown> | undefined
+
+    expect(readSpreadsheetCell(bytes, '数据', 'A2')?.v).toBe('采集标题')
+    for (const key of Object.keys(unsupportedSystemProperties)) {
+      expect(standardProperties?.[key]).toBeUndefined()
+      expect(customProperties?.[key]).toBeUndefined()
+    }
+    expect(standardProperties?.CustomLabel ?? customProperties?.CustomLabel).toBe('kept')
+  })
+
   it.each(['=SUM(1,2)', '+100', '-100', '@value'])(
     'keeps formula-like collected text as a string: %s',
     (value) => {

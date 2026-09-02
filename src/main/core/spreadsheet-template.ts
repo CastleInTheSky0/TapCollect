@@ -11,6 +11,17 @@ import { resolveFieldValue } from './field-values'
 
 type StyledCell = XLSX.CellObject & { s?: unknown }
 
+const UNSUPPORTED_BIFF8_PROPERTY_KEYS = ['Locale', 'Behavior', 'undefined'] as const
+
+const sanitizeBiff8Properties = (workbook: XLSX.WorkBook): void => {
+  // WPS emits OLE system properties that SheetJS 0.20.3 can read but cannot write.
+  for (const properties of [workbook.Props, workbook.Custprops]) {
+    if (!properties) continue
+    const values = properties as Record<string, unknown>
+    for (const key of UNSUPPORTED_BIFF8_PROPERTY_KEYS) delete values[key]
+  }
+}
+
 const spreadsheetFormat = (fileName: string): SpreadsheetFormat => {
   const extension = extname(fileName).toLowerCase()
   if (extension === '.xlsx') return 'xlsx'
@@ -144,6 +155,8 @@ export const renderSpreadsheetBatch = (
     e: { c: lastColumn, r: records.length }
   })
   if (sheet['!autofilter']) sheet['!autofilter'].ref = sheet['!ref']
+
+  if (template.format === 'xls') sanitizeBiff8Properties(workbook)
 
   const bytes = XLSX.write(workbook, {
     type: 'buffer',
