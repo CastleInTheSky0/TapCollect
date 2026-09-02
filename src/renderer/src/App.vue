@@ -16,9 +16,11 @@ import PreviewPane from '@renderer/components/PreviewPane/index.vue'
 import RunDrawer from '@renderer/components/RunDrawer/index.vue'
 import TaskDialogs from '@renderer/components/TaskDialogs/index.vue'
 import TaskSidebar from '@renderer/components/TaskSidebar/index.vue'
+import UpdateAvailableNotice from '@renderer/components/UpdateAvailableNotice/index.vue'
 import { useFeedback } from '@renderer/composables/useFeedback'
 import { useAppNavigation } from '@renderer/composables/useAppNavigation'
 import { useAppSettings } from '@renderer/composables/useAppSettings'
+import { useAppUpdate } from '@renderer/composables/useAppUpdate'
 import { usePaneLayout } from '@renderer/composables/usePaneLayout'
 import { useRunSession } from '@renderer/composables/useRunSession'
 import { useTasks } from '@renderer/composables/useTasks'
@@ -62,6 +64,13 @@ const settingsStore = useAppSettings({
   showNotice: feedback.showNotice,
   refreshRunSession: () => runSessionStore.refreshFromMain(),
   getActiveOutputRoot: () => taskFormStore.activeTask.value?.output.rootDirectory.trim() ?? ''
+})
+
+const updateStore = useAppUpdate({
+  isAboutDialogVisible: () => aboutUpdateVisible.value,
+  openAboutDialog: () => {
+    aboutUpdateVisible.value = true
+  }
 })
 
 const layoutStore = usePaneLayout({
@@ -145,7 +154,18 @@ provide(appStoreKey, {
 })
 
 // 模板绑定（保持原有命名）
-const { settings } = settingsStore
+const { settings, settingsSaving, changeAutoCheckUpdates } = settingsStore
+const {
+  updateCheckResult,
+  updateChecking,
+  updateCheckError,
+  updateNoticeVisible,
+  checkForUpdatesManually,
+  checkForUpdatesOnStartup,
+  clearUpdateCheckError,
+  dismissUpdateNotice,
+  openUpdateDetails
+} = updateStore
 const {
   runSession,
   runActionTaskId,
@@ -261,6 +281,7 @@ onMounted(async () => {
     runSessionStore.applyRunSession(await api.getRunSession())
     await refreshTasks()
     await navigationStore.start()
+    void checkForUpdatesOnStartup(settings.value.autoCheckUpdates)
   } catch (error) {
     feedback.showError(error)
   }
@@ -297,12 +318,19 @@ onBeforeUnmount(() => {
       'pane-is-resizing': resizingPane
     }" :style="appShellStyle"
   >
+    <UpdateAvailableNotice
+      :visible="updateNoticeVisible"
+      :result="updateCheckResult"
+      @dismiss="dismissUpdateNotice"
+      @open="openUpdateDetails"
+    />
+
     <TaskSidebar
       :collapsed="sidebarCollapsed" :tasks="tasks" :active-id="routeTaskId || activeId" :view="appView"
       :run-items="runSession.items" :testing-task-id="runSession.testingTaskId"
       :disabled="busy || saving || taskConfigTransferring" @select="openTask" @show-run-center="showRunCenter"
       @create="createNewTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
-      @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="aboutUpdateVisible = true"
+      @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="openUpdateDetails"
     />
 
     <div
@@ -362,7 +390,11 @@ onBeforeUnmount(() => {
     />
 
     <AboutUpdateDialog
-      v-model:visible="aboutUpdateVisible" :api="api" @closed="releasePreviewAfterDialogClosed"
+      v-model:visible="aboutUpdateVisible" :api="api" :auto-check-updates="settings.autoCheckUpdates"
+      :settings-saving="settingsSaving" :check-result="updateCheckResult" :checking-updates="updateChecking"
+      :check-error="updateCheckError" @change-auto-check-updates="changeAutoCheckUpdates"
+      @check-updates="checkForUpdatesManually" @clear-check-error="clearUpdateCheckError"
+      @closed="releasePreviewAfterDialogClosed"
     />
 
     <TaskDialogs

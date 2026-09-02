@@ -27,6 +27,7 @@ interface PreloadSmokeResult {
   usesUserDataTaskStore: boolean
   settingsDirectory: string
   maxConcurrentRuns: number
+  autoCheckUpdates: boolean
   runSessionCapacity: number
   initialTaskCount: number
   savedTaskCount: number
@@ -870,6 +871,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
             hasTaskConfigTransfer: false,
             settingsDirectory: '',
             maxConcurrentRuns: -1,
+            autoCheckUpdates: true,
             runSessionCapacity: -1,
             initialTaskCount: -1,
             savedTaskCount: -1,
@@ -966,6 +968,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
             typeof api.exportTaskConfigs === 'function',
           settingsDirectory: settings.defaultOutputDirectory,
           maxConcurrentRuns: settings.maxConcurrentRuns,
+          autoCheckUpdates: settings.autoCheckUpdates,
           runSessionCapacity: runSession.maxConcurrentRuns,
           initialTaskCount: initialTasks.length,
           savedTaskCount: savedTasks.length,
@@ -1041,6 +1044,7 @@ const main = async (): Promise<void> => {
       !result.usesUserDataTaskStore ||
       result.settingsDirectory !== '' ||
       result.maxConcurrentRuns !== 3 ||
+      result.autoCheckUpdates !== false ||
       result.runSessionCapacity !== 3 ||
       result.initialTaskCount !== 0 ||
       result.savedTaskCount !== 1 ||

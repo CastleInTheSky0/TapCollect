@@ -16,21 +16,29 @@ import type {
   UpdateDownloadProgress
 } from '@shared/types'
 import appIconUrl from '@renderer/assets/images/tapcollect-icon.png'
+import { messageFromError } from '@renderer/utils/error-message'
 
 const props = defineProps<{
   visible: boolean
   api: CollectorApi
+  autoCheckUpdates: boolean
+  settingsSaving: boolean
+  checkResult: UpdateCheckResult | null
+  checkingUpdates: boolean
+  checkError: string
 }>()
 
 const emit = defineEmits<{
   closed: []
+  'change-auto-check-updates': [enabled: boolean]
+  'check-updates': []
+  'clear-check-error': []
   'update:visible': [visible: boolean]
 }>()
 
-type UpdateAction = '' | 'runtime' | 'checking' | 'downloading' | 'installing'
+type UpdateAction = '' | 'runtime' | 'downloading' | 'installing'
 
 const runtimeInfo = ref<AppRuntimeInfo | null>(null)
-const checkResult = ref<UpdateCheckResult | null>(null)
 const downloadProgress = ref<UpdateDownloadProgress | null>(null)
 const downloadedUpdate = ref<DownloadedUpdate | null>(null)
 const action = ref<UpdateAction>('')
@@ -43,12 +51,13 @@ const platformTarget = computed(() => {
   if (!runtimeInfo.value) return ''
   return `${runtimeInfo.value.platformLabel} ${runtimeInfo.value.architectureLabel}`
 })
-const updateAvailable = computed(() => checkResult.value?.status === 'available')
+const updateAvailable = computed(() => props.checkResult?.status === 'available')
 const downloadDisabled = computed(() =>
   action.value !== '' ||
+  props.checkingUpdates ||
   runtimeInfo.value?.developmentPreview ||
   !updateAvailable.value ||
-  !checkResult.value?.release.asset
+  !props.checkResult?.release.asset
 )
 // 本地开发无法下载安装包，提供完成态数据用于样式验收。
 const displayedDownloadedUpdate = computed<DownloadedUpdate | null>(() => {
@@ -70,9 +79,6 @@ const formatBytes = (value: number): string => {
   const amount = value / 1024 ** unitIndex
   return `${amount >= 100 || unitIndex === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[unitIndex]}`
 }
-const messageFromError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
-
 const loadRuntimeInfo = async (): Promise<void> => {
   if (runtimeInfo.value || runtimeRequest) return runtimeRequest ?? Promise.resolve()
   action.value = 'runtime'
@@ -90,20 +96,14 @@ const loadRuntimeInfo = async (): Promise<void> => {
   return runtimeRequest
 }
 
-const checkForUpdates = async (): Promise<void> => {
-  if (action.value) return
-  action.value = 'checking'
+const checkForUpdates = (): void => {
+  if (action.value || props.checkingUpdates) return
   errorMessage.value = ''
   infoMessage.value = ''
   downloadProgress.value = null
   downloadedUpdate.value = null
-  try {
-    checkResult.value = await props.api.checkForUpdates()
-  } catch (error) {
-    errorMessage.value = messageFromError(error)
-  } finally {
-    action.value = ''
-  }
+  emit('clear-check-error')
+  emit('check-updates')
 }
 
 const downloadUpdate = async (): Promise<void> => {
@@ -146,6 +146,15 @@ const openReleasePage = async (): Promise<void> => {
   } finally {
     openingRelease.value = false
   }
+}
+
+const clearError = (): void => {
+  errorMessage.value = ''
+  emit('clear-check-error')
+}
+
+const changeAutoCheckUpdates = (value: string | number | boolean): void => {
+  emit('change-auto-check-updates', value === true)
 }
 
 const closeDialog = (): void => emit('update:visible', false)
@@ -202,10 +211,16 @@ onBeforeUnmount(removeProgressListener)
       </section>
 
       <section class="update-panel" aria-live="polite">
-        <t-alert v-if="errorMessage" theme="error" :message="errorMessage" close @close="errorMessage = ''" />
+        <t-alert
+          v-if="errorMessage || checkError"
+          theme="error"
+          :message="errorMessage || checkError"
+          close
+          @close="clearError"
+        />
         <t-alert v-if="infoMessage" theme="info" :message="infoMessage" close @close="infoMessage = ''" />
 
-        <div v-if="action === 'checking'" class="update-centered">
+        <div v-if="checkingUpdates" class="update-centered">
           <t-loading size="small" />
           <div><strong>正在检查新版本…</strong><span>正在连接 GitHub Releases</span></div>
         </div>
@@ -284,10 +299,31 @@ onBeforeUnmount(removeProgressListener)
         <div v-else class="update-idle">
           <div class="idle-copy">
             <RefreshIcon />
-            <div><strong>手动检查更新</strong><span>仅在点击按钮后连接 GitHub Releases</span></div>
+            <div>
+              <strong>手动检查更新</strong>
+              <span>{{ autoCheckUpdates ? '已开启启动检查，也可随时手动重试' : '点击后连接 GitHub Releases' }}</span>
+            </div>
           </div>
-          <t-button theme="primary" :disabled="action === 'runtime'" @click="checkForUpdates">检查更新</t-button>
+          <t-button
+            theme="primary"
+            :disabled="action === 'runtime' || checkingUpdates"
+            @click="checkForUpdates"
+          >
+            检查更新
+          </t-button>
         </div>
+      </section>
+
+      <section class="auto-update-setting" :aria-busy="settingsSaving">
+        <div>
+          <strong>启动时自动检查更新</strong>
+          <span>每次打开应用联网检查一次，仅发现适用新版时提示</span>
+        </div>
+        <t-switch
+          :value="autoCheckUpdates"
+          :disabled="settingsSaving"
+          @change="changeAutoCheckUpdates"
+        />
       </section>
 
       <footer class="about-footer">
@@ -580,6 +616,37 @@ onBeforeUnmount(removeProgressListener)
   color: var(--muted);
   font-size: 9px;
   text-align: center;
+}
+
+.auto-update-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: -4px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfc;
+}
+
+.auto-update-setting > div {
+  min-width: 0;
+}
+
+.auto-update-setting strong,
+.auto-update-setting span {
+  display: block;
+}
+
+.auto-update-setting strong {
+  font-size: 11px;
+}
+
+.auto-update-setting span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .about-footer {

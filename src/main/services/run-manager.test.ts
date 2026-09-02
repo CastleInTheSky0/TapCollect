@@ -205,7 +205,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 2 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 2, autoCheckUpdates: false })
     for (const id of ['task-a', 'task-b', 'task-c']) {
       await store.saveTask(runnableTask(id, root))
     }
@@ -281,7 +281,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 2 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 2, autoCheckUpdates: false })
     await store.saveTask(runnableTask('task-a', root, '相同目录'))
     await store.saveTask(runnableTask('task-b', root, '相同目录'))
     await store.saveTask(runnableTask('task-c', root, '独立目录'))
@@ -308,7 +308,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1, autoCheckUpdates: false })
     for (const id of ['task-a', 'task-b', 'task-c']) {
       await store.saveTask(runnableTask(id, root))
     }
@@ -338,7 +338,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1, autoCheckUpdates: false })
     await store.saveTask(runnableTask('task-a', root))
     await store.saveTask(runnableTask('task-b', root))
     const engine = new FakeCollectorEngine(store)
@@ -371,7 +371,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1, autoCheckUpdates: false })
     await store.saveTask(runnableTask('test-task', root))
     await store.saveTask(runnableTask('formal-task', root))
     const engine = new FakeCollectorEngine(store)
@@ -430,7 +430,7 @@ describe('RunManager', () => {
     temporaryDirectories.push(root)
     const store = new TaskStore(root)
     await store.initialize()
-    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1 })
+    await store.saveSettings({ defaultOutputDirectory: '', maxConcurrentRuns: 1, autoCheckUpdates: false })
     await store.saveTask(runnableTask('task-a', root))
     await store.saveTask(runnableTask('task-b', root))
     const engine = new FakeCollectorEngine(store)

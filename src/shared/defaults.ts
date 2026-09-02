@@ -117,7 +117,8 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultOutputDirectory: '',
-  maxConcurrentRuns: 3
+  maxConcurrentRuns: 3,
+  autoCheckUpdates: false
 }
 
 export const normalizeMaxConcurrentRuns = (value: unknown): number => {
@@ -128,7 +129,8 @@ export const normalizeMaxConcurrentRuns = (value: unknown): number => {
 
 export const normalizeAppSettings = (settings: Partial<AppSettings> | null): AppSettings => ({
   defaultOutputDirectory: settings?.defaultOutputDirectory?.trim() ?? '',
-  maxConcurrentRuns: normalizeMaxConcurrentRuns(settings?.maxConcurrentRuns)
+  maxConcurrentRuns: normalizeMaxConcurrentRuns(settings?.maxConcurrentRuns),
+  autoCheckUpdates: settings?.autoCheckUpdates === true
 })
 
 export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {

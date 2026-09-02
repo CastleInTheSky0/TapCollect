@@ -1,9 +1,7 @@
 import MessagePlugin from 'tdesign-vue-next/es/message/plugin'
+import { messageFromError } from '@renderer/utils/error-message'
 
 const MESSAGE_AUTO_DISMISS_MS = 5_000
-
-export const messageFromError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
 
 export const useFeedback = (): {
   showError: (error: unknown) => void

@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
+import { DEFAULT_SETTINGS } from '@shared/defaults'
 import type { AppSettings } from '@shared/types'
 
 export interface AppSettingsDeps {
@@ -14,9 +15,10 @@ export const useAppSettings = (deps: AppSettingsDeps): {
   settingsSaving: Ref<boolean>
   saveDefaultOutputDirectory: () => Promise<void>
   changeMaxConcurrentRuns: (value: number) => Promise<void>
+  changeAutoCheckUpdates: (enabled: boolean) => Promise<void>
 } => {
   const api = window.collector
-  const settings = ref<AppSettings>({ defaultOutputDirectory: '', maxConcurrentRuns: 3 })
+  const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS })
   const settingsSaving = ref(false)
 
   const saveDefaultOutputDirectory = async (): Promise<void> => {
@@ -53,5 +55,27 @@ export const useAppSettings = (deps: AppSettingsDeps): {
     }
   }
 
-  return { settings, settingsSaving, saveDefaultOutputDirectory, changeMaxConcurrentRuns }
+  const changeAutoCheckUpdates = async (enabled: boolean): Promise<void> => {
+    if (settingsSaving.value || enabled === settings.value.autoCheckUpdates) return
+    settingsSaving.value = true
+    try {
+      settings.value = await api.saveSettings({
+        ...settings.value,
+        autoCheckUpdates: enabled
+      })
+      deps.showNotice(enabled ? '已开启启动时自动检查更新' : '已关闭启动时自动检查更新')
+    } catch (error) {
+      deps.showError(error)
+    } finally {
+      settingsSaving.value = false
+    }
+  }
+
+  return {
+    settings,
+    settingsSaving,
+    saveDefaultOutputDirectory,
+    changeMaxConcurrentRuns,
+    changeAutoCheckUpdates
+  }
 }

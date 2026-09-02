@@ -31,13 +31,19 @@ describe('TaskStore', () => {
 
     await expect(store.getSettings()).resolves.toEqual({
       defaultOutputDirectory: 'D:/output',
-      maxConcurrentRuns: 3
+      maxConcurrentRuns: 3,
+      autoCheckUpdates: false
     })
     await expect(
-      store.saveSettings({ defaultOutputDirectory: ' D:/next ', maxConcurrentRuns: 99 })
+      store.saveSettings({
+        defaultOutputDirectory: ' D:/next ',
+        maxConcurrentRuns: 99,
+        autoCheckUpdates: true
+      })
     ).resolves.toEqual({
       defaultOutputDirectory: 'D:/next',
-      maxConcurrentRuns: 5
+      maxConcurrentRuns: 5,
+      autoCheckUpdates: true
     })
   })
 

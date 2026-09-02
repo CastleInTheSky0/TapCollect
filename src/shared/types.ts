@@ -477,6 +477,7 @@ export interface PreviewEvaluateResult {
 export interface AppSettings {
   defaultOutputDirectory: string
   maxConcurrentRuns: number
+  autoCheckUpdates: boolean
 }
 
 export type AppPlatform = 'windows' | 'macos' | 'linux' | 'unsupported'

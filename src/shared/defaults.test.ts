@@ -4,6 +4,7 @@ import {
   createTask,
   disabledDetailPageMappingIssues,
   isTaskRunnable,
+  normalizeAppSettings,
   normalizeTaskConfig,
   taskConfigurationIssues
 } from './defaults'
@@ -76,6 +77,22 @@ const createRunnableSpreadsheetTask = (): TaskConfig => {
   }
   return task
 }
+
+describe('normalizeAppSettings', () => {
+  it('defaults legacy automatic update checks off and preserves an explicit opt-in', () => {
+    expect(normalizeAppSettings({ defaultOutputDirectory: ' D:/output ' })).toEqual({
+      defaultOutputDirectory: 'D:/output',
+      maxConcurrentRuns: 3,
+      autoCheckUpdates: false
+    })
+    expect(normalizeAppSettings({ autoCheckUpdates: true })).toMatchObject({
+      autoCheckUpdates: true
+    })
+    expect(normalizeAppSettings({ autoCheckUpdates: 'true' as unknown as boolean })).toMatchObject({
+      autoCheckUpdates: false
+    })
+  })
+})
 
 describe('taskConfigurationIssues', () => {
   it('defaults resource URL encoding off and migrates legacy tasks to the same behavior', () => {
