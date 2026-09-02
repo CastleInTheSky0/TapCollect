@@ -80,6 +80,56 @@ describe('XML template', () => {
     expect(output).toContain(']]]]><![CDATA[>')
   })
 
+  it('replaces XML 1.0 illegal characters without changing HTML markup', () => {
+    const sanitizationTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <item source="">
+    <html><![CDATA[]]></html>
+    <plain></plain>
+  </item>
+</root>`
+    const configured = configureXmlRecord(sanitizationTemplate, 'template.xml', '/root/item')
+    configured.mappings.forEach((mapping) => {
+      mapping.mode = 'page'
+    })
+
+    const output = renderXmlBatch(configured, [
+      {
+        sequence: 1,
+        collectedAt: '2026-09-02T00:00:00.000Z',
+        page: 1,
+        itemIndex: 1,
+        listUrl: 'https://example.com/list',
+        detailUrl: 'https://example.com/detail',
+        externalUrl: '',
+        values: {
+          '@source': '网页\u0000采集',
+          html:
+            '<p class="notice" style="color: red">9:00\u001e17:00\t中文 😀\n换行\r回车 ]]> 尾部</p>',
+          plain: '正文\u000b分隔\ud800结束'
+        }
+      }
+    ])
+
+    expect(() => parseXml(output)).not.toThrow()
+    for (const illegalCharacter of ['\u0000', '\u000b', '\u001e', '\ud800']) {
+      expect(output).not.toContain(illegalCharacter)
+    }
+    expect(output).toContain('source="网页 采集"')
+    expect(output).toContain(
+      '<![CDATA[<p class="notice" style="color: red">9:00 17:00\t中文 😀\r\n换行\r回车 ]]'
+    )
+    expect(output).toContain(']]]]><![CDATA[>')
+
+    const document = parseXml(output)
+    const item = document.getElementsByTagName('item').item(0)!
+    expect(item.getAttribute('source')).toBe('网页 采集')
+    expect(document.getElementsByTagName('html').item(0)?.textContent).toBe(
+      '<p class="notice" style="color: red">9:00 17:00\t中文 😀\n换行\n回车 ]]> 尾部</p>'
+    )
+    expect(document.getElementsByTagName('plain').item(0)?.textContent).toBe('正文 分隔 结束')
+  })
+
   it('writes a resolved merged value into the configured XML field', () => {
     const configured = configureXmlRecord(template, 'template.xml', '/book/article')
     configured.mappings.forEach((mapping) => {

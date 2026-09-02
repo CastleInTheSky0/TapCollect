@@ -234,6 +234,34 @@ const clearChildren = (element: Element): void => {
   while (element.firstChild) element.removeChild(element.firstChild)
 }
 
+const isXml10CodePoint = (codePoint: number): boolean =>
+  codePoint === 0x09 ||
+  codePoint === 0x0a ||
+  codePoint === 0x0d ||
+  (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+  (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+  (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+
+const sanitizeXml10Value = (value: string): string => {
+  const parts: string[] = []
+  let sliceStart = 0
+
+  for (let index = 0; index < value.length; ) {
+    const codePoint = value.codePointAt(index)!
+    const codeUnitLength = codePoint > 0xffff ? 2 : 1
+    if (!isXml10CodePoint(codePoint)) {
+      if (sliceStart < index) parts.push(value.slice(sliceStart, index))
+      parts.push(' ')
+      sliceStart = index + codeUnitLength
+    }
+    index += codeUnitLength
+  }
+
+  if (parts.length === 0) return value
+  if (sliceStart < value.length) parts.push(value.slice(sliceStart))
+  return parts.join('')
+}
+
 const appendCdata = (document: Document, element: Element, value: string): void => {
   clearChildren(element)
   const parts = value.split(']]>')
@@ -250,15 +278,16 @@ const setTargetValue = (
   value: string,
   definition: XmlFieldDefinition
 ): void => {
+  const sanitizedValue = sanitizeXml10Value(value)
   if (target.nodeType === target.ATTRIBUTE_NODE) {
-    target.value = value
+    target.value = sanitizedValue
     return
   }
   const element = target as Element
-  if (definition.cdata) appendCdata(document, element, value)
+  if (definition.cdata) appendCdata(document, element, sanitizedValue)
   else {
     clearChildren(element)
-    element.appendChild(document.createTextNode(value))
+    element.appendChild(document.createTextNode(sanitizedValue))
   }
 }
 
