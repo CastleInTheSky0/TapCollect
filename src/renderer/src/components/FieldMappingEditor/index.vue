@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { createMergeValue, isFieldMappingConfigured } from '@shared/field-mapping'
 import type { FieldMapping, OutputFieldDefinition, XmlFieldDefinition } from '@shared/types'
 import PageValueEditor from '@renderer/components/PageValueEditor/index.vue'
+import { setAllMappingsEmpty } from './mapping-actions'
 
 const props = withDefaults(
   defineProps<{
@@ -21,6 +22,9 @@ const emit = defineEmits<{
 }>()
 
 const expanded = ref<Array<string | number>>([])
+const allMappingsEmpty = computed(
+  () => props.mappings.length > 0 && props.mappings.every((mapping) => mapping.mode === 'empty')
+)
 
 const modeLabels: Record<FieldMapping['mode'], string> = {
   unconfigured: '待配置',
@@ -72,6 +76,18 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 </script>
 
 <template>
+  <div class="mapping-actions">
+    <span>无需采集的模板字段可以批量留空</span>
+    <t-button
+      size="small"
+      theme="default"
+      variant="outline"
+      :disabled="mappings.length === 0 || allMappingsEmpty"
+      @click="setAllMappingsEmpty(mappings)"
+    >
+      全部设为输出为空
+    </t-button>
+  </div>
   <t-collapse
     v-model="expanded" class="mapping-list" borderless expand-icon-placement="right"
     :expand-on-row-click="true"
@@ -252,8 +268,25 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 </template>
 
 <style scoped>
+.mapping-actions {
+  display: flex;
+  min-height: 46px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f8faf9;
+  gap: 8px 12px;
+}
+
+.mapping-actions > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .mapping-list {
-  border-top: 1px solid var(--line);
+  border-top: 0;
 }
 
 .mapping-row {
