@@ -5,6 +5,7 @@ import iconv from 'iconv-lite'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type {
   AppSettings,
+  ExtractedRecord,
   PreviewBounds,
   PreviewEvaluateRequest,
   PreviewPickRequest,
@@ -19,6 +20,7 @@ import {
   inspectXmlTree
 } from '@main/core/xml-template'
 import { importSpreadsheetTemplate as parseSpreadsheetTemplate } from '@main/core/spreadsheet-template'
+import { outputFileExtension, renderOutputFile } from '@main/services/output-writer'
 import {
   createTaskConfigBundle,
   parseTaskConfigBundle
@@ -39,6 +41,9 @@ const decodeXmlFile = (bytes: Buffer): string => {
 
 const jsonExportPath = (path: string): string =>
   extname(path).toLowerCase() === '.json' ? path : `${path}.json`
+
+const testFileExportPath = (path: string, extension: string): string =>
+  extname(path).toLowerCase() === `.${extension}` ? path : `${path}.${extension}`
 
 const parseTaskConfigFile = (content: string): unknown[] => {
   try {
@@ -192,6 +197,32 @@ export const registerIpcHandlers = (
     const saved = await store.saveTask(task)
     return runManager.testTask(saved.id)
   })
+  ipcMain.handle(
+    IPC_CHANNELS.exportTestFile,
+    async (_event, task: TaskConfig, records: ExtractedRecord[]) => {
+      if (!Array.isArray(records) || records.length === 0) {
+        throw new Error('当前测试结果没有可导出的记录')
+      }
+      if (records.length > 3) throw new Error('测试文件最多只能导出 3 条记录')
+      const extension = outputFileExtension(task)
+      const result = await dialog.showSaveDialog(window, {
+        title: '导出测试文件',
+        defaultPath: `${sanitizeFileName(task.name)}_测试.${extension}`,
+        filters: [
+          {
+            name: extension === 'xml' ? 'XML 文件' : 'Excel 表格',
+            extensions: [extension]
+          }
+        ]
+      })
+      if (result.canceled || !result.filePath) {
+        return { cancelled: true, filePath: '' }
+      }
+      const filePath = testFileExportPath(result.filePath, extension)
+      await atomicWrite(filePath, renderOutputFile(task, records))
+      return { cancelled: false, filePath }
+    }
+  )
   ipcMain.handle(IPC_CHANNELS.getCheckpoint, (_event, taskId: string) =>
     store.getCheckpoint(taskId)
   )

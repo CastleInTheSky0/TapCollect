@@ -24,6 +24,7 @@ interface PreloadSmokeResult {
   hasUpdateApi: boolean
   hasRunSubscription: boolean
   hasTaskConfigTransfer: boolean
+  hasTestFileExport: boolean
   usesUserDataTaskStore: boolean
   settingsDirectory: string
   maxConcurrentRuns: number
@@ -869,6 +870,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
             hasUpdateApi: false,
             hasRunSubscription: false,
             hasTaskConfigTransfer: false,
+            hasTestFileExport: false,
             settingsDirectory: '',
             maxConcurrentRuns: -1,
             autoCheckUpdates: true,
@@ -966,6 +968,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
           hasTaskConfigTransfer:
             typeof api.importTaskConfigs === 'function' &&
             typeof api.exportTaskConfigs === 'function',
+          hasTestFileExport: typeof api.exportTestFile === 'function',
           settingsDirectory: settings.defaultOutputDirectory,
           maxConcurrentRuns: settings.maxConcurrentRuns,
           autoCheckUpdates: settings.autoCheckUpdates,

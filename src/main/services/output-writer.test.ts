@@ -7,7 +7,13 @@ import { configureXmlRecord } from '@main/core/xml-template'
 import { importSpreadsheetTemplate, readSpreadsheetCell } from '@main/core/spreadsheet-template'
 import type { ExtractedRecord } from '@shared/types'
 import * as XLSX from 'xlsx'
-import { SpreadsheetOutputSession, XmlOutputSession, readOutputXml } from './output-writer'
+import {
+  SpreadsheetOutputSession,
+  XmlOutputSession,
+  outputFileExtension,
+  readOutputXml,
+  renderOutputFile
+} from './output-writer'
 import { TaskStore } from './task-store'
 
 const temporaryDirectories: string[] = []
@@ -46,9 +52,39 @@ describe('XML output session', () => {
     const session = new XmlOutputSession(task, store, '20260806_080000')
     await session.prepare(true)
     const path = await session.writeBatch(records, 1)
+    expect(outputFileExtension(task)).toBe('xml')
     expect(path).toMatch(/图片新闻_001\.xml$/)
     const content = await readOutputXml(path, 'gb2312')
     expect(content).toContain('<![CDATA[中文标题]]>')
+  })
+})
+
+describe('standalone output rendering', () => {
+  it('renders all test records without applying the formal batch split limit', () => {
+    const task = createTask('test-file-output')
+    task.output.recordsPerFile = 1
+    task.xml = configureXmlRecord(
+      '<?xml version="1.0" encoding="UTF-8"?><book><article><title/></article></book>',
+      'template.xml',
+      '/book/article'
+    )
+    task.xml.mappings[0]!.mode = 'page'
+    const records: ExtractedRecord[] = ['测试标题一', '测试标题二'].map((title, index) => ({
+      sequence: index,
+      collectedAt: '2026-09-04T00:00:00.000Z',
+      page: 1,
+      itemIndex: index + 1,
+      listUrl: 'https://example.com/list',
+      detailUrl: '',
+      externalUrl: '',
+      values: { title }
+    }))
+
+    const content = renderOutputFile(task, records).toString('utf8')
+
+    expect(content.match(/<article>/g)).toHaveLength(2)
+    expect(content).toContain('<title>测试标题一</title>')
+    expect(content).toContain('<title>测试标题二</title>')
   })
 })
 
@@ -92,6 +128,7 @@ describe('spreadsheet output session', () => {
     await session.prepare(true)
     const path = await session.writeBatch(records, 1)
 
+    expect(outputFileExtension(task)).toBe('xls')
     expect(path).toMatch(/公告列表_001\.xls$/)
     expect(readSpreadsheetCell(await readFile(path), '数据', 'A2')?.v).toBe('中文公告')
   })

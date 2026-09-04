@@ -319,6 +319,11 @@ export interface TestCollectionResult {
   messages: string[]
 }
 
+export interface TestFileExportResult {
+  cancelled: boolean
+  filePath: string
+}
+
 export interface RunCounters {
   discovered: number
   succeeded: number
@@ -573,6 +578,10 @@ export interface CollectorApi {
   detectPaginationParameters: (url: string) => Promise<PaginationParameter[]>
   getDetailSamples: (task: TaskConfig) => Promise<string[]>
   testTask: (task: TaskConfig) => Promise<TestCollectionResult>
+  exportTestFile: (
+    task: TaskConfig,
+    records: ExtractedRecord[]
+  ) => Promise<TestFileExportResult>
   getCheckpoint: (taskId: string) => Promise<RunCheckpoint | null>
   getRunSession: () => Promise<RunSessionSnapshot>
   startRun: (taskId: string, resume: boolean) => Promise<StartRunResult>

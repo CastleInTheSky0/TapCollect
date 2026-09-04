@@ -23,6 +23,7 @@ export const IPC_CHANNELS = {
   detectPaginationParameters: 'pagination:detect',
   getDetailSamples: 'collector:detail-samples',
   testTask: 'collector:test',
+  exportTestFile: 'collector:export-test-file',
   getCheckpoint: 'collector:get-checkpoint',
   getRunSession: 'collector:get-run-session',
   startRun: 'collector:start',

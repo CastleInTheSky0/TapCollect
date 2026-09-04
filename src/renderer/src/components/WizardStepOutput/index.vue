@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { AddIcon, DeleteIcon, FolderOpenIcon, PlayIcon, RefreshIcon } from 'tdesign-icons-vue-next'
+import {
+  AddIcon,
+  DeleteIcon,
+  FileExportIcon,
+  FolderOpenIcon,
+  PlayIcon,
+  RefreshIcon
+} from 'tdesign-icons-vue-next'
 import type {
   OutputFieldDefinition,
   TaskConfig,
@@ -20,6 +27,7 @@ export interface WizardTableColumn {
 defineProps<{
   isClickDetail: boolean
   testing: boolean
+  exportingTestFile: boolean
   activeTaskLocked: boolean
   busy: boolean
   saving: boolean
@@ -40,6 +48,7 @@ const emit = defineEmits<{
   'save-default-output-directory': []
   'add-header': []
   'run-test': []
+  'export-test-file': []
   'request-run': []
 }>()
 </script>
@@ -288,6 +297,19 @@ const emit = defineEmits<{
         <RefreshIcon />
       </template>
       执行测试
+    </t-button>
+    <t-button
+      v-if="testResult"
+      theme="default"
+      variant="outline"
+      :loading="exportingTestFile"
+      :disabled="testing || testResult.records.length === 0"
+      @click="emit('export-test-file')"
+    >
+      <template #icon>
+        <FileExportIcon />
+      </template>
+      导出测试文件
     </t-button>
     <t-button
       theme="primary"

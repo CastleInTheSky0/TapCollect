@@ -17,7 +17,11 @@ import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-pag
 import { isFieldMappingConfigured } from '@shared/field-mapping'
 import { taskOutputTemplate } from '@shared/output-template'
 import { RESOURCE_KIND_LABELS, WIZARD_STEPS } from '@renderer/constants/task'
-import { snapshotTaskForIpc, taskDraftFingerprint } from '@renderer/utils/task-ipc'
+import {
+  snapshotForIpc,
+  snapshotTaskForIpc,
+  taskDraftFingerprint
+} from '@renderer/utils/task-ipc'
 
 export interface TaskFormNavigation {
   openTask: (taskId: string) => Promise<void>
@@ -51,8 +55,15 @@ export const useTaskForm = (deps: TaskFormDeps) => {
   const paginationSuggestions = ref<PaginationParameter[]>([])
   const paginationDetectionLineIndex = ref(-1)
   const testResult = ref<TestCollectionResult | null>(null)
+  const testTask = ref<TaskConfig | null>(null)
   const testing = ref(false)
+  const exportingTestFile = ref(false)
   let loadTaskSequence = 0
+
+  const clearTestResult = (): void => {
+    testResult.value = null
+    testTask.value = null
+  }
 
   const activeId = computed(() => activeTask.value?.id ?? '')
   const configurationIssues = computed(() =>
@@ -189,7 +200,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       deps.navigation.setPreviewUrl(previewUrl)
       paginationSuggestions.value = []
       deps.navigation.resetDetailSamples()
-      testResult.value = null
+      clearTestResult()
       currentStep.value = 1
       xmlTree.value = inspectedXmlTree
       if (deps.navigation.getPreviewVisible() && previewUrl) {
@@ -216,7 +227,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     xmlTree.value = []
     paginationSuggestions.value = []
     deps.navigation.resetDetailSamples()
-    testResult.value = null
+    clearTestResult()
     deps.navigation.setPreviewUrl('')
     paginationDetectionLineIndex.value = -1
     void deps.navigation.openTask(task.id)
@@ -322,7 +333,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       if (result.cancelled || !result.template) return
       activeTask.value.xml = result.template
       xmlTree.value = result.tree
-      testResult.value = null
+      clearTestResult()
       deps.showNotice('模板已导入，请在 XML 树中选择单条记录节点')
     } catch (error) {
       deps.showError(error)
@@ -336,7 +347,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       if (result.cancelled || !result.template) return
       activeTask.value.spreadsheet = result.template
       activeTask.value.output.format = 'spreadsheet'
-      testResult.value = null
+      clearTestResult()
       deps.showNotice(`表格模板已导入，共识别 ${result.template.fields.length} 列`)
     } catch (error) {
       deps.showError(error)
@@ -344,7 +355,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
   }
 
   const changeOutputFormat = (): void => {
-    testResult.value = null
+    clearTestResult()
   }
 
   const selectRecordNode = async (node: XmlTreeNode): Promise<void> => {
@@ -396,16 +407,41 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       return
     }
     testing.value = true
-    testResult.value = null
+    clearTestResult()
     try {
       const saved = await saveCurrent(true)
       if (!saved) return
-      testResult.value = await api.testTask(saved)
+      const result = await api.testTask(saved)
+      testTask.value = snapshotTaskForIpc(saved)
+      testResult.value = result
       deps.showNotice('测试采集完成')
     } catch (error) {
       deps.showError(error)
     } finally {
       testing.value = false
+    }
+  }
+
+  const exportTestFile = async (): Promise<void> => {
+    if (
+      exportingTestFile.value ||
+      !testTask.value ||
+      !testResult.value ||
+      testResult.value.records.length === 0
+    ) {
+      return
+    }
+    exportingTestFile.value = true
+    try {
+      const result = await api.exportTestFile(
+        snapshotTaskForIpc(testTask.value),
+        snapshotForIpc(testResult.value.records)
+      )
+      if (!result.cancelled) deps.showNotice('测试文件已导出')
+    } catch (error) {
+      deps.showError(error)
+    } finally {
+      exportingTestFile.value = false
     }
   }
 
@@ -420,6 +456,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     paginationDetectionLineIndex,
     testResult,
     testing,
+    exportingTestFile,
     activeId,
     configurationIssues,
     runnable,
@@ -458,6 +495,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     setCustomAttributes,
     chooseOutputDirectory,
     chooseResourceDirectory,
-    runTest
+    runTest,
+    exportTestFile
   }
 }

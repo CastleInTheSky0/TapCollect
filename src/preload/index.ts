@@ -43,6 +43,8 @@ const api: CollectorApi = {
     ipcRenderer.invoke(IPC_CHANNELS.detectPaginationParameters, url),
   getDetailSamples: (task) => ipcRenderer.invoke(IPC_CHANNELS.getDetailSamples, task),
   testTask: (task) => ipcRenderer.invoke(IPC_CHANNELS.testTask, task),
+  exportTestFile: (task, records) =>
+    ipcRenderer.invoke(IPC_CHANNELS.exportTestFile, task, records),
   getCheckpoint: (taskId) => ipcRenderer.invoke(IPC_CHANNELS.getCheckpoint, taskId),
   getRunSession: () => ipcRenderer.invoke(IPC_CHANNELS.getRunSession),
   startRun: (taskId, resume) => ipcRenderer.invoke(IPC_CHANNELS.startRun, taskId, resume),

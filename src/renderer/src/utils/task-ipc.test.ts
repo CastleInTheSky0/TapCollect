@@ -2,7 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { createFieldMapping, createTask } from '@shared/defaults'
 import { createMergeValue } from '@shared/field-mapping'
-import { snapshotTaskForIpc, taskDraftFingerprint } from './task-ipc'
+import { snapshotForIpc, snapshotTaskForIpc, taskDraftFingerprint } from './task-ipc'
+
+describe('snapshotForIpc', () => {
+  it('converts nested reactive arrays into Electron-cloneable JSON values', () => {
+    const records = reactive([{ values: { title: '测试标题' } }])
+
+    expect(() => structuredClone(records)).toThrow()
+
+    const snapshot = snapshotForIpc(records)
+
+    expect(snapshot).toEqual(records)
+    expect(snapshot).not.toBe(records)
+    expect(snapshot[0]).not.toBe(records[0])
+    expect(() => structuredClone(snapshot)).not.toThrow()
+  })
+})
 
 describe('snapshotTaskForIpc', () => {
   it('converts a Vue reactive task into an Electron-cloneable JSON value', () => {

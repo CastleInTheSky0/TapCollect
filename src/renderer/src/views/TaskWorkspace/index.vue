@@ -21,6 +21,7 @@ const {
   paginationSuggestions,
   testResult,
   testing,
+  exportingTestFile,
   activeId,
   runnable,
   hasUnsavedChanges,
@@ -56,7 +57,8 @@ const {
   setCustomAttributes,
   chooseOutputDirectory,
   chooseResourceDirectory,
-  runTest
+  runTest,
+  exportTestFile
 } = taskFormStore
 const {
   previewOpenAction,
@@ -166,6 +168,7 @@ const {
             v-model="activeTask"
             :is-click-detail="isClickDetail"
             :testing="testing"
+            :exporting-test-file="exportingTestFile"
             :active-task-locked="activeTaskLocked"
             :busy="busy"
             :saving="saving"
@@ -183,6 +186,7 @@ const {
             @save-default-output-directory="saveDefaultOutputDirectory"
             @add-header="addHeader"
             @run-test="runTest"
+            @export-test-file="exportTestFile"
             @request-run="requestRun()"
           />
         </section>

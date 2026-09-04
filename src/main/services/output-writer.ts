@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import iconv from 'iconv-lite'
-import type { ExtractedRecord, RecordFailure, TaskConfig } from '@shared/types'
+import type {
+  ExtractedRecord,
+  RecordFailure,
+  SpreadsheetFormat,
+  TaskConfig
+} from '@shared/types'
 import {
   renderSpreadsheetBatch,
   validateSpreadsheetBatch
@@ -43,6 +48,40 @@ const normalizeOutputEncoding = (encoding: string): string => {
   if (value === 'utf8') return 'utf-8'
   if (value === 'gb2312') return 'gbk'
   return value || 'utf-8'
+}
+
+export type OutputFileExtension = 'xml' | SpreadsheetFormat
+
+export const outputFileExtension = (task: TaskConfig): OutputFileExtension => {
+  if (task.output.format === 'spreadsheet') {
+    if (!task.spreadsheet) throw new Error('任务尚未配置表格模板')
+    return task.spreadsheet.format
+  }
+  if (!task.xml) throw new Error('任务尚未配置 XML 模板')
+  return 'xml'
+}
+
+export const renderOutputFile = (
+  task: TaskConfig,
+  records: ExtractedRecord[]
+): Buffer => {
+  if (task.output.format === 'spreadsheet') {
+    if (!task.spreadsheet) throw new Error('任务尚未配置表格模板')
+    const bytes = renderSpreadsheetBatch(task.spreadsheet, records)
+    validateSpreadsheetBatch(bytes, task.spreadsheet, records)
+    return bytes
+  }
+
+  if (!task.xml) throw new Error('任务尚未配置 XML 模板')
+  const xml = renderXmlBatch(task.xml, records)
+  validateXmlOutput(xml)
+  const encoding = normalizeOutputEncoding(task.xml.encoding)
+  if (!iconv.encodingExists(encoding)) {
+    throw new Error(`不支持 XML 编码：${task.xml.encoding}`)
+  }
+  const bytes = iconv.encode(xml, encoding)
+  validateXmlOutput(iconv.decode(bytes, encoding))
+  return bytes
 }
 
 export interface CollectorOutputSession {
@@ -155,18 +194,8 @@ export class XmlOutputSession extends FileOutputSession {
   }
 
   async writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string> {
-    if (!this.task.xml) throw new Error('任务尚未配置 XML 模板')
     this.assertBatchSize(records)
-
-    const xml = renderXmlBatch(this.task.xml, records)
-    validateXmlOutput(xml)
-    const encoding = normalizeOutputEncoding(this.task.xml.encoding)
-    if (!iconv.encodingExists(encoding)) {
-      throw new Error(`不支持 XML 编码：${this.task.xml.encoding}`)
-    }
-    const bytes = iconv.encode(xml, encoding)
-    validateXmlOutput(iconv.decode(bytes, encoding))
-    return this.commitBatch(bytes, fileIndex)
+    return this.commitBatch(renderOutputFile(this.task, records), fileIndex)
   }
 }
 
@@ -176,11 +205,8 @@ export class SpreadsheetOutputSession extends FileOutputSession {
   }
 
   async writeBatch(records: ExtractedRecord[], fileIndex: number): Promise<string> {
-    if (!this.task.spreadsheet) throw new Error('任务尚未配置表格模板')
     this.assertBatchSize(records)
-    const bytes = renderSpreadsheetBatch(this.task.spreadsheet, records)
-    validateSpreadsheetBatch(bytes, this.task.spreadsheet, records)
-    return this.commitBatch(bytes, fileIndex)
+    return this.commitBatch(renderOutputFile(this.task, records), fileIndex)
   }
 }
 
