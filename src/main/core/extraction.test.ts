@@ -699,6 +699,40 @@ describe('page extraction', () => {
     expect(list.candidates[0]?.resources).toHaveLength(1)
   })
 
+  it('preserves ordinary attribute values instead of resolving them as URLs', () => {
+    const task = createTask('ordinary-attribute-task')
+    task.listUrl = 'https://www.example.com/InfoPub/ArticleList.aspx?CategoryID=2'
+    task.listItem.selector = '.item'
+    task.detail.enabled = false
+    task.xml = configureXmlRecord(
+      '<book><article><title/><link/></article></book>',
+      'title.xml',
+      '/book/article'
+    )
+    const titleMapping = task.xml.mappings.find((mapping) => mapping.fieldPath === 'title')!
+    const linkMapping = task.xml.mappings.find((mapping) => mapping.fieldPath === 'link')!
+    for (const mapping of [titleMapping, linkMapping]) {
+      mapping.mode = 'page'
+      mapping.pageSource = 'list'
+      mapping.selector = 'a'
+      mapping.extraction = 'attribute'
+    }
+    titleMapping.attribute = 'title'
+    linkMapping.attribute = 'href'
+
+    const list = extractListPage(
+      task,
+      '<div class="item"><a href="/detail/1" title="普通中文标题">列表文字</a></div>',
+      task.listUrl,
+      1,
+      0
+    )
+
+    expect(list.candidates[0]?.values.title).toBe('普通中文标题')
+    expect(list.candidates[0]?.values.link).toBe('https://www.example.com/detail/1')
+    expect(list.candidates[0]?.resources).toEqual([])
+  })
+
   it('processes complete file paths in text fields without rewriting prose fragments', () => {
     const task = createTask('resource-text-value-task')
     task.listUrl = 'https://www.example.com/list'

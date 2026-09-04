@@ -184,7 +184,10 @@ const setContentFilterSelectors = (value: unknown): void => {
       class="field"
     >
       <span>属性名</span>
-      <t-input v-model="model.attribute" placeholder="href / src / content" />
+      <t-input
+        v-model="model.attribute"
+        placeholder="任意 HTML 属性，如 href / src / title / content"
+      />
     </div>
     <div
       v-else-if="model.selectorType !== 'markers' && model.extraction === 'text'"

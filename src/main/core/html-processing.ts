@@ -17,6 +17,7 @@ import {
 
 const DEFAULT_RESOURCE_ATTRIBUTES = ['src', 'data-src', 'data-original', 'href']
 const OTHER_URL_ATTRIBUTES = ['action', 'formaction', 'poster', 'xlink:href']
+const URL_VALUE_ATTRIBUTES = new Set([...DEFAULT_RESOURCE_ATTRIBUTES, ...OTHER_URL_ATTRIBUTES])
 const EXECUTABLE_URL_PROTOCOL = /^(?:javascript|vbscript):/i
 
 const removeControlWhitespace = (value: string): string =>
@@ -424,14 +425,21 @@ export const processAttributeValueWithResources = (
   ownerPageUrl: string,
   task: TaskConfig
 ): ProcessedResourceValue => {
-  assertResourceConfiguration(task)
+  const normalizedAttributeName = attributeName.trim().toLowerCase()
   const customAttributes = new Set(
     task.html.customResourceAttributes.map((attribute) => attribute.trim().toLowerCase()).filter(Boolean)
   )
+  if (
+    !URL_VALUE_ATTRIBUTES.has(normalizedAttributeName) &&
+    !customAttributes.has(normalizedAttributeName)
+  ) {
+    return { value, resources: [] }
+  }
+  assertResourceConfiguration(task)
   return processResourceReference(
     value,
     element,
-    attributeName,
+    normalizedAttributeName,
     resolutionBaseUrl,
     ownerPageUrl,
     task,
