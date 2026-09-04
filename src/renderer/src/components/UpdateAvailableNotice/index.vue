@@ -13,18 +13,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <aside
-    v-if="visible && result?.status === 'available'"
-    class="update-available-notice"
-    aria-live="polite"
-  >
-    <t-alert
-      theme="info"
-      :title="`发现新版本 v${result.release.version}`"
-      message="新版已可用于当前设备，可前往“关于与更新”查看并安装。"
-      close
-      @close="emit('dismiss')"
-    >
+  <aside v-if="visible && result?.status === 'available'" class="update-available-notice" aria-live="polite">
+    <t-alert theme="info" :title="`发现新版本 v${result.release.version}`" close @close="emit('dismiss')">
       <template #operation>
         <t-button size="small" theme="primary" variant="text" @click="emit('open')">
           查看更新
