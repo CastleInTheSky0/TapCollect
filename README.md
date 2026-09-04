@@ -273,6 +273,10 @@ npm run smoke:sample -- "$env:APPDATA\TapCollect\collector-data\tasks\<task-id>\
 
 也可以设置 `TAPCOLLECT_SMOKE_TASK` 环境变量。真实 URL、选择器、模板、本地任务配置和采集输出均不会提交到仓库。
 
+### 功能变更时同步文档
+
+每次新增、调整、重命名或删除功能，都必须在同一任务中同步更新 `README.md` 和 `TapCollect使用说明-更新版.docx`。两份文档应以已经验证的实际行为和界面名称为准，并一并清理过时的说明、示例、常见问题、限制与版本信息。Word 使用说明修改后必须重新渲染并逐页检查；两份文档未同时完成同步时，功能变更不能视为完成。
+
 ## 本地打包
 
 Windows x64 NSIS：
