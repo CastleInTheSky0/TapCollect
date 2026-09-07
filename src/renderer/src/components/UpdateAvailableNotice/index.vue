@@ -28,12 +28,41 @@ const emit = defineEmits<{
   top: 16px;
   left: 50%;
   z-index: 5500;
-  width: min(540px, calc(100vw - 32px));
+  width: fit-content;
+  max-width: calc(100vw - 32px);
   transform: translateX(-50%);
 }
 
 .update-available-notice :deep(.t-alert) {
-  border: 1px solid var(--td-brand-color-3);
-  box-shadow: 0 12px 32px rgba(23, 55, 61, 0.18);
+  align-items: center;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.update-available-notice :deep(.t-alert__content) {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.update-available-notice :deep(.t-alert__title),
+.update-available-notice :deep(.t-alert__message) {
+  width: auto;
+}
+
+.update-available-notice :deep(.t-alert__message) {
+  align-items: center;
+  margin-top: 0;
+}
+
+.update-available-notice :deep(.t-alert__description:empty) {
+  display: none;
+}
+
+.update-available-notice :deep(.t-alert__operation) {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
 }
 </style>
