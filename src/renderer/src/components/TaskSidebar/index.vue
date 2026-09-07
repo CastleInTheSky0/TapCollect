@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { DropdownOption } from 'tdesign-vue-next/es/dropdown/type'
 import {
   AddIcon,
@@ -7,7 +7,6 @@ import {
   DataSearchIcon,
   DeleteIcon,
   EllipsisIcon,
-  FileIcon,
   FileExportIcon,
   FileImportIcon,
   SettingIcon,
@@ -18,6 +17,7 @@ import {
 import type { RunSessionItem, TaskSummary } from '@shared/types'
 import type { AppView } from '@renderer/router'
 import appIconUrl from '@renderer/assets/images/tapcollect-icon.png'
+import sidebarToggleIconUrl from './sidebar-toggle.svg'
 
 const props = defineProps<{
   tasks: TaskSummary[]
@@ -40,10 +40,13 @@ const emit = defineEmits<{
   run: [id: string]
   showAbout: []
   showSettings: []
+  toggleSidebar: []
 }>()
 
 const tasksExpanded = ref(true)
 const taskConfigToolsOpen = ref(false)
+const sidebarToggleTooltipVisible = ref(false)
+watch(() => props.collapsed, () => { sidebarToggleTooltipVisible.value = false })
 const runItemMap = computed(() =>
   new Map(props.runItems.map((item) => [item.taskId, item] as const))
 )
@@ -154,13 +157,26 @@ const runDisabled = (taskId: string): boolean => {
       :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand">
       <template #logo>
         <div class="brand-block">
-          <div class="brand-mark" aria-hidden="true">
+          <div v-if="!collapsed" class="brand-mark" aria-hidden="true">
             <img :src="appIconUrl" alt="" />
           </div>
-          <div class="brand-copy">
+          <div v-if="!collapsed" class="brand-copy">
             <strong>TapCollect</strong>
             <span>网页列表采集与模板化输出</span>
           </div>
+          <t-tooltip
+            :content="collapsed ? '打开侧边栏' : '收起侧边栏'" placement="right"
+            :visible="sidebarToggleTooltipVisible" @visible-change="sidebarToggleTooltipVisible = $event"
+          >
+            <t-button
+              class="sidebar-toggle" theme="default" variant="text" shape="square"
+              :aria-label="collapsed ? '打开侧边栏' : '收起侧边栏'" :aria-expanded="!collapsed"
+              @click="emit('toggleSidebar')"
+            >
+              <img v-if="collapsed" class="sidebar-toggle-logo" :src="appIconUrl" alt="" aria-hidden="true" />
+              <img class="sidebar-toggle-icon" :src="sidebarToggleIconUrl" alt="" aria-hidden="true" />
+            </t-button>
+          </t-tooltip>
         </div>
       </template>
 

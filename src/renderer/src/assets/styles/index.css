@@ -159,25 +159,12 @@ body.pane-resizing * {
   transition: opacity 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-.sidebar-divider .pane-toggle {
-  top: 34px;
-  left: calc(100% + 25px);
-  width: 38px !important;
-  height: 38px !important;
-  min-width: 38px !important;
-  border-color: transparent !important;
-  background: var(--accent-soft) !important;
-  box-shadow: none;
-  opacity: 1;
-}
-
 .preview-divider .pane-toggle {
   left: calc(50% - 8px);
 }
 
 .pane-divider:hover .pane-toggle,
 .pane-divider:focus-within .pane-toggle,
-.sidebar-collapsed .sidebar-divider .pane-toggle,
 .preview-collapsed .preview-divider .pane-toggle {
   opacity: 1;
 }

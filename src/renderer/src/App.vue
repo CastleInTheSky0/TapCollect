@@ -5,9 +5,7 @@ import { RouterView } from 'vue-router'
 import MessagePlugin from 'tdesign-vue-next/es/message/plugin'
 import {
   ChevronLeftIcon,
-  ChevronRightIcon,
-  MenuFoldIcon,
-  MenuUnfoldIcon
+  ChevronRightIcon
 } from 'tdesign-icons-vue-next'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
 import { appStoreKey } from '@renderer/store'
@@ -332,23 +330,14 @@ onBeforeUnmount(() => {
       :disabled="busy || saving || taskConfigTransferring" @select="openTask" @show-run-center="showRunCenter"
       @create="createNewTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
       @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="openUpdateDetails" @show-settings="navigationStore.openSettings"
+      @toggle-sidebar="toggleSidebarPane"
     />
 
     <div
       class="pane-divider sidebar-divider" role="separator" aria-label="调整任务栏宽度" aria-orientation="vertical"
       tabindex="0" @pointerdown="startPaneResize('sidebar', $event)"
       @keydown="resizePaneWithKeyboard('sidebar', $event)"
-    >
-      <t-tooltip :content="sidebarCollapsed ? '展开任务栏' : '折叠任务栏'" placement="right">
-        <t-button
-          class="pane-toggle" theme="default" variant="outline" shape="square" size="small" @pointerdown.stop
-          @click.stop="toggleSidebarPane"
-        >
-          <MenuUnfoldIcon v-if="sidebarCollapsed" />
-          <MenuFoldIcon v-else />
-        </t-button>
-      </t-tooltip>
-    </div>
+    />
 
     <section class="workspace" :class="{ 'configuration-locked': activeTaskLocked }">
       <RouterView />
