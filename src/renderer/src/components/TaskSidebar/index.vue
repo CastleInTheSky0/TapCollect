@@ -10,7 +10,7 @@ import {
   FileIcon,
   FileExportIcon,
   FileImportIcon,
-  HelpCircleIcon,
+  SettingIcon,
   PlayIcon,
   TaskIcon,
   ViewModuleIcon
@@ -39,6 +39,7 @@ const emit = defineEmits<{
   remove: [id: string]
   run: [id: string]
   showAbout: []
+  showSettings: []
 }>()
 
 const tasksExpanded = ref(true)
@@ -52,6 +53,7 @@ const sessionActivityCount = computed(() =>
   ).length
 )
 const menuValue = computed(() => {
+  if (props.view === 'settings') return 'settings'
   if (props.view === 'run-center') return 'run-center'
   return props.activeId ? `task:${props.activeId}` : 'tasks'
 })
@@ -107,6 +109,7 @@ const statusLabel = (taskId: string): string => {
   if (props.testingTaskId === taskId) return '测试中'
   const item = runItemMap.value.get(taskId)
   if (!item) return ''
+  if (item.protection) return item.protection.kind === 'cooling' ? '冷却中' : '需要人工处理'
   if (item.status === 'queued') return `排队 ${item.queuePosition}`
   return {
     preparing: '准备中',
@@ -302,44 +305,38 @@ const runDisabled = (taskId: string): boolean => {
         </t-menu-item>
       </t-submenu>
 
-      <t-menu-item value="run-center" class="primary-menu-item">
-        <template #icon>
-          <ViewModuleIcon />
-        </template>
-        <span class="menu-label">
-          <span>运行中心</span>
-          <span v-if="sessionActivityCount" class="menu-count active-count">
-            {{ sessionActivityCount }}
-          </span>
-        </span>
-      </t-menu-item>
-
       <template #operations>
         <div class="sidebar-operations">
-          <t-tooltip
-            content="关于与更新"
-            placement="right"
-            :disabled="!collapsed"
-            :visible="collapsed ? undefined : false"
-          >
-            <t-button class="about-entry" theme="default" variant="text" @click="emit('showAbout')">
+          <t-tooltip content="运行中心" placement="right" :disabled="!collapsed">
+            <t-button
+              class="about-entry" :class="{ 'navigation-selected': view === 'run-center' }" theme="default"
+              variant="text" aria-label="运行中心" @click="emit('showRunCenter')"
+            >
               <template #icon>
-                <HelpCircleIcon />
+                <ViewModuleIcon />
               </template>
-              <span v-if="!collapsed">关于与更新</span>
+              <span v-if="!collapsed">运行中心</span><span
+                v-if="sessionActivityCount && !collapsed"
+                class="menu-count active-count"
+              >{{
+                sessionActivityCount }}</span>
             </t-button>
           </t-tooltip>
-          <t-tooltip
-            content="本地多任务运行 · 数据保存在本机"
-            placement="right"
-            :disabled="!collapsed"
-            :visible="collapsed ? undefined : false"
-          >
-            <div class="sidebar-note">
-              <span class="status-dot" />
-              <span v-if="!collapsed">本地多任务运行 · 数据保存在本机</span>
-            </div>
+          <t-tooltip content="设置" placement="right" :disabled="!collapsed">
+            <t-button
+              class="about-entry" :class="{ 'navigation-selected': view === 'settings' }" theme="default"
+              variant="text" aria-label="设置" @click="emit('showSettings')"
+            >
+              <template #icon>
+                <SettingIcon />
+              </template>
+              <span v-if="!collapsed">设置</span>
+            </t-button>
           </t-tooltip>
+          <div class="sidebar-note">
+            <span class="status-dot" />
+            <span v-if="!collapsed">本地多任务运行 · 数据保存在本机</span>
+          </div>
         </div>
       </template>
     </t-menu>

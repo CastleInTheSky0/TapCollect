@@ -1,6 +1,9 @@
 import chardet from 'chardet'
 import iconv from 'iconv-lite'
 import type { RequestConfig } from '@shared/types'
+import { retry, handleWhen, ExponentialBackoff, noJitterGenerator } from 'cockatiel'
+import type { AccessCoordinator } from '@main/services/access-coordinator'
+import { RetryableRequestError, RequestInterruptedError, isAccessInterruption } from './access-errors'
 
 const MAX_RETRIES = 3
 const MAX_REDIRECTS = 10
@@ -91,15 +94,6 @@ export class HttpRequestError extends Error {
   }
 }
 
-class RetryableRequestError extends Error {
-  readonly status: number
-
-  constructor(message: string, status = 0) {
-    super(message)
-    this.status = status
-  }
-}
-
 const normalizeEncoding = (value: string): string => {
   const normalized = value.trim().toLowerCase().replace(/["']/g, '')
   if (normalized === 'utf8') return 'utf-8'
@@ -156,10 +150,6 @@ const buildHeaders = (config: RequestConfig, accept: string): Headers => {
   return headers
 }
 
-const wait = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
-}
-
 const discardResponseBody = async (response: Response): Promise<void> => {
   try {
     await response.body?.cancel()
@@ -169,9 +159,12 @@ const discardResponseBody = async (response: Response): Promise<void> => {
 }
 
 export class HttpClient {
+  get usesAccessPolicy(): boolean { return Boolean(this.access) }
+  inspectHtml(html: string, url: string): void { this.access?.inspectHtml(html, url) }
+  acknowledgeSuccess(url: string): void { this.access?.acknowledgeSuccess(url) }
   private readonly fetchImplementation: typeof fetch
 
-  constructor(fetchImplementation: typeof fetch = fetch) {
+  constructor(fetchImplementation: typeof fetch = fetch, private readonly access?: AccessCoordinator) {
     this.fetchImplementation = fetchImplementation
   }
 
@@ -189,11 +182,14 @@ export class HttpClient {
     if (result.kind !== 'success') return result
     try {
       const buffer = Buffer.from(await result.response.arrayBuffer())
+      if (this.access?.signal?.aborted) throw new RequestInterruptedError()
       const decoded = decodeHtml(
         buffer,
         result.response.headers.get('content-type'),
         config.manualEncoding
       )
+      this.access?.inspectHtml(decoded.html, result.finalUrl)
+      this.access?.acknowledgeSuccess(result.finalUrl)
       return {
         kind: 'success',
         requestedUrl,
@@ -204,6 +200,7 @@ export class HttpClient {
         retries: result.retries
       }
     } catch (error) {
+      if (isAccessInterruption(error)) throw error
       throw new HttpRequestError(
         error instanceof Error ? error.message : String(error),
         result.finalUrl,
@@ -227,23 +224,27 @@ export class HttpClient {
     allowedHostname: string,
     accept: string
   ): Promise<RawFetchResult> {
-    let lastError: unknown
-    for (let retry = 0; retry <= MAX_RETRIES; retry += 1) {
-      try {
-        return await this.fetchAttempt(requestedUrl, config, allowedHostname, retry, accept)
-      } catch (error) {
-        lastError = error
-        const retryable = error instanceof RetryableRequestError
-        if (!retryable || retry === MAX_RETRIES) {
-          if (error instanceof HttpRequestError) throw error
-          const status = error instanceof RetryableRequestError ? error.status : 0
-          const message = error instanceof Error ? error.message : String(error)
-          throw new HttpRequestError(message, requestedUrl, status, retry)
-        }
-        await wait(Math.min(2_000, 250 * 2 ** retry))
-      }
+    const settings = this.access?.settings
+    let attempts = 0
+    const policy = retry(handleWhen(error => error instanceof RetryableRequestError), {
+      maxAttempts: settings?.maxRetries ?? MAX_RETRIES,
+      backoff: new ExponentialBackoff({
+        initialDelay: settings?.retryBaseMs ?? 250,
+        maxDelay: settings?.retryMaxMs ?? 2000,
+        ...(settings ? {} : { generator: noJitterGenerator })
+      })
+    })
+    try {
+      return await policy.execute(({ attempt }) => {
+        attempts = attempt
+        return this.fetchAttempt(requestedUrl, config, allowedHostname, attempt, accept)
+      }, this.access?.signal)
+    } catch (error) {
+      if (isAccessInterruption(error) || error instanceof HttpRequestError) throw error
+      if (this.access?.signal?.aborted) throw new RequestInterruptedError()
+      throw new HttpRequestError(error instanceof Error ? error.message : String(error), requestedUrl,
+        error instanceof RetryableRequestError ? error.status : 0, attempts)
     }
-    throw new HttpRequestError(String(lastError), requestedUrl, 0, MAX_RETRIES)
   }
 
   private async fetchAttempt(
@@ -264,13 +265,22 @@ export class HttpClient {
 
       let response: Response
       try {
-        response = await this.fetchImplementation(currentUrl, {
+        const effective = this.access?.requestConfig(config) ?? config
+        const headers = buildHeaders(effective, accept)
+        if (this.access) headers.set('accept-language', this.access.settings.language)
+        const signal = this.access?.signal
+        const fetchResponse = (): Promise<Response> => this.fetchImplementation(currentUrl, {
           method: 'GET',
           redirect: 'manual',
-          headers: buildHeaders(config, accept),
-          signal: AbortSignal.timeout(config.timeoutSeconds * 1_000)
+          headers,
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(config.timeoutSeconds * 1000)])
+            : AbortSignal.timeout(config.timeoutSeconds * 1000)
         })
+        response = this.access
+          ? await this.access.fetch(currentUrl, config, fetchResponse, accept === '*/*')
+          : await fetchResponse()
       } catch (error) {
+        if (isAccessInterruption(error) || error instanceof RetryableRequestError) throw error
         const message = error instanceof Error ? error.message : String(error)
         throw new RetryableRequestError(`网络请求失败：${message}`)
       }
@@ -299,6 +309,7 @@ export class HttpClient {
 
       if (response.status === 404 || response.status === 410) {
         await discardResponseBody(response)
+        this.access?.acknowledgeSuccess(currentUrl)
         return {
           kind: 'not-found',
           requestedUrl,

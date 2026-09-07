@@ -64,7 +64,7 @@ export const useAppNavigation = (deps: AppNavigationDeps) => {
   const synchronizeRoute = async (): Promise<void> => {
     try {
       if (appView.value === 'run-center') await synchronizeRunCenterRoute()
-      else await synchronizeTaskRoute()
+      else if (appView.value === 'task') await synchronizeTaskRoute()
     } finally {
       deps.schedulePreviewBoundsUpdate()
     }
@@ -119,6 +119,7 @@ export const useAppNavigation = (deps: AppNavigationDeps) => {
     routeTaskId,
     openTask,
     openRunCenter,
+    openSettings: async (): Promise<void> => { await router.push({ name: APP_ROUTE_NAMES.settings }); deps.schedulePreviewBoundsUpdate() },
     start
   }
 }

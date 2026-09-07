@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createFieldMapping,
   createTask,
+  DEFAULT_SETTINGS,
   disabledDetailPageMappingIssues,
   isTaskRunnable,
   normalizeAppSettings,
@@ -82,6 +83,7 @@ describe('normalizeAppSettings', () => {
   it('defaults legacy automatic update checks off and preserves an explicit opt-in', () => {
     expect(normalizeAppSettings({ defaultOutputDirectory: ' D:/output ' })).toEqual({
       defaultOutputDirectory: 'D:/output',
+      access: DEFAULT_SETTINGS.access,
       maxConcurrentRuns: 3,
       autoCheckUpdates: false
     })

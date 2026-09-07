@@ -24,6 +24,13 @@ afterEach(() => {
 })
 
 describe('app routes', () => {
+  it('provides a settings route independent of task selection', async () => {
+    const router = createAppRouter(createMemoryHistory(), { ...routeComponents, settings: routePage })
+    await router.push('/settings/protection')
+    expect(router.currentRoute.value.name).toBe(APP_ROUTE_NAMES.settings)
+    expect(router.currentRoute.value.params.section).toBe('protection')
+    expect(appViewFromRouteName(router.currentRoute.value.name)).toBe('settings')
+  })
   it('redirects the root and unknown paths to the task entry', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const rootRouter = await navigate('/')

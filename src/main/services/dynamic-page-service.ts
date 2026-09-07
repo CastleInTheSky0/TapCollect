@@ -16,6 +16,8 @@ import {
   type DynamicPageSnapshot
 } from '@main/core/dynamic-page'
 import { allowedCustomRequestHeaders } from '@main/core/http-client'
+import { AccessProtectionError, RequestInterruptedError, isAccessInterruption, parseRetryAfter } from '@main/core/access-errors'
+import type { AccessCoordinator } from './access-coordinator'
 
 const dynamicDomActionSource = resolveDynamicDomAction.toString()
 const dynamicDetailClickSource = resolveDynamicDetailClick.toString()
@@ -52,6 +54,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   private latestSnapshot: DynamicPageSnapshot | null = null
   private blockedNavigation = ''
   private closed = false
+  private readonly signal: AbortSignal | undefined
   private readonly detailLocators: DynamicDetailLocator[]
 
   constructor(
@@ -59,8 +62,10 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     private readonly view: WebContentsView,
     private readonly task: TaskConfig,
     private readonly startUrl: string,
-    private readonly allowedHostname: string
+    private readonly allowedHostname: string,
+    private readonly access?: AccessCoordinator
   ) {
+    this.signal = access?.signal
     this.detailLocators = taskOutputMappings(task).flatMap((mapping) => {
       if (mapping.mode === 'page' && mapping.pageSource === 'detail') {
         return [
@@ -123,6 +128,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
               return
             }
           } catch (error) {
+            if (isAccessInterruption(error)) throw error
             latestSnapshotError = error
           }
         }
@@ -187,6 +193,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
           sawEmptyChange = true
         }
       } catch (error) {
+        if (isAccessInterruption(error)) throw error
         lastError = error
       }
     }
@@ -283,6 +290,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     const result = await this.execute('snapshot')
     if (result.kind !== 'snapshot') throw new Error('无法读取动态列表页 DOM')
     this.assertAllowedPage(result.url)
+    this.access?.inspectHtml(result.html, result.url)
     return {
       html: result.html,
       url: result.url,
@@ -371,6 +379,9 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   }
 
   private assertAlive(): void {
+    const protection = this.access?.getProtection(this.allowedHostname)
+    if (protection && (protection.kind === 'action-required' || protection.until > Date.now())) throw new AccessProtectionError(protection)
+    if (this.signal?.aborted) throw new RequestInterruptedError()
     if (this.closed || this.hostWindow.isDestroyed() || this.view.webContents.isDestroyed()) {
       throw new Error('动态分页网页实例已关闭')
     }
@@ -382,7 +393,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
 }
 
 export class ElectronDynamicPageProvider implements DynamicPageProvider {
-  constructor(private readonly hostWindow: BrowserWindow) {}
+  constructor(private readonly hostWindow: BrowserWindow, private readonly access?: AccessCoordinator) {}
 
   async create(task: TaskConfig, requestedStartUrl?: string): Promise<DynamicPageSession> {
     const startUrl =
@@ -403,18 +414,20 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
     })
     view.setBackgroundColor('#ffffff')
     view.setBounds({ x: 100_000, y: 0, width: 1, height: 1 })
-    view.webContents.setUserAgent(task.request.userAgent)
+    const request = this.access?.requestConfig(task.request) ?? task.request
+    view.webContents.setUserAgent(request.userAgent)
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     view.webContents.session.setPermissionCheckHandler(() => false)
     view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
       callback(false)
     )
 
-    const customHeaders = allowedCustomRequestHeaders(task.request)
+    const customHeaders = allowedCustomRequestHeaders(request)
     view.webContents.session.webRequest.onBeforeSendHeaders(
       { urls: ['http://*/*', 'https://*/*'] },
       (details, callback) => {
         const headers = { ...details.requestHeaders }
+        if (this.access) headers['Accept-Language'] = this.access.settings.language
         try {
           if (new URL(details.url).hostname.toLowerCase() === allowedHostname) {
             for (const entry of customHeaders) headers[entry.key] = entry.value
@@ -431,8 +444,22 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
       view,
       task,
       parsed.toString(),
-      allowedHostname
+      allowedHostname,
+      this.access
     )
+    if (this.access) {
+      view.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+        callback({})
+        if (details.resourceType !== 'mainFrame') return
+        const status = details.statusCode
+        if (status === 401 || status === 403) this.access?.protect(allowedHostname, `服务器返回 ${status}，请人工检查访问权限后重试`)
+        else if ([408, 425, 429].includes(status) || status >= 500) {
+          const header = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1]?.[0] ?? null
+          const duration = Math.max(parseRetryAfter(header), this.access?.settings.cooldownSeconds ? this.access.settings.cooldownSeconds * 1000 : 60000)
+          this.access?.protect(allowedHostname, `动态页面返回 ${status}，站点进入冷却`, Date.now() + duration)
+        }
+      })
+    }
     const guardNavigation = (event: Electron.Event, url: string): void => {
       try {
         if (validateHttpUrl(url).hostname.toLowerCase() === allowedHostname) return
@@ -447,8 +474,26 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
     this.hostWindow.contentView.addChildView(view)
 
     try {
-      await session.initialize()
-      return session
+      const access = this.access
+      if (!access) { await session.initialize(); return session }
+      const scheduled = async <T>(operation: () => Promise<T>): Promise<T> => access.run(startUrl, task.request.delayMs, operation)
+      await scheduled(() => session.initialize())
+      const inspect = (snapshot: DynamicPageSnapshot): DynamicPageSnapshot => {
+        access.inspectHtml(snapshot.html, snapshot.url)
+        access.acknowledgeSuccess(snapshot.url)
+        return snapshot
+      }
+      return {
+        current: async () => inspect(await session.current()),
+        advance: () => scheduled(async () => {
+          const result = await session.advance()
+          if (result.kind === 'page') inspect(result.snapshot)
+          return result
+        }),
+        openDetail: (index) => scheduled(async () => inspect(await session.openDetail(index))),
+        returnToList: () => scheduled(async () => inspect(await session.returnToList())),
+        close: () => session.close()
+      }
     } catch (error) {
       await session.close()
       throw error

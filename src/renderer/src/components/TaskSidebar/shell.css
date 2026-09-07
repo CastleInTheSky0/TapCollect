@@ -174,3 +174,6 @@
   background: var(--accent);
   color: #fff;
 }
+
+.about-entry.navigation-selected { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.about-entry .menu-count { margin-left: auto; }

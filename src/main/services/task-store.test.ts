@@ -10,6 +10,7 @@ import {
 import type { RunCheckpoint } from '@shared/types'
 import { configureXmlRecord } from '@main/core/xml-template'
 import { TaskStore } from './task-store'
+import { DEFAULT_ACCESS_POLICY } from '@shared/access-protection'
 
 const temporaryDirectories: string[] = []
 
@@ -32,6 +33,7 @@ describe('TaskStore', () => {
     await expect(store.getSettings()).resolves.toEqual({
       defaultOutputDirectory: 'D:/output',
       maxConcurrentRuns: 3,
+      access: DEFAULT_ACCESS_POLICY,
       autoCheckUpdates: false
     })
     await expect(
@@ -43,6 +45,7 @@ describe('TaskStore', () => {
     ).resolves.toEqual({
       defaultOutputDirectory: 'D:/next',
       maxConcurrentRuns: 5,
+      access: DEFAULT_ACCESS_POLICY,
       autoCheckUpdates: true
     })
   })

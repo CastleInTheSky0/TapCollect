@@ -188,6 +188,9 @@
 }
 
 .sidebar-operations {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 7px 0 0;
   border-top: 1px solid var(--line);
 }
@@ -203,6 +206,11 @@
 }
 
 .about-entry.t-button:hover {
+  background: #e3eeee;
+  color: var(--accent);
+}
+
+.about-entry.t-button.navigation-selected {
   background: #e3eeee;
   color: var(--accent);
 }

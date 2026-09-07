@@ -19,8 +19,34 @@ import { TaskStore } from '@main/services/task-store'
 import { readOutputXml } from '@main/services/output-writer'
 import type { ResourceDownloader } from '@main/services/resource-downloader'
 import type { RunCheckpoint, TaskConfig } from '@shared/types'
+import { AccessProtectionError } from './access-errors'
 
 const temporaryDirectories: string[] = []
+
+it('preserves uncommitted records and resource keys when access protection interrupts a download', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'collector-protection-'))
+  temporaryDirectories.push(root)
+  const task = createResourceTask('protected-resource', root)
+  const store = new TaskStore(root)
+  const html = '<div class="item"><h2 class="title">保留记录</h2><div class="body"><img src="/a.png"></div></div>'
+  const http = { fetchHtml: vi.fn(async () => ({ kind: 'success', requestedUrl: task.listUrl, finalUrl: task.listUrl, status: 200, html, encoding: 'utf-8', retries: 0 })) } as unknown as HttpClient
+  let blocked = true
+  const downloader = { download: vi.fn(async () => {
+    if (blocked) throw new AccessProtectionError({ hostname: 'example.com', kind: 'action-required', reason: '需要验证', until: 0 })
+    return { kind: 'downloaded', path: 'a.png', retries: 0 }
+  }) } as unknown as ResourceDownloader
+  const engine = new CollectorEngine(store, http, null, downloader)
+  const events = { progress: vi.fn(), log: vi.fn() }
+  const paused = await engine.run(task, null, new CollectorRunControl(), events)
+  expect(paused.status).toBe('paused')
+  const checkpoint = await store.getCheckpoint(task.id)
+  expect(checkpoint).toMatchObject({ pagesVisited: 0, seenKeys: [], processedResourceUrls: [], pendingRecords: [] })
+  blocked = false
+  const result = await engine.run(task, checkpoint, new CollectorRunControl(), events)
+  expect(result.status).toBe('completed')
+  expect(result.counters.succeeded).toBe(1)
+  expect(downloader.download).toHaveBeenCalledTimes(2)
+})
 
 const createListOnlyTask = (id: string, root: string): TaskConfig => {
   const task = createTask(id)

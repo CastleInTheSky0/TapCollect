@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AddIcon, PlayIcon } from 'tdesign-icons-vue-next'
 import type { RunSessionItem, RunSessionSnapshot } from '@shared/types'
+import HostProtectionNotice from '@renderer/components/HostProtectionNotice/index.vue'
 
 const props = defineProps<{
   snapshot: RunSessionSnapshot
@@ -66,6 +67,7 @@ const selectedResources = computed(
 )
 
 const statusLabel = (item: RunSessionItem): string => {
+  if (item.protection) return item.protection.kind === 'cooling' ? '冷却中' : '需要人工处理'
   if (item.status === 'queued') return `排队第 ${item.queuePosition}`
   return {
     preparing: '准备中',
@@ -175,7 +177,7 @@ onBeforeUnmount(() => {
           theme="default"
           variant="outline"
           :loading="batchAction === 'pause'"
-          :disabled="!activeItems.some((item) => ['preparing', 'running'].includes(item.status))"
+          :disabled="!activeItems.some((item) => ['preparing', 'running'].includes(item.status) || item.protection?.kind === 'cooling')"
           @click="emit('pauseAll')"
         >
           全部暂停
@@ -204,6 +206,11 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="run-center-scroll">
+      <HostProtectionNotice
+        v-if="selectedItem?.protection" :item="selectedItem"
+        :affected="snapshot.items.filter(item => item.protection?.hostname === selectedItem?.protection?.hostname).length"
+        @pause="emit('pause', selectedItem.taskId)" @resume="emit('resume', selectedItem.taskId)"
+      />
       <section class="run-section">
         <div class="run-section-heading">
           <strong>运行与暂停 {{ activeItems.length }}</strong>
@@ -237,7 +244,7 @@ onBeforeUnmount(() => {
                 @click="emit('pause', item.taskId)"
               >暂停</t-button>
               <t-button
-                v-else-if="item.status === 'paused'"
+                v-else-if="item.status === 'paused' && !item.protection"
                 size="small"
                 theme="primary"
                 :loading="actionTaskId === item.taskId"

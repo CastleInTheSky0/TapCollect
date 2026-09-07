@@ -9,6 +9,7 @@ import {
   taskConfigurationIssues
 } from '@shared/defaults'
 import type {
+  AppSettings,
   RunCheckpoint,
   RunLog,
   RunProgress,
@@ -29,6 +30,9 @@ import type { DynamicPageProvider } from '@main/core/dynamic-page'
 import { HttpClient } from '@main/core/http-client'
 import { sanitizeFileName } from '@main/core/url-utils'
 import type { TaskStore } from './task-store'
+import type { AccessCoordinator } from './access-coordinator'
+import { redactDiagnostic, type HostProtection } from '@shared/access-protection'
+import { firstTaskListPageUrl } from '@shared/list-page-rules'
 
 const ACTIVE_STATUSES = new Set<RunSessionItem['status']>([
   'preparing',
@@ -63,6 +67,7 @@ interface ManagedRun {
   execution: Promise<void> | null
   pauseOrder: number
   finalizingCancellation: boolean
+  autoResumePending: boolean
 }
 
 export interface RunShutdownSnapshot {
@@ -93,25 +98,35 @@ export class RunManager extends EventEmitter {
   private testingTaskId = ''
   private pauseSequence = 0
   private shuttingDown = false
+  private readonly protectionTimers = new Map<string, NodeJS.Timeout>()
 
   constructor(
     private readonly store: TaskStore,
     dynamicPageProvider: DynamicPageProvider | null = null,
-    engine: CollectorEngineLike | null = null
+    engine: CollectorEngineLike | null = null,
+    private readonly access?: AccessCoordinator
   ) {
     super()
     this.engine =
       engine ??
       new CollectorEngine(
         store,
-        new HttpClient(net.fetch as typeof fetch),
+        new HttpClient(net.fetch as typeof fetch, access),
         dynamicPageProvider
       )
+    access?.on('protected', (protection: HostProtection) => this.handleProtection(protection))
+    access?.on('cleared', (hostname: string) => this.releaseProtection(hostname))
   }
 
   async initialize(): Promise<void> {
     const settings = await this.store.getSettings()
     this.maxConcurrentRuns = normalizeMaxConcurrentRuns(settings.maxConcurrentRuns)
+    this.access?.configure(settings.access)
+  }
+
+  applySettings(settings: AppSettings): void {
+    this.access?.configure(settings.access)
+    this.setMaxConcurrentRuns(settings.maxConcurrentRuns)
   }
 
   hasActiveRun(): boolean {
@@ -205,6 +220,7 @@ export class RunManager extends EventEmitter {
       if (!resume) await this.store.clearCheckpoint(taskId)
 
       this.runs.delete(taskId)
+      this.access?.forgetTask(taskId)
       const queuedAt = nowIso()
       const item: RunSessionItem = {
         taskId,
@@ -230,7 +246,8 @@ export class RunManager extends EventEmitter {
         control: null,
         execution: null,
         pauseOrder: 0,
-        finalizingCancellation: false
+        finalizingCancellation: false,
+        autoResumePending: false
       })
       this.queue.push(taskId)
       this.schedule()
@@ -255,10 +272,18 @@ export class RunManager extends EventEmitter {
 
   async pause(taskId: string): Promise<boolean> {
     const managed = this.runs.get(taskId)
+    if (managed) managed.autoResumePending = false
+    if (managed && ['paused', 'pausing'].includes(managed.item.status) && managed.item.protection?.kind === 'cooling') {
+      managed.item.protection = undefined
+      managed.item.message = '已停止自动恢复，任务保持暂停'
+      this.emitSession()
+      return true
+    }
     if (!managed || !ACTIVE_STATUSES.has(managed.item.status) || !managed.control?.pause()) {
       return false
     }
     managed.pauseOrder = ++this.pauseSequence
+    managed.item.protection = undefined
     managed.item.status = 'pausing'
     managed.item.message = '正在保存安全检查点并释放运行名额'
     if (managed.item.progress) {
@@ -275,7 +300,19 @@ export class RunManager extends EventEmitter {
 
   async resume(taskId: string): Promise<boolean> {
     const managed = this.runs.get(taskId)
+    if (managed?.item.status === 'queued' && managed.item.protection?.kind === 'action-required' && !this.shuttingDown) {
+      this.access?.clearManual(managed.item.protection.hostname)
+      this.schedule()
+      this.emitSession()
+      return true
+    }
     if (!managed || managed.item.status !== 'paused' || this.shuttingDown) return false
+    const protection = this.access?.taskProtection(taskId, this.taskHostname(managed.task))
+    if (protection?.kind === 'cooling' && protection.until > Date.now()) {
+      throw new Error(`站点仍在冷却，请等待 ${Math.ceil((protection.until - Date.now()) / 1000)} 秒`)
+    }
+    if (protection?.kind === 'action-required') this.access?.clearManual(protection.hostname)
+    managed.item.protection = undefined
     managed.item.status = 'queued'
     managed.item.resume = true
     managed.item.queuedAt = nowIso()
@@ -299,6 +336,8 @@ export class RunManager extends EventEmitter {
   async cancel(taskId: string): Promise<boolean> {
     const managed = this.runs.get(taskId)
     if (!managed || !LOCKED_STATUSES.has(managed.item.status)) return false
+    managed.autoResumePending = false
+    managed.item.protection = undefined
 
     if (managed.item.status === 'queued') {
       this.removeFromQueue(taskId)
@@ -327,7 +366,7 @@ export class RunManager extends EventEmitter {
 
   async pauseAll(): Promise<boolean> {
     const active = [...this.runs.values()]
-      .filter(({ item }) => ACTIVE_STATUSES.has(item.status))
+      .filter(({ item }) => ACTIVE_STATUSES.has(item.status) || (item.status === 'paused' && item.protection?.kind === 'cooling'))
       .sort((left, right) => left.item.startedAt.localeCompare(right.item.startedAt))
     const results = await Promise.all(active.map(({ item }) => this.pause(item.taskId)))
     return results.some(Boolean)
@@ -339,6 +378,8 @@ export class RunManager extends EventEmitter {
       .sort((left, right) => left.pauseOrder - right.pauseOrder)
     let resumed = false
     for (const managed of paused) {
+      const protection = this.access?.taskProtection(managed.item.taskId, this.taskHostname(managed.task))
+      if (protection?.kind === 'cooling' && protection.until > Date.now()) continue
       resumed = (await this.resume(managed.item.taskId)) || resumed
     }
     return resumed
@@ -347,6 +388,10 @@ export class RunManager extends EventEmitter {
   async cancelAll(): Promise<boolean> {
     const targets = [...this.runs.values()].filter(({ item }) => LOCKED_STATUSES.has(item.status))
     if (targets.length === 0) return false
+    for (const managed of targets) {
+      managed.item.protection = undefined
+      managed.autoResumePending = false
+    }
 
     for (const taskId of [...this.queue]) {
       const managed = this.runs.get(taskId)
@@ -383,6 +428,8 @@ export class RunManager extends EventEmitter {
         }))
     }
     this.shuttingDown = true
+    for (const timer of this.protectionTimers.values()) clearTimeout(timer)
+    this.protectionTimers.clear()
     for (const taskId of [...this.queue]) {
       const managed = this.runs.get(taskId)
       this.removeFromQueue(taskId)
@@ -436,6 +483,9 @@ export class RunManager extends EventEmitter {
         restoreQueuedItem(previous, '更新安装未启动，已恢复等待队列')
       }
     }
+    for (const { item } of this.runs.values()) {
+      if (item.protection?.kind === 'cooling') this.armCooldown(item.protection)
+    }
     this.schedule()
     this.emitSession()
   }
@@ -472,7 +522,7 @@ export class RunManager extends EventEmitter {
     try {
       const task = await this.store.loadTask(taskId)
       if (!task) throw new Error('找不到任务')
-      return await operation(task)
+      return await (this.access ? this.access.withContext(taskId, undefined, () => operation(task)) : operation(task))
     } finally {
       if (this.testingTaskId === taskId) this.testingTaskId = ''
       this.emitSession()
@@ -488,6 +538,17 @@ export class RunManager extends EventEmitter {
       if (!managed || managed.item.status !== 'queued') {
         this.queue.splice(index, 1)
         continue
+      }
+      const protection = this.access?.taskProtection(managed.item.taskId, this.taskHostname(managed.task))
+      if (protection) {
+        managed.item.protection = protection
+        const sameHostActive = [...this.runs.values()].some(other =>
+          other !== managed && ACTIVE_STATUSES.has(other.item.status) && this.usesHost(other, protection.hostname))
+        if (protection.kind === 'action-required' || protection.until > Date.now() || sameHostActive) {
+          managed.item.message = protection.reason
+          index += 1
+          continue
+        }
       }
       const owner = this.outputLocks.get(managed.outputKey)
       if (owner && owner !== taskId) {
@@ -528,10 +589,11 @@ export class RunManager extends EventEmitter {
         ? await this.store.getCheckpoint(managed.item.taskId)
         : null
       if (managed.item.resume && !checkpoint) throw new Error('没有可继续的检查点')
-      const result = await this.engine.run(managed.task, checkpoint, control, {
+      const run = (): Promise<CollectorRunResult> => this.engine.run(managed.task, checkpoint, control, {
         progress: (progress) => this.handleProgress(managed, progress),
         log: (log) => this.handleLog(managed, log)
       })
+      const result = await (this.access ? this.access.withContext(managed.item.taskId, control.signal, run) : run())
       if (result.status === 'paused') {
         managed.item.status = 'paused'
         managed.item.resume = true
@@ -555,8 +617,15 @@ export class RunManager extends EventEmitter {
       managed.control = null
       managed.execution = null
       managed.finalizingCancellation = false
+      if (managed.autoResumePending && managed.item.status === 'paused' && !this.shuttingDown) {
+        managed.item.status = 'queued'
+        managed.item.resume = true
+        this.queue.push(managed.item.taskId)
+      }
+      managed.autoResumePending = false
       if (!LOCKED_STATUSES.has(managed.item.status)) this.releaseOutputLock(managed)
       this.emitSession()
+      if (managed.item.protection?.kind === 'cooling') this.armCooldown(managed.item.protection)
       this.schedule()
       this.emitSession()
     }
@@ -576,6 +645,7 @@ export class RunManager extends EventEmitter {
   }
 
   private handleProgress(managed: ManagedRun, progress: RunProgress): void {
+    progress = { ...progress, currentUrl: redactDiagnostic(progress.currentUrl), message: redactDiagnostic(progress.message) }
     managed.item.runId = progress.runId
     managed.item.progress = clone(progress)
     managed.item.message = progress.message
@@ -586,7 +656,7 @@ export class RunManager extends EventEmitter {
   }
 
   private handleLog(managed: ManagedRun, log: RunLog): void {
-    const normalized = { ...log, taskId: managed.item.taskId }
+    const normalized = { ...log, message: redactDiagnostic(log.message), taskId: managed.item.taskId }
     managed.item.logs.push(normalized)
     if (managed.item.logs.length > MAX_RETAINED_LOGS) {
       managed.item.logs.splice(0, managed.item.logs.length - MAX_RETAINED_LOGS)
@@ -595,6 +665,8 @@ export class RunManager extends EventEmitter {
   }
 
   private finishManagedRun(managed: ManagedRun, result: RunResult): void {
+    result = { ...result, message: redactDiagnostic(result.message) }
+    managed.item.protection = undefined
     managed.item.runId = result.runId
     managed.item.status = result.status
     managed.item.result = clone(result)
@@ -637,7 +709,7 @@ export class RunManager extends EventEmitter {
       const managed = this.runs.get(taskId)
       if (!managed || managed.item.status !== 'queued') return
       managed.item.queuePosition = index + 1
-      if (managed.item.queueReason !== 'output-lock') {
+      if (managed.item.queueReason !== 'output-lock' && !managed.item.protection) {
         managed.item.queueReason = 'capacity'
         managed.item.message = `排队第 ${index + 1}，等待运行名额`
       }
@@ -658,5 +730,77 @@ export class RunManager extends EventEmitter {
 
   private emitSession(): void {
     this.emit('session', this.getSessionSnapshot())
+  }
+
+  private taskHostname(task: TaskConfig): string {
+    try { return new URL(firstTaskListPageUrl(task)).hostname.toLowerCase() } catch { return '' }
+  }
+
+  private usesHost(managed: ManagedRun, hostname: string): boolean {
+    return this.taskHostname(managed.task) === hostname || Boolean(this.access?.hasVisited(managed.item.taskId, hostname))
+  }
+
+  private handleProtection(protection: HostProtection): void {
+    for (const managed of this.runs.values()) {
+      if (!this.usesHost(managed, protection.hostname) || !LOCKED_STATUSES.has(managed.item.status)) continue
+      // 手动暂停的任务不加入自动恢复名单。
+      if (managed.item.status === 'paused' && !managed.item.protection) continue
+      managed.item.protection = protection
+      managed.item.message = protection.reason
+      if (managed.control && ACTIVE_STATUSES.has(managed.item.status)) {
+        managed.control.pause()
+        managed.item.status = 'pausing'
+      }
+    }
+    if (protection.kind === 'cooling') this.armCooldown(protection)
+    this.emitSession()
+  }
+
+  private armCooldown(protection: HostProtection): void {
+    if (this.shuttingDown || this.protectionTimers.has(protection.hostname)) return
+    if (![...this.runs.values()].some(({ item }) => item.protection?.hostname === protection.hostname && LOCKED_STATUSES.has(item.status))) return
+    const timer = setTimeout(() => {
+      this.protectionTimers.delete(protection.hostname)
+      if (this.shuttingDown) return
+      const current = this.access?.getProtection(protection.hostname)
+      if (!current || current.kind !== 'cooling') return
+      if (current.until > Date.now()) { this.armCooldown(current); return }
+      const probing = [...this.runs.values()].some(managed =>
+        this.usesHost(managed, current.hostname) && ACTIVE_STATUSES.has(managed.item.status))
+      if (!probing) {
+        const candidate = [...this.runs.values()].find(managed =>
+          managed.item.protection?.hostname === current.hostname && managed.item.protection.kind === 'cooling' && managed.item.status === 'paused')
+        if (candidate) {
+          candidate.item.status = 'queued'
+          candidate.item.resume = true
+          this.queue.push(candidate.item.taskId)
+        }
+        this.schedule()
+        this.emitSession()
+      }
+      if (this.access?.getProtection(current.hostname)) this.armCooldown(current)
+    }, Math.min(60000, Math.max(1000, protection.until - Date.now())))
+    timer.unref()
+    this.protectionTimers.set(protection.hostname, timer)
+  }
+
+  private releaseProtection(hostname: string): void {
+    const timer = this.protectionTimers.get(hostname)
+    if (timer) clearTimeout(timer)
+    this.protectionTimers.delete(hostname)
+    for (const managed of this.runs.values()) {
+      if (managed.item.protection?.hostname !== hostname) continue
+      const automatic = managed.item.protection.kind === 'cooling'
+      managed.item.protection = undefined
+      if (automatic && managed.item.status === 'pausing') managed.autoResumePending = true
+      if (automatic && managed.item.status === 'paused' && !this.shuttingDown) {
+        managed.item.status = 'queued'
+        managed.item.resume = true
+        managed.item.message = '站点已恢复，等待继续采集'
+        this.queue.push(managed.item.taskId)
+      }
+    }
+    this.schedule()
+    this.emitSession()
   }
 }

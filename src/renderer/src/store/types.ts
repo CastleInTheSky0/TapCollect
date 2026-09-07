@@ -5,6 +5,7 @@ import type { useRunSession } from '@renderer/composables/useRunSession'
 import type { useTaskForm } from '@renderer/composables/useTaskForm'
 
 export interface AppStore {
+  openAboutDialog: () => void
   navigationStore: ReturnType<typeof useAppNavigation>
   settingsStore: ReturnType<typeof useAppSettings>
   runSessionStore: ReturnType<typeof useRunSession>

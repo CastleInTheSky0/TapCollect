@@ -19,7 +19,7 @@ export type { AppRouteComponents, AppView }
 
 export const appViewFromRouteName = (
   routeName: RouteRecordName | null | undefined
-): AppView => routeName === APP_ROUTE_NAMES.runCenter ? 'run-center' : 'task'
+): AppView => routeName === APP_ROUTE_NAMES.settings ? 'settings' : routeName === APP_ROUTE_NAMES.runCenter ? 'run-center' : 'task'
 
 export const taskRouteLocation = (taskId = ''): RouteLocationRaw =>
   taskId

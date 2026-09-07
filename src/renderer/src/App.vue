@@ -146,6 +146,7 @@ const previewStore = usePreview({
 })
 
 provide(appStoreKey, {
+  openAboutDialog: () => { aboutUpdateVisible.value = true },
   navigationStore,
   settingsStore,
   runSessionStore,
@@ -314,7 +315,7 @@ onBeforeUnmount(() => {
     class="app-shell" :class="{
       'sidebar-collapsed': sidebarCollapsed,
       'preview-collapsed': previewCollapsed,
-      'run-center-view': appView === 'run-center',
+      'run-center-view': appView !== 'task',
       'pane-is-resizing': resizingPane
     }" :style="appShellStyle"
   >
@@ -330,7 +331,7 @@ onBeforeUnmount(() => {
       :run-items="runSession.items" :testing-task-id="runSession.testingTaskId"
       :disabled="busy || saving || taskConfigTransferring" @select="openTask" @show-run-center="showRunCenter"
       @create="createNewTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
-      @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="openUpdateDetails"
+      @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="openUpdateDetails" @show-settings="navigationStore.openSettings"
     />
 
     <div
@@ -355,8 +356,8 @@ onBeforeUnmount(() => {
 
     <div
       class="pane-divider preview-divider" role="separator" aria-label="调整网页预览宽度" aria-orientation="vertical"
-      :aria-hidden="appView === 'run-center'" :inert="appView === 'run-center'"
-      :tabindex="appView === 'run-center' ? -1 : 0" @pointerdown="startPaneResize('preview', $event)"
+      :aria-hidden="appView !== 'task'" :inert="appView !== 'task'"
+      :tabindex="appView !== 'task' ? -1 : 0" @pointerdown="startPaneResize('preview', $event)"
       @keydown="resizePaneWithKeyboard('preview', $event)"
     >
       <t-tooltip :content="previewCollapsed ? '展开网页预览' : '折叠网页预览'" placement="left">
@@ -371,7 +372,7 @@ onBeforeUnmount(() => {
     </div>
 
     <PreviewPane
-      v-model:preview-url="previewUrl" :inactive="previewCollapsed || appView === 'run-center'"
+      v-model:preview-url="previewUrl" :inactive="previewCollapsed || appView !== 'task'"
       :can-go-back="previewCanGoBack" :can-go-forward="previewCanGoForward"
       :picking-label="pickingLabel" :preview-status="previewStatus" :preview-visible="previewVisible"
       :preview-opening="previewOpening" :loading="previewLoading" :preview-open-action="previewOpenAction"

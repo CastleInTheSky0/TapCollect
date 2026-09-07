@@ -23,12 +23,137 @@ import { CollectorRunControl } from '@main/core/collector-engine'
 import { configureXmlRecord } from '@main/core/xml-template'
 import { RunManager } from './run-manager'
 import { TaskStore } from './task-store'
+import { AccessCoordinator } from './access-coordinator'
 
 const temporaryDirectories: string[] = []
+
+it('pauses all active tasks on a protected host and keeps unrelated hosts running', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-host-protection-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  const manager = new RunManager(store, null, engine, access)
+  await manager.initialize()
+  for (const id of ['a', 'b', 'other']) {
+    const task = runnableTask(id, root)
+    if (id === 'other') { task.listUrl = 'https://other.example.com/list'; task.listPageRules = [task.listUrl] }
+    await store.saveTask(task)
+    await manager.start(id, false)
+  }
+  await vi.waitFor(() => expect(engine.started).toHaveLength(3))
+  access.protect('example.com', '等待服务器恢复', Date.now() + 60000)
+  expect(manager.getSessionSnapshot().items.filter(item => item.protection)).toHaveLength(2)
+  expect(manager.getSessionSnapshot().items.find(item => item.taskId === 'other')?.status).toBe('running')
+  await engine.settlePause('a')
+  await engine.settlePause('b')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(1))
+  await expect(manager.resume('a')).rejects.toThrow('站点仍在冷却')
+  expect(await manager.pause('a')).toBe(true)
+  expect(manager.getSessionSnapshot().items.find(item => item.taskId === 'a')?.protection).toBeUndefined()
+  engine.complete('other')
+  await manager.cancel('a')
+  await manager.cancel('b')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
+  await manager.prepareForShutdown()
+})
 
 const flushTasks = async (): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
+
+it('resumes one task after cooldown and preserves recovery while another task is still saving', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-cooldown-recovery-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  const manager = new RunManager(store, null, engine, access)
+  await manager.initialize()
+  for (const id of ['a', 'b']) {
+    await store.saveTask(runnableTask(id, root))
+    await manager.start(id, false)
+  }
+  await vi.waitFor(() => expect(engine.started).toHaveLength(2))
+  access.protect('example.com', '冷却测试', Date.now() + 10)
+  await engine.settlePause('a')
+  await engine.settlePause('b')
+  await vi.waitFor(() => expect(engine.started).toHaveLength(3), { timeout: 2500 })
+  expect(engine.started).toEqual(['a', 'b', 'a'])
+  expect(manager.getSessionSnapshot().items.find(item => item.taskId === 'b')?.status).toBe('paused')
+  access.acknowledgeSuccess('https://example.com/probe')
+  await vi.waitFor(() => expect(engine.started).toHaveLength(4))
+
+  access.protect('example.com', '再次冷却', Date.now() + 10)
+  await engine.settlePause('a')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().items[0]?.status).toBe('paused'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  access.acknowledgeSuccess('https://example.com/probe')
+  await engine.settlePause('b')
+  await vi.waitFor(() => expect(engine.started).toHaveLength(6))
+  engine.complete('a')
+  engine.complete('b')
+  await flushTasks()
+  await manager.prepareForShutdown()
+})
+
+it('all-pause stops automatic recovery and all-resume skips cooling hosts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-cooldown-batch-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  const manager = new RunManager(store, null, engine, access)
+  await manager.initialize()
+  for (const id of ['a', 'other']) {
+    const task = runnableTask(id, root)
+    if (id === 'other') task.listPageRules = [task.listUrl = 'https://other.example.com/list']
+    await store.saveTask(task)
+    await manager.start(id, false)
+  }
+  await vi.waitFor(() => expect(engine.started).toHaveLength(2))
+  access.protect('example.com', '等待恢复', Date.now() + 60000)
+  await engine.settlePause('a')
+  await manager.pauseAll()
+  await engine.settlePause('other')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
+  expect(manager.getSessionSnapshot().items.every(item => !item.protection)).toBe(true)
+  expect(await manager.resumeAll()).toBe(true)
+  await vi.waitFor(() => expect(engine.started).toEqual(['a', 'other', 'other']))
+  expect(manager.getSessionSnapshot().items[0]?.status).toBe('paused')
+  engine.complete('other')
+  await manager.cancel('a')
+  await flushTasks()
+  await manager.prepareForShutdown()
+})
+
+it('shows resource-host protection on its originating task and removes it when cancelling queues', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-resource-host-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  const manager = new RunManager(store, null, engine, access)
+  await manager.initialize()
+  await store.saveTask(runnableTask('a', root))
+  await manager.start('a', false)
+  await vi.waitFor(() => expect(engine.started).toHaveLength(1))
+  await access.withContext('a', undefined, () => access.run('https://cdn.example.com/file', 0, async () => undefined))
+  access.protect('cdn.example.com', '资源访问需要检查')
+  expect(manager.getSessionSnapshot().items[0]?.protection?.hostname).toBe('cdn.example.com')
+  await engine.settlePause('a')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
+  await manager.resume('a')
+  await vi.waitFor(() => expect(engine.started).toHaveLength(2))
+  engine.complete('a')
+  await flushTasks()
+  access.protect('example.com', '需要人工处理')
+  await manager.start('a', false)
+  await manager.cancelAll()
+  expect(manager.getSessionSnapshot().items[0]?.status).toBe('cancelled')
+  expect(manager.getSessionSnapshot().items[0]?.protection).toBeUndefined()
+  await manager.prepareForShutdown()
+})
 
 const runnableTask = (
   id: string,

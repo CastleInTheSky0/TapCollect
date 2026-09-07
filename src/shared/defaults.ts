@@ -1,3 +1,4 @@
+import { DEFAULT_ACCESS_POLICY, normalizeAccessPolicy } from './access-protection'
 import type {
   AppSettings,
   FieldMapping,
@@ -118,7 +119,8 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultOutputDirectory: '',
   maxConcurrentRuns: 3,
-  autoCheckUpdates: false
+  autoCheckUpdates: false,
+  access: { ...DEFAULT_ACCESS_POLICY }
 }
 
 export const normalizeMaxConcurrentRuns = (value: unknown): number => {
@@ -128,9 +130,10 @@ export const normalizeMaxConcurrentRuns = (value: unknown): number => {
 }
 
 export const normalizeAppSettings = (settings: Partial<AppSettings> | null): AppSettings => ({
-  defaultOutputDirectory: settings?.defaultOutputDirectory?.trim() ?? '',
+  defaultOutputDirectory: typeof settings?.defaultOutputDirectory === 'string' ? settings.defaultOutputDirectory.trim() : '',
   maxConcurrentRuns: normalizeMaxConcurrentRuns(settings?.maxConcurrentRuns),
-  autoCheckUpdates: settings?.autoCheckUpdates === true
+  autoCheckUpdates: settings?.autoCheckUpdates === true,
+  access: normalizeAccessPolicy(settings?.access)
 })
 
 export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {

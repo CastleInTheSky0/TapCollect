@@ -107,8 +107,9 @@ export class TaskStore {
     )
   }
 
-  async saveSettings(settings: AppSettings): Promise<AppSettings> {
-    const normalized = normalizeAppSettings(settings)
+  async saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+    const previous = await this.getSettings()
+    const normalized = normalizeAppSettings({ ...previous, ...settings, access: { ...previous.access, ...settings?.access } })
     await atomicWrite(this.settingsPath, JSON.stringify(normalized, null, 2))
     return normalized
   }

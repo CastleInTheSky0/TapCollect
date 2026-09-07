@@ -16,10 +16,22 @@ export const useAppSettings = (deps: AppSettingsDeps): {
   saveDefaultOutputDirectory: () => Promise<void>
   changeMaxConcurrentRuns: (value: number) => Promise<void>
   changeAutoCheckUpdates: (enabled: boolean) => Promise<void>
+  saveSettings: (value: AppSettings) => Promise<boolean>
 } => {
   const api = window.collector
   const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS })
   const settingsSaving = ref(false)
+  const saveSettings = async (value: AppSettings): Promise<boolean> => {
+    if (settingsSaving.value) return false
+    settingsSaving.value = true
+    try {
+      settings.value = await api.saveSettings(JSON.parse(JSON.stringify(value)) as AppSettings)
+      await deps.refreshRunSession()
+      deps.showNotice('全局设置已保存')
+      return true
+    } catch (error) { deps.showError(error); return false }
+    finally { settingsSaving.value = false }
+  }
 
   const saveDefaultOutputDirectory = async (): Promise<void> => {
     const path = deps.getActiveOutputRoot()
@@ -74,6 +86,7 @@ export const useAppSettings = (deps: AppSettingsDeps): {
   return {
     settings,
     settingsSaving,
+    saveSettings,
     saveDefaultOutputDirectory,
     changeMaxConcurrentRuns,
     changeAutoCheckUpdates

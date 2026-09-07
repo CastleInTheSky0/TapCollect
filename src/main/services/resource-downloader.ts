@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, stat, writeFile, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { RequestConfig, ResourcePlan } from '@shared/types'
-import { HttpClient, HttpRequestError } from '@main/core/http-client'
+import { HttpClient, HttpRequestError, decodeHtml } from '@main/core/http-client'
 
 export interface ResourceDownloadResult {
   kind: 'downloaded' | 'skipped'
@@ -43,7 +43,7 @@ const publishFile = async (
 }
 
 export class ResourceDownloader {
-  constructor(private readonly httpClient: Pick<HttpClient, 'fetchResource'>) {}
+  constructor(private readonly httpClient: Pick<HttpClient, 'fetchResource'> & Partial<Pick<HttpClient, 'inspectHtml' | 'acknowledgeSuccess'>>) {}
 
   async download(
     plan: ResourcePlan,
@@ -88,6 +88,16 @@ export class ResourceDownloader {
         await writeFile(temporary, Buffer.alloc(0), { flag: 'wx' })
       }
 
+      if (response.response.headers.get('content-type')?.includes('text/html')) {
+        const file = await open(temporary, 'r')
+        try {
+          const buffer = Buffer.alloc(262144)
+          const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
+          const decoded = decodeHtml(buffer.subarray(0, bytesRead), response.response.headers.get('content-type'), request.manualEncoding)
+          this.httpClient.inspectHtml?.(decoded.html, response.finalUrl)
+        } finally { await file.close() }
+      }
+      this.httpClient.acknowledgeSuccess?.(response.finalUrl)
       const published = await publishFile(temporary, plan.localPath, overwrite)
       if (!published) {
         await rm(temporary, { force: true })

@@ -1,0 +1,38 @@
+.settings-page { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface); }
+.settings-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 22px 28px; border-bottom: 1px solid var(--line); gap: 16px; }
+.settings-header > div > span { color: var(--muted); font-size: 12px; }
+.settings-header > div { padding-left: 36px; }
+.settings-header h1 { margin: 4px 0 0; font-size: 23px; line-height: 1.35; }
+.settings-layout { display: flex; min-height: 0; flex: 1; }
+.settings-navigation { width: 204px; flex: 0 0 204px; display: flex; flex-direction: column; gap: 7px; padding: 24px 14px; background: #f8fafa; border-right: 1px solid var(--line); overflow: auto; }
+.navigation-caption { color: var(--muted); font-size: 12px; padding: 0 12px 10px; }
+.settings-navigation > .t-button { justify-content: flex-start; height: 42px; flex: 0 0 42px; padding: 0 14px; text-align: left; }
+.settings-navigation > .selected { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.settings-nav-divider { border-top: 1px solid var(--line); margin: 15px 10px 8px; }
+.settings-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.settings-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
+.settings-content { max-width: 1150px; margin: 0 auto; padding: 32px 38px 40px; }
+.settings-content h2 { font-size: 25px; margin: 0 0 10px; letter-spacing: -.4px; }
+.settings-description { margin: 0 0 26px; color: var(--muted); line-height: 1.7; font-size: 13px; }
+.settings-section { margin-top: 28px; }
+.settings-section h3 { font-size: 14px; margin: 0; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 21px 0; border-bottom: 1px solid var(--soft-line); }
+.setting-copy { flex: 1; min-width: 0; }
+.setting-copy > strong { font-size: 13px; font-weight: 600; }
+.setting-copy > p { margin: 6px 0 0; line-height: 1.65; font-size: 12px; color: var(--muted); }
+.setting-control { display: flex; flex: 0 0 184px; gap: 10px; align-items: center; }
+.setting-control > .t-input-number { width: 140px; }
+.setting-control > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.setting-row > .t-select__wrap { width: 190px; flex: 0 0 190px; }
+.directory-control { display: flex; width: 320px; max-width: 50%; gap: 8px; }
+.settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 30px; flex: 0 0 auto; border-top: 1px solid var(--line); }
+.settings-footer > span { color: var(--muted); font-size: 12px; }
+.settings-footer > .has-changes { color: var(--warning); }
+.settings-footer > div { display: flex; gap: 10px; }
+.settings-footnote { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 24px; }
+@media (max-width: 1280px) {
+  .settings-navigation { width: 176px; flex-basis: 176px; padding-inline: 10px; }
+  .settings-content { padding: 26px 24px; }
+  .setting-row { gap: 16px; }
+  .settings-footer { padding-inline: 24px; }
+}

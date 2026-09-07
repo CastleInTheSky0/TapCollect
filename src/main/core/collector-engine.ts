@@ -27,6 +27,7 @@ import {
   type ListCandidate
 } from './extraction'
 import { HttpClient, HttpRequestError } from './http-client'
+import { AccessProtectionError, RequestInterruptedError, isAccessInterruption } from './access-errors'
 import type { DynamicPageProvider, DynamicPageSession, DynamicPageSnapshot } from './dynamic-page'
 import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
 import {
@@ -77,6 +78,8 @@ const cloneCheckpoint = (checkpoint: RunCheckpoint): RunCheckpoint =>
   JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint
 
 export class CollectorRunControl {
+  private readonly abortController = new AbortController()
+  get signal(): AbortSignal { return this.abortController.signal }
   private state: 'running' | 'suspend-requested' | 'cancelled' = 'running'
   private latestCheckpoint: RunCheckpoint | null = null
 
@@ -91,6 +94,7 @@ export class CollectorRunControl {
   pause(): boolean {
     if (this.state !== 'running') return false
     this.state = 'suspend-requested'
+    this.abortController.abort(new RequestInterruptedError())
     return true
   }
 
@@ -103,6 +107,7 @@ export class CollectorRunControl {
   cancel(): boolean {
     if (this.state === 'cancelled') return false
     this.state = 'cancelled'
+    this.abortController.abort(new RequestInterruptedError())
     return true
   }
 
@@ -123,17 +128,22 @@ const orderedConcurrentMap = async <T, R>(
 ): Promise<R[]> => {
   const results = new Array<R>(values.length)
   let nextIndex = 0
+  let failed = false
   const worker = async (): Promise<void> => {
-    while (nextIndex < values.length) {
+    while (!failed && nextIndex < values.length) {
       const index = nextIndex
       nextIndex += 1
       const value = values[index]
-      if (value !== undefined) results[index] = await mapper(value, index)
+      try {
+        if (value !== undefined) results[index] = await mapper(value, index)
+      } catch (error) { failed = true; throw error }
     }
   }
-  await Promise.all(
+  const settled = await Promise.allSettled(
     Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, () => worker())
   )
+  const rejected = settled.find(result => result.status === 'rejected')
+  if (rejected?.status === 'rejected') throw rejected.reason
   return results
 }
 
@@ -231,7 +241,8 @@ export class CollectorEngine {
           try {
             const detail = await session.openDetail(candidate.itemIndex - 1)
             if (detail.url && detail.url !== list.url) urls.push(detail.url)
-          } catch {
+          } catch (error) {
+            if (isAccessInterruption(error)) throw error
             // Continue until a valid clickable detail sample is found.
           } finally {
             await session.returnToList()
@@ -468,7 +479,6 @@ export class CollectorEngine {
           continue
         }
         processedResourceUrls.add(plan.normalizedUrl)
-        checkpoint.processedResourceUrls.push(plan.normalizedUrl)
         plans.push({ plan, sourcePageUrl })
       }
 
@@ -491,11 +501,13 @@ export class CollectorEngine {
           )
           return { plan, sourcePageUrl, result, error: null as unknown }
         } catch (error) {
+          if (isAccessInterruption(error)) throw error
           return { plan, sourcePageUrl, result: null, error }
         }
       })
 
       for (const item of results) {
+        checkpoint.processedResourceUrls.push(item.plan.normalizedUrl)
         if (item.result?.kind === 'downloaded') {
           checkpoint.resources.downloaded += 1
           emitLog(
@@ -612,7 +624,7 @@ export class CollectorEngine {
             `${candidate.externalUrl ? '正在记录站外链接' : task.detail.enabled ? '正在采集详情' : '正在处理'}：${describeCandidate(candidate)}`
           )
           if (task.detail.enabled && (candidate.detailRequestUrl || clickDetailSession)) {
-            await delay(task.request.delayMs)
+            await delay(this.httpClient.usesAccessPolicy ? 0 : task.request.delayMs)
           }
           return clickDetailSession
             ? this.processClickCandidate(task, candidate, clickDetailSession, control)
@@ -643,10 +655,6 @@ export class CollectorEngine {
           }
           continue
         }
-        if (completedKey) {
-          committedKeys.add(completedKey)
-          checkpoint.seenKeys.push(completedKey)
-        }
         for (const failure of outcome.failures) await appendFailure(failure)
         if (outcome.counter === 'failed') checkpoint.counters.failed += 1
         if (outcome.counter === 'skipped') checkpoint.counters.skipped += 1
@@ -662,8 +670,12 @@ export class CollectorEngine {
               `采集成功：${describeCandidate(completedWork.candidate, outcome.record)}`
             )
           }
-          await flushFullBatches()
         }
+        if (completedKey) {
+          committedKeys.add(completedKey)
+          checkpoint.seenKeys.push(completedKey)
+        }
+        await flushFullBatches()
       }
 
       checkpoint.nextSequence += extracted.itemCount
@@ -708,7 +720,7 @@ export class CollectorEngine {
             }
             for (let index = 0; index < checkpoint.pagesVisited; index += 1) {
               if (!(await synchronize())) break
-              if (task.request.delayMs > 0) await delay(task.request.delayMs)
+              if (task.request.delayMs > 0) await delay(this.httpClient.usesAccessPolicy ? 0 : task.request.delayMs)
               const advanced = await session.advance()
               if (advanced.kind === 'end') {
                 throw new Error(`无法恢复动态分页检查点：${advanced.reason}`)
@@ -776,7 +788,7 @@ export class CollectorEngine {
                 break
               }
 
-              if (task.request.delayMs > 0) await delay(task.request.delayMs)
+              if (task.request.delayMs > 0) await delay(this.httpClient.usesAccessPolicy ? 0 : task.request.delayMs)
               const advanced = await session.advance()
               if (advanced.kind === 'end') {
                 checkpoint.nextRuleIndex = 1
@@ -835,7 +847,7 @@ export class CollectorEngine {
             : `第 ${currentPageOrdinal} 个列表页`
         emitProgress('running', 'list', `正在采集${pageDescription}`)
         emitLog('info', `请求列表页：${currentUrl}`)
-        if (checkpoint.pagesVisited > 0) await delay(task.request.delayMs)
+        if (checkpoint.pagesVisited > 0) await delay(this.httpClient.usesAccessPolicy ? 0 : task.request.delayMs)
         let listResponse
         if (usesClickDetail) {
           await clickDetailSession?.close()
@@ -944,8 +956,15 @@ export class CollectorEngine {
     } catch (error) {
       control.setCheckpoint(checkpoint)
       await this.store.saveCheckpoint(checkpoint)
-      if (error instanceof CollectorRunSuspendedError) {
-        const message = '任务已暂停，当前安全进度已保存'
+      if (isAccessInterruption(error) && control.isCancelled()) {
+        await flushLastBatch()
+        await this.store.clearCheckpoint(task.id)
+        emitProgress('cancelled', 'cancelled', '任务已取消，当前有效记录已写出')
+        return this.buildResult(checkpoint, 'cancelled', '任务已取消，已保留采集结果')
+      }
+      if (error instanceof CollectorRunSuspendedError || isAccessInterruption(error)) {
+        const message = error instanceof AccessProtectionError
+          ? `${error.message}；安全进度已保存` : '任务已暂停，当前安全进度已保存'
         emitProgress('paused', 'list', message)
         emitLog('warning', message)
         return this.buildResult(checkpoint, 'paused', message)
@@ -1067,6 +1086,7 @@ export class CollectorEngine {
         extracted.warnings
       )
     } catch (error) {
+      if (isAccessInterruption(error)) throw error
       const retries = error instanceof HttpRequestError ? error.retries : 0
       const stage = error instanceof HttpRequestError ? 'detail-request' : 'detail-extraction'
       return {
@@ -1122,6 +1142,7 @@ export class CollectorEngine {
         )
       }
     } catch (error) {
+      if (isAccessInterruption(error)) throw error
       outcome = {
         record: null,
         failures: [
@@ -1139,6 +1160,7 @@ export class CollectorEngine {
     try {
       await session.returnToList()
     } catch (error) {
+      if (isAccessInterruption(error)) throw error
       throw new Error(
         `详情处理后无法返回列表：${error instanceof Error ? error.message : String(error)}`
       )

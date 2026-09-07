@@ -1,3 +1,5 @@
+import type { AccessPolicySettings, HostProtection } from './access-protection'
+
 export type SelectorType = 'css' | 'xpath'
 export type PageLocatorType = SelectorType | 'markers'
 export type PaginationMode = 'url' | 'click'
@@ -379,6 +381,7 @@ export type RunSessionStatus = Exclude<RunStatus, 'idle'>
 export type RunQueueReason = '' | 'capacity' | 'output-lock'
 
 export interface RunSessionItem {
+  protection?: HostProtection | undefined
   taskId: string
   taskName: string
   runId: string
@@ -483,6 +486,7 @@ export interface AppSettings {
   defaultOutputDirectory: string
   maxConcurrentRuns: number
   autoCheckUpdates: boolean
+  access: AccessPolicySettings
 }
 
 export type AppPlatform = 'windows' | 'macos' | 'linux' | 'unsupported'

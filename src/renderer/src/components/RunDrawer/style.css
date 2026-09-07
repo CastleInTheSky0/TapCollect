@@ -45,6 +45,10 @@
   padding: 12px 17px 14px;
 }
 
+.drawer-protection {
+  margin: 12px 17px 0;
+}
+
 .run-metrics {
   display: grid;
   grid-column: 1;

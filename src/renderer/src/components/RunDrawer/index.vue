@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { VNodeRef } from 'vue'
 import { CloseIcon, FolderOpenIcon } from 'tdesign-icons-vue-next'
 import type { RunLog, RunProgress, RunResult, RunSessionItem } from '@shared/types'
+import HostProtectionNotice from '@renderer/components/HostProtectionNotice/index.vue'
 import { isRunItemLocked } from '@renderer/utils/collector-runtime'
 import { resizeRunLogHeight, RUN_LOG_LAYOUT } from '@renderer/utils/pane-layout'
 
@@ -117,6 +118,7 @@ const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
         <CloseIcon />
       </t-button>
     </header>
+    <HostProtectionNotice v-if="item?.protection" class="drawer-protection" :item="item" @pause="emit('pause')" @resume="emit('resume')" />
     <div class="run-body">
       <div class="run-metrics">
         <div><span>当前页</span><strong>{{ runProgress?.page ?? '—' }}</strong></div>
@@ -174,7 +176,7 @@ const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
             暂停
           </t-button>
           <t-button
-            v-else-if="item?.status === 'paused'"
+            v-else-if="item?.status === 'paused' && !item.protection"
             theme="primary"
             :loading="runActionTaskId === item.taskId"
             @click="emit('resume')"

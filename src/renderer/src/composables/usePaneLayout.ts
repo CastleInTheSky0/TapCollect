@@ -48,7 +48,7 @@ export const usePaneLayout = (deps: PaneLayoutDeps) => {
 
   const appShellStyle = computed<Record<string, string>>(() => ({
     '--sidebar-width': `${sidebarCollapsed.value ? PANE_LAYOUT.sidebarCollapsedWidth : paneWidths.value.sidebar}px`,
-    '--preview-width': `${deps.appView.value === 'run-center' || previewCollapsed.value ? 0 : paneWidths.value.preview}px`
+    '--preview-width': `${deps.appView.value !== 'task' || previewCollapsed.value ? 0 : paneWidths.value.preview}px`
   }))
 
   const fitCurrentPaneWidths = (): void => {
@@ -71,7 +71,7 @@ export const usePaneLayout = (deps: PaneLayoutDeps) => {
     if (!element) return null
     if (
       deps.previewBlocked.value ||
-      deps.appView.value === 'run-center' ||
+      deps.appView.value !== 'task' ||
       previewCollapsed.value
     ) {
       return hiddenPreviewBounds()

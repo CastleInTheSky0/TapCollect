@@ -96,9 +96,11 @@
   "dependencies": {
     "@xmldom/xmldom": "0.9.10",
     "chardet": "2.2.0",
+    "cockatiel": "4.0.0",
     "fontoxpath": "3.34.0",
     "iconv-lite": "0.7.3",
     "jsdom": "27.4.0",
+    "p-queue": "9.3.3",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "xml-formatter": "3.7.0"
   },

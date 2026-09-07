@@ -1,5 +1,6 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu, net, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, net, shell, session } from 'electron'
+import { AccessCoordinator } from './services/access-coordinator'
 import type { UpdateInstallResult } from '@shared/types'
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { registerIpcHandlers } from './ipc'
@@ -44,9 +45,12 @@ const createWindow = async (): Promise<void> => {
   })
   const store = new TaskStore(dataDirectory.rootDirectory)
   await store.initialize()
-  const runManager = new RunManager(store, new ElectronDynamicPageProvider(window))
+  const runtimeUserAgent = session.defaultSession.getUserAgent()
+    .replace(/\s*Electron\/[^\s]+/g, '').replace(/\s*TapCollect\/[^\s]+/gi, '')
+  const access = new AccessCoordinator(runtimeUserAgent)
+  const runManager = new RunManager(store, new ElectronDynamicPageProvider(window, access), null, access)
   await runManager.initialize()
-  const preview = new PreviewService(window)
+  const preview = new PreviewService(window, access)
   let confirmedClose = false
   const updateService = new UpdateService({
     appName: APP_NAME,

@@ -15,6 +15,7 @@ import {
 import { renderXmlBatch, validateXmlOutput } from '@main/core/xml-template'
 import { sanitizeFileName } from '@main/core/url-utils'
 import type { TaskStore } from './task-store'
+import { redactDiagnostic } from '@shared/access-protection'
 
 const CSV_COLUMNS = [
   '页码',
@@ -133,7 +134,7 @@ abstract class FileOutputSession implements CollectorOutputSession {
       failure.retries,
       failure.time
     ]
-      .map(csvCell)
+      .map(value => csvCell(typeof value === 'string' ? redactDiagnostic(value) : value))
       .join(',')
     await appendFile(this.errorLogPath, `${row}\r\n`, 'utf8')
   }

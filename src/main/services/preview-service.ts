@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import type { AccessCoordinator } from './access-coordinator'
 import { BrowserWindow, WebContentsView } from 'electron'
 import type {
   PreviewBounds,
@@ -88,7 +89,7 @@ export class PreviewService extends EventEmitter {
   private pickSequence = 0
   private opening = false
 
-  constructor(private readonly window: BrowserWindow) {
+  constructor(private readonly window: BrowserWindow, private readonly access?: AccessCoordinator) {
     super()
   }
 
@@ -439,6 +440,12 @@ export class PreviewService extends EventEmitter {
       }
     })
     this.view = view
+    if (this.access) {
+      view.webContents.setUserAgent(this.access.userAgent)
+      view.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+        callback({ requestHeaders: { ...details.requestHeaders, 'Accept-Language': this.access!.settings.language } })
+      })
+    }
     view.setBackgroundColor('#ffffff')
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     view.webContents.session.setPermissionCheckHandler(() => false)

@@ -72,7 +72,7 @@ export const registerIpcHandlers = (
   ipcMain.handle(IPC_CHANNELS.getSettings, () => store.getSettings())
   ipcMain.handle(IPC_CHANNELS.saveSettings, async (_event, settings: AppSettings) => {
     const saved = await store.saveSettings(settings)
-    runManager.setMaxConcurrentRuns(saved.maxConcurrentRuns)
+    runManager.applySettings(saved)
     return saved
   })
   ipcMain.handle(IPC_CHANNELS.listTasks, () => store.listTasks())
