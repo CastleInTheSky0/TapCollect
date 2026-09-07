@@ -150,10 +150,8 @@ const runDisabled = (taskId: string): boolean => {
 
 <template>
   <aside class="task-sidebar" :class="{ collapsed }">
-    <t-menu
-      class="task-menu" theme="light" :collapsed="collapsed" :width="['100%', '64px']" :value="menuValue"
-      :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand"
-    >
+    <t-menu class="task-menu" theme="light" :collapsed="collapsed" :width="['100%', '64px']" :value="menuValue"
+      :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand">
       <template #logo>
         <div class="brand-block">
           <div class="brand-mark" aria-hidden="true">
@@ -184,19 +182,15 @@ const runDisabled = (taskId: string): boolean => {
               <span class="menu-count">{{ tasks.length }}</span>
             </span>
             <span v-if="!collapsed" class="task-config-tools" @click.stop @pointerdown.stop @keydown.stop>
-              <t-dropdown
-                trigger="click" placement="right-top" :disabled="disabled" :min-column-width="206"
+              <t-dropdown trigger="click" placement="right-top" :disabled="disabled" :min-column-width="206"
                 :popup-props="{
                   overlayInnerClassName: 'task-config-tools-dropdown',
                   onVisibleChange: handleTaskConfigToolsVisibleChange
-                }" @click="handleTaskConfigToolClick"
-              >
+                }" @click="handleTaskConfigToolClick">
                 <span class="task-config-tools-trigger">
                   <t-tooltip content="任务配置工具" placement="top" :visible="taskConfigToolsOpen ? false : undefined">
-                    <t-button
-                      aria-label="任务配置工具" theme="default" variant="text" shape="square" size="small"
-                      :disabled="disabled"
-                    >
+                    <t-button aria-label="任务配置工具" theme="default" variant="text" shape="square" size="small"
+                      :disabled="disabled">
                       <template #icon>
                         <EllipsisIcon size="17px" />
                       </template>
@@ -229,10 +223,8 @@ const runDisabled = (taskId: string): boolean => {
           导入任务配置
         </t-menu-item>
 
-        <t-menu-item
-          v-if="collapsed" value="export-configs" class="task-config-popup-item task-config-popup-item-last"
-          :disabled="disabled"
-        >
+        <t-menu-item v-if="collapsed" value="export-configs" class="task-config-popup-item task-config-popup-item-last"
+          :disabled="disabled">
           <template #icon>
             <FileExportIcon />
           </template>
@@ -240,9 +232,6 @@ const runDisabled = (taskId: string): boolean => {
         </t-menu-item>
 
         <t-menu-item v-for="item in tasks" :key="item.id" :value="taskMenuValue(item.id)" class="task-menu-item">
-          <template #icon>
-            <FileIcon />
-          </template>
           <span class="task-entry-shell">
             <button type="button" class="task-row-main" @click.stop="emit('select', item.id)">
               <span class="task-copy">
@@ -261,30 +250,24 @@ const runDisabled = (taskId: string): boolean => {
             </button>
             <span class="task-actions">
               <t-tooltip :content="runItemMap.get(item.id)?.status === 'paused' ? '继续任务' : '运行任务'" placement="top">
-                <t-button
-                  theme="primary" variant="text" shape="square" size="small" :disabled="runDisabled(item.id)"
-                  @click.stop="emit('run', item.id)"
-                >
+                <t-button theme="primary" variant="text" shape="square" size="small" :disabled="runDisabled(item.id)"
+                  @click.stop="emit('run', item.id)">
                   <template #icon>
                     <PlayIcon size="18px" />
                   </template>
                 </t-button>
               </t-tooltip>
               <t-tooltip content="复制任务" placement="top">
-                <t-button
-                  theme="default" variant="text" shape="square" size="small" :disabled="disabled"
-                  @click.stop="emit('duplicate', item.id)"
-                >
+                <t-button theme="default" variant="text" shape="square" size="small" :disabled="disabled"
+                  @click.stop="emit('duplicate', item.id)">
                   <template #icon>
                     <CopyIcon size="18px" />
                   </template>
                 </t-button>
               </t-tooltip>
               <t-tooltip content="删除任务" placement="top">
-                <t-button
-                  theme="danger" variant="text" shape="square" size="small"
-                  :disabled="disabled || taskLocked(item.id)" @click.stop="emit('remove', item.id)"
-                >
+                <t-button theme="danger" variant="text" shape="square" size="small"
+                  :disabled="disabled || taskLocked(item.id)" @click.stop="emit('remove', item.id)">
                   <template #icon>
                     <DeleteIcon size="18px" />
                   </template>
@@ -308,25 +291,19 @@ const runDisabled = (taskId: string): boolean => {
       <template #operations>
         <div class="sidebar-operations">
           <t-tooltip content="运行中心" placement="right" :disabled="!collapsed">
-            <t-button
-              class="about-entry" :class="{ 'navigation-selected': view === 'run-center' }" theme="default"
-              variant="text" aria-label="运行中心" @click="emit('showRunCenter')"
-            >
+            <t-button class="about-entry" :class="{ 'navigation-selected': view === 'run-center' }" theme="default"
+              variant="text" aria-label="运行中心" @click="emit('showRunCenter')">
               <template #icon>
                 <ViewModuleIcon />
               </template>
-              <span v-if="!collapsed">运行中心</span><span
-                v-if="sessionActivityCount && !collapsed"
-                class="menu-count active-count"
-              >{{
-                sessionActivityCount }}</span>
+              <span v-if="!collapsed">运行中心</span><span v-if="sessionActivityCount && !collapsed"
+                class="menu-count active-count">{{
+                  sessionActivityCount }}</span>
             </t-button>
           </t-tooltip>
           <t-tooltip content="设置" placement="right" :disabled="!collapsed">
-            <t-button
-              class="about-entry" :class="{ 'navigation-selected': view === 'settings' }" theme="default"
-              variant="text" aria-label="设置" @click="emit('showSettings')"
-            >
+            <t-button class="about-entry" :class="{ 'navigation-selected': view === 'settings' }" theme="default"
+              variant="text" aria-label="设置" @click="emit('showSettings')">
               <template #icon>
                 <SettingIcon />
               </template>

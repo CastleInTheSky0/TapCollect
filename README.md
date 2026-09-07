@@ -8,12 +8,12 @@ TapCollect（网页信息采集工具）是一款基于 Electron、Vue 3、TypeS
 
 正式安装包可从 [GitHub Releases](https://github.com/CastleInTheSky0/TapCollect/releases) 下载。
 
-| 平台 | 架构 | 产物 |
-| --- | --- | --- |
-| Windows | x64 | NSIS 安装程序 `.exe` |
-| UOS / Linux | ARM64 | Debian 安装包 `.deb` |
-| macOS | Intel x64 | `.dmg`、`.zip` |
-| macOS | Apple Silicon ARM64 | `.dmg`、`.zip` |
+| 平台        | 架构                | 产物                 |
+| ----------- | ------------------- | -------------------- |
+| Windows     | x64                 | NSIS 安装程序 `.exe` |
+| UOS / Linux | ARM64               | Debian 安装包 `.deb` |
+| macOS       | Intel x64           | `.dmg`、`.zip`       |
+| macOS       | Apple Silicon ARM64 | `.dmg`、`.zip`       |
 
 macOS 安装包当前未使用 Apple Developer 证书签名或公证，首次打开时可能出现 Gatekeeper 的未认证开发者提示。
 
@@ -177,7 +177,7 @@ https://www.example.com/list.aspx?classid=5&page={page}
 ### 关于与在线更新
 
 - 从“设置”分类导航或常规页打开“关于与更新”弹窗，查看当前版本、操作系统和 CPU 架构。
-- 可在弹窗中开启“启动时自动检查更新”；开启后每次打开应用后台检查一次。发现适用新版时，顶部会显示与其他提示一致的紧凑白底提示，“发现新版本”和“查看更新”保持同一行并垂直居中；点击“查看更新”即可进入更新弹窗。
+- 可在弹窗中开启“启动时自动检查更新”；开启后每次打开应用后台检查一次。发现适用新版时，顶部会显示更新提醒。
 - 自动检查默认关闭；关闭时只有用户手动点击才连接 GitHub Releases，自动检查失败也不会影响离线使用。
 - 可显示 Release 标题、发布时间、更新内容简述及适用于当前平台的安装包大小。
 - 正式安装版可下载对应架构的安装包，校验文件大小及 GitHub 提供的 SHA-256（如有），然后启动安装程序。
