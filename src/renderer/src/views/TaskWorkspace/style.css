@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 22px 0 66px;
+  padding: 0 22px 0 22px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
 }
@@ -397,7 +397,11 @@
 .pagination-template > code {
   overflow-wrap: anywhere;
   color: #405057;
-  font: 10px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    10px/1.55 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 .switch-line {
@@ -807,7 +811,11 @@
   padding: 12px;
   background: #172126;
   color: #d8e0e2;
-  font: 10px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    10px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   white-space: pre;
 }
 
@@ -834,7 +842,9 @@
 
 .step-enter-active,
 .step-leave-active {
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 
 .step-enter-from {
