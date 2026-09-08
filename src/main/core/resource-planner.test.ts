@@ -31,12 +31,25 @@ describe('resource planner', () => {
     expect(plan?.localPath).toBe(resolve(root, 'upload', '2026', 'a.jpg'))
   })
 
-  it('adds a stable query hash before the extension and avoids collisions', () => {
-    const first = buildResourceMirrorPath('https://example.com/a.jpg?size=small&v=1', true)
-    const reordered = buildResourceMirrorPath('https://example.com/a.jpg?v=1&size=small', true)
-    const second = buildResourceMirrorPath('https://example.com/a.jpg?size=large&v=1', true)
+  it('preserves a file name while retaining canonical query identities', () => {
+    const first = buildResourceMirrorPath('https://example.com/a.jpg?size=small&v=1')
+    const reordered = buildResourceMirrorPath('https://example.com/a.jpg?v=1&size=small')
+    const second = buildResourceMirrorPath('https://example.com/a.jpg?size=large&v=1')
 
-    expect(first.relativePath).toMatch(/^a__[a-f0-9]{8}\.jpg$/)
+    expect(first.relativePath).toBe('a.jpg')
+    expect(reordered.relativePath).toBe(first.relativePath)
+    expect(second.relativePath).toBe(first.relativePath)
+    expect(reordered.normalizedUrl).toBe(first.normalizedUrl)
+    expect(second.normalizedUrl).not.toBe(first.normalizedUrl)
+    expect(reordered.sourceUrl).toBe('https://example.com/a.jpg?v=1&size=small')
+  })
+
+  it.each(['download', 'download.jsp'])('keeps parameterized download endpoints distinct: %s', (endpoint) => {
+    const first = buildResourceMirrorPath(`https://example.com/${endpoint}?id=1&v=2`)
+    const reordered = buildResourceMirrorPath(`https://example.com/${endpoint}?v=2&id=1`)
+    const second = buildResourceMirrorPath(`https://example.com/${endpoint}?id=2&v=2`)
+
+    expect(first.relativePath).toMatch(/^download__[a-f0-9]{8}(?:\.jsp)?$/)
     expect(reordered.relativePath).toBe(first.relativePath)
     expect(second.relativePath).not.toBe(first.relativePath)
   })
@@ -65,14 +78,13 @@ describe('resource planner', () => {
     }
   )
 
-  it('inserts a query hash before the original mixed-case extension', () => {
+  it('keeps the original mixed-case filename when the download has query parameters', () => {
     const mirror = buildResourceMirrorPath(
-      'https://example.com/files/Report.PDF?download=1',
-      true
+      'https://example.com/files/Report.PDF?download=1'
     )
 
     expect(mirror.sourceUrl).toBe('https://example.com/files/Report.PDF?download=1')
-    expect(mirror.relativePath).toMatch(/^files\/Report__[a-f0-9]{8}\.PDF$/)
+    expect(mirror.relativePath).toBe('files/Report.PDF')
     expect(mirror.encodedPath).toBe(mirror.relativePath)
   })
 

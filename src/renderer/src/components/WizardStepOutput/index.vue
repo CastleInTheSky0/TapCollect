@@ -126,7 +126,7 @@ const emit = defineEmits<{
           v-model="task.resources.download.urlPrefix"
           placeholder="例如 /resources 或 https://static.example.com/resources"
         />
-        <small>本地目录按原资源路径建立；查询参数会生成稳定短标识，避免同名文件互相覆盖。</small>
+        <small>常见文件保留原文件名；无明确文件名的接口按参数区分。同名文件按“覆盖旧结果”设置处理。</small>
       </div>
     </template>
 

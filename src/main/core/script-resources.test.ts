@@ -35,7 +35,7 @@ describe('script-backed HTML resources', () => {
       sourcePageUrl: pageUrl,
       kind: 'video'
     })
-    expect(result.resources[1]?.xmlUrl).toMatch(/^\/resources\/media\/movie__[a-f0-9]{8}\.mp4$/)
+    expect(result.resources[1]?.xmlUrl).toBe('/resources/media/movie.mp4')
     expect(Object.fromEntries([...document.querySelector('iframe')!.attributes]
       .map(({ name, value }) => [name, value]))).toEqual({
       src: result.resources[0]?.xmlUrl,
@@ -70,9 +70,7 @@ describe('script-backed HTML resources', () => {
     expect(result.resources).toHaveLength(1)
     expect(result.resources[0]).toMatchObject({ kind: 'audio' })
     expect(result.resources[0]?.sourceUrl).toBe(new URL(source, pageUrl).href)
-    expect(result.resources[0]?.xmlUrl).toMatch(
-      new RegExp(`^/resources/media/录音__[a-f0-9]{8}\\.${extension}$`)
-    )
+    expect(result.resources[0]?.xmlUrl).toBe(`/resources/media/录音.${extension}`)
     expect(document.querySelectorAll('audio')).toHaveLength(1)
     expect(document.querySelector('audio')?.outerHTML)
       .toBe(`<audio controls="" src="${result.resources[0]?.xmlUrl}">音频</audio>`)

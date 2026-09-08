@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat, writeFile, open } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
@@ -14,6 +14,9 @@ export interface ResourceDownloadResult {
   path: string
   retries: number
 }
+
+// CollectorEngine 实例可共享资源目录；同名下载在整个主进程内顺序发布。
+const pendingResourceWrites = new Map<string, Promise<void>>()
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -47,6 +50,30 @@ export class ResourceDownloader {
   constructor(private readonly httpClient: Pick<HttpClient, 'fetchResource'> & Partial<Pick<HttpClient, 'inspectHtml' | 'acknowledgeSuccess'>>) {}
 
   async download(
+    plan: ResourcePlan,
+    request: RequestConfig,
+    overwrite: boolean
+  ): Promise<ResourceDownloadResult> {
+    const targetPath = resolve(plan.localPath)
+    const targetKey = ['win32', 'darwin'].includes(process.platform)
+      ? targetPath.toLowerCase()
+      : targetPath
+    const previous = pendingResourceWrites.get(targetKey)
+    let release!: () => void
+    const completed = new Promise<void>((resolve) => { release = resolve })
+    pendingResourceWrites.set(targetKey, completed)
+    try {
+      await previous
+      return await this.downloadFile(plan, request, overwrite)
+    } finally {
+      release()
+      if (pendingResourceWrites.get(targetKey) === completed) {
+        pendingResourceWrites.delete(targetKey)
+      }
+    }
+  }
+
+  private async downloadFile(
     plan: ResourcePlan,
     request: RequestConfig,
     overwrite: boolean

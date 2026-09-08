@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { normalizeResourceUrlPrefix } from '@shared/resource-config'
 import type { ResourceKind, ResourcePlan } from '@shared/types'
 import { hasSameHostname, resolveHttpUrl, sanitizeFileName } from './url-utils'
@@ -167,9 +167,9 @@ const canonicalResourceUrl = (value: string): string => {
   return url.toString()
 }
 
-const withQueryHash = (fileName: string, normalizedUrl: string): string => {
+const withFallbackQueryHash = (fileName: string, normalizedUrl: string): string => {
   const search = new URL(normalizedUrl).search
-  if (!search) return fileName
+  if (!search || kindFromExtension(extname(fileName).toLowerCase())) return fileName
   const hash = createHash('sha256').update(search).digest('hex').slice(0, 8)
   const dotIndex = fileName.lastIndexOf('.')
   return dotIndex > 0
@@ -177,10 +177,7 @@ const withQueryHash = (fileName: string, normalizedUrl: string): string => {
     : `${fileName}__${hash}`
 }
 
-export const buildResourceMirrorPath = (
-  absoluteUrl: string,
-  includeQueryHash: boolean
-): ResourceMirrorPath => {
+export const buildResourceMirrorPath = (absoluteUrl: string): ResourceMirrorPath => {
   const source = new URL(absoluteUrl)
   source.hash = ''
   const normalizedUrl = canonicalResourceUrl(source.toString())
@@ -189,10 +186,8 @@ export const buildResourceMirrorPath = (
     .filter(Boolean)
     .map(sanitizeResourceSegment)
   if (segments.length === 0 || source.pathname.endsWith('/')) segments.push('resource')
-  if (includeQueryHash) {
-    const lastIndex = segments.length - 1
-    segments[lastIndex] = withQueryHash(segments[lastIndex]!, normalizedUrl)
-  }
+  const lastIndex = segments.length - 1
+  segments[lastIndex] = withFallbackQueryHash(segments[lastIndex]!, normalizedUrl)
   return {
     normalizedUrl,
     sourceUrl: source.toString(),
@@ -229,7 +224,7 @@ export const createResourcePlan = (
 ): ResourcePlan | null => {
   const absoluteUrl = resolveHttpUrl(sourceValue, resolutionBaseUrl)
   if (!absoluteUrl || !hasSameHostname(ownerPageUrl, absoluteUrl)) return null
-  const mirror = buildResourceMirrorPath(absoluteUrl, true)
+  const mirror = buildResourceMirrorPath(absoluteUrl)
   const root = resolve(rootDirectory)
   const localPath = resolve(root, ...mirror.relativePath.split('/'))
   const relativeTarget = relative(root, localPath)

@@ -62,7 +62,7 @@ describe('processHtml', () => {
       task
     )
 
-    expect(result.value).toMatch(/src="\/resources\/images\/a__[a-f0-9]{8}\.jpg"/)
+    expect(result.value).toContain('src="/resources/images/a.jpg"')
     expect(result.value).toContain('href="/resources/files/a.pdf"')
     expect(result.value).toContain('href="https://www.example.com/news/2.html"')
     expect(result.value).toContain('src="https://cdn.example.com/a.jpg"')

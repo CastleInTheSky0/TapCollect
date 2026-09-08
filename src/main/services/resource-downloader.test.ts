@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTask } from '@shared/defaults'
 import type { FetchResourceResult } from '@main/core/http-client'
 import { HttpClient } from '@main/core/http-client'
+import { createResourcePlan } from '@main/core/resource-planner'
 import { AccessProtectionError } from '@main/core/access-errors'
 import { AccessCoordinator } from './access-coordinator'
 import type { ResourcePlan } from '@shared/types'
@@ -89,6 +90,72 @@ describe('resource downloader', () => {
     ).resolves.toEqual({ kind: 'skipped', path: target, retries: 0 })
     expect(fetchResource).not.toHaveBeenCalled()
     await expect(readFile(target, 'utf8')).resolves.toBe('existing')
+  })
+
+  it.each([false, true])('serializes identical original filenames across downloaders with overwrite=%s', async (overwrite) => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-same-name-'))
+    temporaryDirectories.push(root)
+    const pageUrl = 'https://example.com/article'
+    const plans = ['movie.mp4?token=first', 'movie.mp4?token=second', 'other.mp4'].map((file) =>
+      createResourcePlan(`/media/${file}`, pageUrl, pageUrl, root, '/resources', 'video')!
+    )
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const held = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const started = new Promise<void>((resolve) => { firstStarted = resolve })
+    const fetchResource = vi.fn(async (url: string): Promise<FetchResourceResult> => {
+      const token = new URL(url).searchParams.get('token')
+      if (token === 'first') {
+        firstStarted()
+        await held
+      }
+      return {
+        kind: 'success', requestedUrl: url, finalUrl: url, status: 200,
+        response: new Response(token ?? 'other'), retries: 0
+      }
+    })
+    const request = createTask('task').request
+    const first = new ResourceDownloader({ fetchResource }).download(plans[0]!, request, overwrite)
+    await started
+    const second = new ResourceDownloader({ fetchResource }).download(plans[1]!, request, overwrite)
+    try {
+      // 不同目标仍可完成；同名目标必须等第一个文件完整发布后再检查覆盖设置。
+      await new ResourceDownloader({ fetchResource }).download(plans[2]!, request, overwrite)
+      expect(fetchResource.mock.calls.map(([url]) => url)).toEqual([
+        plans[0]!.sourceUrl, plans[2]!.sourceUrl
+      ])
+    } finally {
+      releaseFirst()
+    }
+    const results = await Promise.all([first, second])
+    expect(results.map(({ kind }) => kind)).toEqual(['downloaded', overwrite ? 'downloaded' : 'skipped'])
+    expect(plans[0]!.localPath).toBe(plans[1]!.localPath)
+    expect(plans[0]!.relativePath).toBe('media/movie.mp4')
+    expect(plans[0]!.xmlUrl).toBe('/resources/media/movie.mp4')
+    await expect(readFile(plans[0]!.localPath, 'utf8')).resolves.toBe(overwrite ? 'second' : 'first')
+    expect(fetchResource).toHaveBeenCalledTimes(overwrite ? 3 : 2)
+    expect(await readdir(join(root, 'media'))).toEqual(['movie.mp4', 'other.mp4'])
+  })
+
+  it('releases a failed target so its queued original-name download can continue', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-queued-failure-'))
+    temporaryDirectories.push(root)
+    const target = join(root, 'a.mp4')
+    const fetchResource = vi.fn<(...args: Parameters<HttpClient['fetchResource']>) => Promise<FetchResourceResult>>()
+      .mockRejectedValueOnce(new Error('first request failed'))
+      .mockImplementationOnce(async (url) => ({
+        kind: 'success', requestedUrl: url, finalUrl: url, status: 200,
+        response: new Response('recovered'), retries: 0
+      }))
+    const request = createTask('task').request
+    const results = await Promise.allSettled([
+      new ResourceDownloader({ fetchResource }).download(planFor(target), request, false),
+      new ResourceDownloader({ fetchResource }).download(planFor(target), request, false)
+    ])
+    expect(results[0]).toMatchObject({ status: 'rejected', reason: { message: 'first request failed' } })
+    expect(results[1]).toMatchObject({ status: 'fulfilled', value: { kind: 'downloaded', path: target } })
+    await expect(readFile(target, 'utf8')).resolves.toBe('recovered')
+    expect(await readdir(root)).toEqual(['a.mp4'])
   })
 
   it('replaces an existing file from the completed temporary download when overwrite is enabled', async () => {
