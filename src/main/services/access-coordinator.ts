@@ -173,7 +173,7 @@ export class AccessCoordinator extends EventEmitter {
     const signal = this.signal
     return new Promise<Response>((resolve, reject) => {
       void this.run(url, config.delayMs, async () => {
-        const response = await state.breaker.execute(async () => {
+        const request = async (): Promise<Response> => {
           let response: Response
           try { response = await fetcher() } catch (error) {
             if (signal?.aborted) throw new RequestInterruptedError()
@@ -187,10 +187,16 @@ export class AccessCoordinator extends EventEmitter {
             const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
             await response.body?.cancel()
             if (retryAfter > 0) throw this.protect(hostname, `服务器返回 ${response.status}，按 Retry-After 等待`, Date.now() + retryAfter)
+            if (resource && response.status === 429) {
+              throw this.protect(hostname, '服务器返回 429，站点进入冷却', Date.now() + this.settings.cooldownSeconds * 1000)
+            }
             throw new RetryableRequestError(`服务器返回 ${response.status}`, response.status)
           }
           return response
-        }, signal)
+        }
+        // 普通资源故障由下载重试上限收敛，避免失效附件反复触发整站冷却。
+        // 明确的限流、Retry-After 和访问验证仍在 request 中保护同一站点。
+        const response = resource ? await request() : await state.breaker.execute(request, signal)
         const reader = response.body?.getReader()
         if (!reader) { resolve(response); return }
         await new Promise<void>((finished) => {

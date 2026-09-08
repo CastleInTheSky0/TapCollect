@@ -19,6 +19,7 @@ import {
   normalizeResourceUrlPrefix
 } from './resource-config'
 import { taskOutputFields, taskOutputMappings, taskOutputTemplate } from './output-template'
+import { detailAttachmentConfigurationIssues } from './detail-attachment'
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -66,7 +67,8 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
       selectorType: 'css',
       selector: ''
     },
-    linkAttribute: 'href'
+    linkAttribute: 'href',
+    attachment: { enabled: false, fieldPath: '' }
   },
   pagination: {
     mode: 'url',
@@ -145,7 +147,12 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
       selectorType: task.detail?.link?.selectorType ?? 'css',
       selector: task.detail?.link?.selector ?? ''
     },
-    linkAttribute: task.detail?.linkAttribute ?? 'href'
+    linkAttribute: task.detail?.linkAttribute ?? 'href',
+    attachment: {
+      enabled: task.detail?.attachment?.enabled === true,
+      fieldPath: typeof task.detail?.attachment?.fieldPath === 'string'
+        ? task.detail.attachment.fieldPath.trim() : ''
+    }
   }
   const pagination = {
     ...task.pagination,
@@ -265,6 +272,7 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
     }
   }
   issues.push(...disabledDetailPageMappingIssues(task))
+  issues.push(...detailAttachmentConfigurationIssues(task))
 
   const outputTemplate = taskOutputTemplate(task)
   if (task.output.format === 'xml' && !task.xml) {

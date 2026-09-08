@@ -296,6 +296,7 @@ const mappingValue = (
   definition: XmlFieldDefinition,
   record: ExtractedRecord
 ): string | null => {
+  if (record.detailAttachment?.fieldPath === definition.path) return record.detailAttachment.url
   if (mapping.mode === 'unconfigured') {
     throw new Error(`字段 ${definition.path} 尚未配置`)
   }

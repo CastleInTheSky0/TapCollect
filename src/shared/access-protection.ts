@@ -5,6 +5,7 @@ export interface AccessPolicySettings {
   minIntervalMs: number
   jitterPercent: number
   maxRetries: number
+  resourceMaxRetries: number
   retryBaseMs: number
   retryMaxMs: number
   failureThreshold: number
@@ -28,6 +29,7 @@ export const DEFAULT_ACCESS_POLICY: AccessPolicySettings = {
   minIntervalMs: 1000,
   jitterPercent: 20,
   maxRetries: 3,
+  resourceMaxRetries: 3,
   retryBaseMs: 1000,
   retryMaxMs: 30000,
   failureThreshold: 3,
@@ -52,6 +54,7 @@ export const normalizeAccessPolicy = (value: Partial<AccessPolicySettings> | nul
     minIntervalMs: bounded(value?.minIntervalMs, defaults.minIntervalMs, 0, 60000),
     jitterPercent: bounded(value?.jitterPercent, defaults.jitterPercent, 0, 100),
     maxRetries: bounded(value?.maxRetries, defaults.maxRetries, 0, 10),
+    resourceMaxRetries: bounded(value?.resourceMaxRetries, defaults.resourceMaxRetries, 0, 5),
     retryBaseMs,
     retryMaxMs: bounded(value?.retryMaxMs, defaults.retryMaxMs, retryBaseMs, 300000),
     failureThreshold: bounded(value?.failureThreshold, defaults.failureThreshold, 1, 20),

@@ -72,6 +72,10 @@ export interface DetailConfig {
   navigationMode: DetailNavigationMode
   link: SelectorConfig
   linkAttribute: string
+  attachment: {
+    enabled: boolean
+    fieldPath: string
+  }
 }
 
 export interface PaginationConfig {
@@ -288,6 +292,7 @@ export interface ExtractedRecord {
   externalUrl: string
   values: Record<string, string>
   resources?: ResourcePlan[]
+  detailAttachment?: { fieldPath: string; url: string }
 }
 
 export interface ResourcePlan {

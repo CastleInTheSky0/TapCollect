@@ -96,6 +96,11 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
   }
   validateSelector(detail.link, '任务配置.detail.link')
   requireString(detail, 'linkAttribute', '任务配置.detail')
+  if (detail.attachment !== undefined) {
+    const attachment = requireRecord(detail, 'attachment', '任务配置.detail')
+    requireBoolean(attachment, 'enabled', '任务配置.detail.attachment')
+    requireString(attachment, 'fieldPath', '任务配置.detail.attachment')
+  }
 
   const pagination = requireRecord(task, 'pagination', '任务配置')
   requireNumber(pagination, 'startPage', '任务配置.pagination')

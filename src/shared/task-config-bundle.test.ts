@@ -8,6 +8,22 @@ import {
 } from './task-config-bundle'
 
 describe('task config bundle', () => {
+  it('round-trips attachment settings and rejects malformed optional settings', () => {
+    const task = createTask('attachments')
+    task.detail.attachment = { enabled: true, fieldPath: 'file' }
+    const bundle = createTaskConfigBundle([task])
+    const imported = prepareImportedTaskConfig(parseTaskConfigBundle(bundle)[0]!, 'copy')
+    expect(imported.detail.attachment).toEqual(task.detail.attachment)
+    const legacy = JSON.parse(JSON.stringify(bundle))
+    delete legacy.tasks[0].detail.attachment
+    expect(prepareImportedTaskConfig(parseTaskConfigBundle(legacy)[0]!, 'old').detail.attachment.enabled).toBe(false)
+    for (const attachment of [null, { enabled: 'true', fieldPath: 'file' }, { enabled: true, fieldPath: 1 }]) {
+      const invalid = JSON.parse(JSON.stringify(bundle))
+      invalid.tasks[0].detail.attachment = attachment
+      expect(() => prepareImportedTaskConfig(parseTaskConfigBundle(invalid)[0]!, 'invalid')).toThrow()
+    }
+  })
+
   it('creates a versioned JSON bundle without sharing task references', () => {
     const task = createTask('task-1', '2026-08-09T00:00:00.000Z')
     task.name = '示例任务'

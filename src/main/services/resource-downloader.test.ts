@@ -1,9 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTask } from '@shared/defaults'
 import type { FetchResourceResult } from '@main/core/http-client'
+import { HttpClient } from '@main/core/http-client'
+import { AccessProtectionError } from '@main/core/access-errors'
+import { AccessCoordinator } from './access-coordinator'
 import type { ResourcePlan } from '@shared/types'
 import { ResourceDownloader } from './resource-downloader'
 
@@ -23,6 +26,29 @@ const planFor = (localPath: string): ResourcePlan => ({
 })
 
 describe('resource downloader', () => {
+  it.each(['text/html', 'application/msword'])('rejects a soft 404 served as %s without publishing it or replacing an existing file', async (contentType) => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-soft-404-'))
+    temporaryDirectories.push(root)
+    const target = join(root, 'file.doc')
+    await writeFile(target, 'original-file')
+    const fetcher = vi.fn(async () => new Response('<html><title>404错误提示</title><body>您访问的页面未找到</body></html>', { headers: { 'content-type': contentType } }))
+    const downloader = new ResourceDownloader(new HttpClient(fetcher))
+    await expect(downloader.download(planFor(target), createTask('task').request, true)).rejects.toMatchObject({ status: 200, retries: 0, message: '资源返回错误提示页面：404错误提示' })
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(await readFile(target, 'utf8')).toBe('original-file')
+    expect(await readdir(root)).toEqual(['file.doc'])
+  })
+
+  it('retains access protection when a binary-labelled download is actually a verification page', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-challenge-'))
+    temporaryDirectories.push(root)
+    const access = new AccessCoordinator('test-agent')
+    const fetcher = vi.fn(async () => new Response('<html><title>安全验证</title><body><input name="captcha">请输入验证码</body></html>', { headers: { 'content-type': 'application/octet-stream' } }))
+    const downloader = new ResourceDownloader(new HttpClient(fetcher, access))
+    await expect(downloader.download(planFor(join(root, 'file.doc')), createTask('task').request, true)).rejects.toBeInstanceOf(AccessProtectionError)
+    expect(await readdir(root)).toEqual([])
+  })
+
   it('streams a resource through a temporary file and atomically publishes it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-resource-download-'))
     temporaryDirectories.push(root)

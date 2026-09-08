@@ -97,6 +97,28 @@ describe('normalizeAppSettings', () => {
 })
 
 describe('taskConfigurationIssues', () => {
+  it('migrates attachment handling off and validates active output fields and downloads', () => {
+    const task = createRunnableTask()
+    const legacy = JSON.parse(JSON.stringify(task))
+    delete legacy.detail.attachment
+    expect(normalizeTaskConfig(legacy).detail.attachment).toEqual({ enabled: false, fieldPath: '' })
+    task.detail.attachment = { enabled: true, fieldPath: '' }
+    expect(taskConfigurationIssues(task)).toContain('请选择附件链接回填字段')
+    expect(taskConfigurationIssues(task)).toContain('识别并下载附件链接需要在第 5 步“资源处理”中开启“下载资源”')
+    task.detail.attachment.fieldPath = 'text'
+    task.resources.download = { enabled: true, rootDirectory: 'D:/files', urlPrefix: '/cms_files/old' }
+    expect(taskConfigurationIssues(task)).toEqual([])
+    const sheet = createRunnableSpreadsheetTask()
+    sheet.detail.attachment = { ...task.detail.attachment }
+    sheet.resources = task.resources
+    expect(taskConfigurationIssues(sheet)).toContain('附件链接回填字段“text”不在当前输出模板中，请重新选择')
+    sheet.detail.attachment.fieldPath = 'B'
+    expect(taskConfigurationIssues(sheet)).toEqual([])
+    sheet.detail.navigationMode = 'click'
+    sheet.resources.download.enabled = false
+    expect(taskConfigurationIssues(sheet)).toEqual([])
+  })
+
   it('defaults resource URL encoding off and migrates legacy tasks to the same behavior', () => {
     const task = createTask('resource-url-encoding-default')
     expect(task.resources.encodeUrls).toBe(false)

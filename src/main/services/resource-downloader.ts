@@ -6,7 +6,8 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { RequestConfig, ResourcePlan } from '@shared/types'
-import { HttpClient, HttpRequestError, decodeHtml } from '@main/core/http-client'
+import { HttpClient, HttpRequestError } from '@main/core/http-client'
+import { resourceErrorPageReason, resourceResponseHtml } from '@main/core/resource-response'
 
 export interface ResourceDownloadResult {
   kind: 'downloaded' | 'skipped'
@@ -88,15 +89,17 @@ export class ResourceDownloader {
         await writeFile(temporary, Buffer.alloc(0), { flag: 'wx' })
       }
 
-      if (response.response.headers.get('content-type')?.includes('text/html')) {
-        const file = await open(temporary, 'r')
-        try {
-          const buffer = Buffer.alloc(262144)
-          const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
-          const decoded = decodeHtml(buffer.subarray(0, bytesRead), response.response.headers.get('content-type'), request.manualEncoding)
-          this.httpClient.inspectHtml?.(decoded.html, response.finalUrl)
-        } finally { await file.close() }
-      }
+      const file = await open(temporary, 'r')
+      try {
+        const buffer = Buffer.alloc(262144)
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
+        const html = resourceResponseHtml(buffer.subarray(0, bytesRead), response.response.headers.get('content-type'), request.manualEncoding)
+        if (html !== null) {
+          this.httpClient.inspectHtml?.(html, response.finalUrl)
+          const reason = resourceErrorPageReason(html)
+          if (reason) throw new HttpRequestError(reason, response.finalUrl, response.status, response.retries)
+        }
+      } finally { await file.close() }
       this.httpClient.acknowledgeSuccess?.(response.finalUrl)
       const published = await publishFile(temporary, plan.localPath, overwrite)
       if (!published) {

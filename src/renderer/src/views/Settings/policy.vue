@@ -29,13 +29,17 @@ defineProps<{ section: string }>()
     <section class="settings-section">
       <h3>重试与退避</h3>
       <div class="setting-row"><div class="setting-copy"><strong>遵循 Retry-After</strong><p>服务器要求等待时暂停该站点，不受下方最大退避时间限制。</p></div><t-tag theme="default" variant="light">始终开启</t-tag></div>
-      <div class="setting-row"><div class="setting-copy"><strong>最大重试次数</strong><p>网络错误、408、425、429 和 5xx 的额外尝试次数。</p></div><div class="setting-control"><t-input-number v-model="model.access.maxRetries" aria-label="最大重试次数" :min="0" :max="10" :decimal-places="0" /><span>次</span></div></div>
+      <div class="setting-row"><div class="setting-copy"><strong>最大重试次数</strong><p>列表和详情请求遇到网络错误、408、425、429 和 5xx 时的额外尝试次数。</p></div><div class="setting-control"><t-input-number v-model="model.access.maxRetries" aria-label="最大重试次数" :min="0" :max="10" :decimal-places="0" /><span>次</span></div></div>
+      <div class="setting-row">
+        <div class="setting-copy"><strong>资源下载重试次数</strong><p>附件、图片等资源下载遇到网络错误、408、425 或 5xx 时，最多额外重试 0–5 次，默认 3 次；0 表示只尝试一次。400、404 等错误及可识别的错误提示网页直接跳过，失败写入日志并继续采集。限流和访问验证仍暂停。</p></div>
+        <div class="setting-control"><t-input-number v-model="model.access.resourceMaxRetries" aria-label="资源下载重试次数" :min="0" :max="5" :decimal-places="0" /><span>次</span></div>
+      </div>
       <div class="setting-row"><div class="setting-copy"><strong>初始退避时间</strong><p>重试使用指数退避，并加入随机等待。</p></div><div class="setting-control"><t-input-number v-model="model.access.retryBaseMs" aria-label="初始退避时间" :min="100" :max="60000" :step="100" :decimal-places="0" /><span>毫秒</span></div></div>
       <div class="setting-row"><div class="setting-copy"><strong>最大退避时间</strong><p>单次普通重试等待的上限。</p></div><div class="setting-control"><t-input-number v-model="model.access.retryMaxMs" aria-label="最大退避时间" :min="model.access.retryBaseMs" :max="300000" :step="1000" :decimal-places="0" /><span>毫秒</span></div></div>
     </section>
     <section class="settings-section">
       <h3>站点保护</h3>
-      <div class="setting-row"><div class="setting-copy"><strong>连续失败阈值</strong><p>同一站点连续达到此次数后进入冷却。</p></div><div class="setting-control"><t-input-number v-model="model.access.failureThreshold" aria-label="连续失败阈值" :min="1" :max="20" :decimal-places="0" /><span>次</span></div></div>
+      <div class="setting-row"><div class="setting-copy"><strong>连续失败阈值</strong><p>同一站点的页面请求连续达到此次数后进入冷却；普通资源下载失败按重试上限跳过。</p></div><div class="setting-control"><t-input-number v-model="model.access.failureThreshold" aria-label="连续失败阈值" :min="1" :max="20" :decimal-places="0" /><span>次</span></div></div>
       <div class="setting-row"><div class="setting-copy"><strong>站点冷却时间</strong><p>普通熔断的等待时间；动态页面临时错误也会进入冷却。</p></div><div class="setting-control"><t-input-number v-model="model.access.cooldownSeconds" aria-label="站点冷却时间" :min="5" :max="86400" :step="5" :decimal-places="0" /><span>秒</span></div></div>
       <div class="setting-row"><div class="setting-copy"><strong>识别 HTTP 200 验证页</strong><p>结合标题、表单与验证提示识别，避免将验证页当成空列表。</p></div><t-switch v-model="model.access.detectChallenges" aria-label="识别 HTTP 200 验证页" /></div>
       <div class="setting-row"><div class="setting-copy"><strong>需要人工处理时</strong><p>401、403 或验证页会暂停采集；检查访问条件后，在运行中心手动重试。</p></div><t-tag theme="warning" variant="light">暂停并提示</t-tag></div>

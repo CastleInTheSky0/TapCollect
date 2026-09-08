@@ -1,7 +1,9 @@
 import chardet from 'chardet'
 import iconv from 'iconv-lite'
-import type { RequestConfig } from '@shared/types'
+import type { RequestConfig, ResourceKind } from '@shared/types'
+import { detailResponseAttachmentKind } from './detail-attachment'
 import { CREDENTIAL_REQUEST_HEADERS } from '@shared/access-profile'
+import { DEFAULT_ACCESS_POLICY } from '@shared/access-protection'
 import { retry, handleWhen, ExponentialBackoff, noJitterGenerator } from 'cockatiel'
 import type { AccessCoordinator } from '@main/services/access-coordinator'
 import { RetryableRequestError, RequestInterruptedError, isAccessInterruption } from './access-errors'
@@ -53,6 +55,17 @@ export type FetchHtmlResult =
   | FetchHtmlSuccess
   | FetchHtmlNotFound
   | FetchHtmlExternalRedirect
+
+export interface FetchDetailAttachment {
+  kind: 'attachment'
+  requestedUrl: string
+  finalUrl: string
+  status: number
+  retries: number
+  resourceKind: ResourceKind
+}
+
+export type FetchDetailResult = FetchHtmlResult | FetchDetailAttachment
 
 export interface FetchResourceSuccess {
   kind: 'success'
@@ -179,6 +192,32 @@ export class HttpClient {
       'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     )
     if (result.kind !== 'success') return result
+    return this.readHtml(result, config)
+  }
+
+  async fetchDetail(
+    requestedUrl: string,
+    config: RequestConfig,
+    allowedHostname = new URL(requestedUrl).hostname
+  ): Promise<FetchDetailResult> {
+    const result = await this.fetchResponse(
+      requestedUrl, config, allowedHostname,
+      'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    )
+    if (result.kind !== 'success') return result
+    const resourceKind = detailResponseAttachmentKind(result.finalUrl, result.response.headers)
+    if (!resourceKind) return this.readHtml(result, config)
+    // 只识别响应头，取消正文以释放网络名额；正式资源阶段统一流式下载。
+    await discardResponseBody(result.response)
+    if (this.access?.signal?.aborted) throw new RequestInterruptedError()
+    this.access?.acknowledgeSuccess(result.finalUrl)
+    return {
+      kind: 'attachment', requestedUrl, finalUrl: result.finalUrl,
+      status: result.status, retries: result.retries, resourceKind
+    }
+  }
+
+  private async readHtml(result: RawFetchSuccess, config: RequestConfig): Promise<FetchHtmlSuccess> {
     try {
       const buffer = Buffer.from(await result.response.arrayBuffer())
       if (this.access?.signal?.aborted) throw new RequestInterruptedError()
@@ -191,7 +230,7 @@ export class HttpClient {
       this.access?.acknowledgeSuccess(result.finalUrl)
       return {
         kind: 'success',
-        requestedUrl,
+        requestedUrl: result.requestedUrl,
         finalUrl: result.finalUrl,
         status: result.status,
         html: decoded.html,
@@ -224,9 +263,12 @@ export class HttpClient {
     accept: string
   ): Promise<RawFetchResult> {
     const settings = this.access?.settings
+    const maxRetries = accept === '*/*'
+      ? settings?.resourceMaxRetries ?? DEFAULT_ACCESS_POLICY.resourceMaxRetries
+      : settings?.maxRetries ?? MAX_RETRIES
     let attempts = 0
     const policy = retry(handleWhen(error => error instanceof RetryableRequestError), {
-      maxAttempts: settings?.maxRetries ?? MAX_RETRIES,
+      maxAttempts: maxRetries,
       backoff: new ExponentialBackoff({
         initialDelay: settings?.retryBaseMs ?? 250,
         maxDelay: settings?.retryMaxMs ?? 2000,

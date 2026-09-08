@@ -17,6 +17,10 @@ import {
 } from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
 import { taskOutputTemplate } from '@shared/output-template'
+import { detailAttachmentConfigurationIssues, isDetailAttachmentEnabled } from '@shared/detail-attachment'
+import {
+  createDetailAttachmentRecord, detailAttachmentKind, immediateMissingListFields
+} from './detail-attachment'
 import { renderXmlBatch } from './xml-template'
 import {
   candidateToRecord,
@@ -260,12 +264,15 @@ export class CollectorEngine {
       ...new Set(
         page.candidates
           .map((candidate) => candidate.detailRequestUrl)
-          .filter((url): url is string => Boolean(url))
+          .filter((url): url is string => Boolean(url) &&
+            (!isDetailAttachmentEnabled(task) || !detailAttachmentKind(url)))
       )
     ].slice(0, Math.max(1, limit))
   }
 
   async testTask(task: TaskConfig): Promise<TestCollectionResult> {
+    const attachmentIssues = detailAttachmentConfigurationIssues(task)
+    if (attachmentIssues.length) throw new Error(attachmentIssues.join('；'))
     const outputTemplate = taskOutputTemplate(task)
     if (!outputTemplate) throw new Error('请先导入并配置输出模板')
     let clickSession: DynamicPageSession | null = null
@@ -289,8 +296,9 @@ export class CollectorEngine {
     try {
       for (const candidate of page.candidates.slice(0, 3)) {
         failures.push(...candidate.warnings)
-        if (candidate.missingListFields.length > 0) {
-          failures.push(...missingFailures(candidate, 'list-field', candidate.missingListFields))
+        const missingListFields = immediateMissingListFields(task, candidate)
+        if (missingListFields.length > 0) {
+          failures.push(...missingFailures(candidate, 'list-field', missingListFields))
           continue
         }
         const outcome = clickSession
@@ -603,11 +611,12 @@ export class CollectorEngine {
         }
         reservedKeys.add(key)
 
-        if (candidate.missingListFields.length > 0) {
+        const missingListFields = immediateMissingListFields(task, candidate)
+        if (missingListFields.length > 0) {
           committedKeys.add(key)
           checkpoint.seenKeys.push(key)
           checkpoint.counters.skipped += 1
-          for (const failure of missingFailures(candidate, 'list-field', candidate.missingListFields)) {
+          for (const failure of missingFailures(candidate, 'list-field', missingListFields)) {
             await appendFailure(failure)
           }
           continue
@@ -1036,11 +1045,19 @@ export class CollectorEngine {
       }
     }
     try {
-      const response = await this.httpClient.fetchHtml(
-        candidate.detailRequestUrl,
-        task.request,
-        new URL(candidate.listUrl).hostname
-      )
+      const attachmentsEnabled = isDetailAttachmentEnabled(task)
+      const directKind = attachmentsEnabled ? detailAttachmentKind(candidate.detailRequestUrl) : null
+      if (directKind) {
+        return this.finalizeRecord(task, candidate,
+          createDetailAttachmentRecord(task, candidate, candidate.detailRequestUrl, directKind), {})
+      }
+      const response = attachmentsEnabled
+        ? await this.httpClient.fetchDetail(candidate.detailRequestUrl, task.request, new URL(candidate.listUrl).hostname)
+        : await this.httpClient.fetchHtml(candidate.detailRequestUrl, task.request, new URL(candidate.listUrl).hostname)
+      if (response.kind === 'attachment') {
+        return this.finalizeRecord(task, candidate,
+          createDetailAttachmentRecord(task, candidate, response.finalUrl, response.resourceKind), {})
+      }
       if (response.kind === 'external-redirect') {
         const external = {
           ...candidate,
@@ -1175,6 +1192,13 @@ export class CollectorEngine {
     matchCounts: Record<string, number>,
     warnings: RecordFailure[] = []
   ): CandidateOutcome {
+    const missingListFields = candidate.missingListFields.filter(
+      (path) => path !== record.detailAttachment?.fieldPath
+    )
+    if (missingListFields.length) {
+      return { record: null, failures: missingFailures(candidate, 'list-field', missingListFields),
+        counter: 'skipped', matchCounts }
+    }
     const outputTemplate = taskOutputTemplate(task)
     const valueWarnings = outputTemplate
       ? outputTemplate.fields.flatMap((field) => {
@@ -1204,6 +1228,14 @@ export class CollectorEngine {
         counter: 'skipped',
         matchCounts
       }
+    }
+    if (record.detailAttachment && outputTemplate) {
+      const outputValues = outputTemplate.fields.map((field) => {
+        const mapping = outputTemplate.mappings.find((item) => item.fieldPath === field.path)
+        return mapping && mapping.mode !== 'unconfigured' ? resolveFieldValue(mapping, field, record) : ''
+      })
+      // 被回填覆盖的原字段资源不再属于最终输出，不能继续下载。
+      record.resources = (record.resources ?? []).filter((plan) => outputValues.some((value) => value.includes(plan.xmlUrl)))
     }
     return { record, failures: allWarnings, counter: 'success', matchCounts }
   }

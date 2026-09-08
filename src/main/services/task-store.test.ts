@@ -19,6 +19,30 @@ afterEach(async () => {
 })
 
 describe('TaskStore', () => {
+  it('migrates, persists and preserves the global resource retry limit through unrelated setting updates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-resource-retry-settings-'))
+    temporaryDirectories.push(root)
+    await writeFile(join(root, 'settings.json'), JSON.stringify({ access: { maxRetries: 8 } }))
+    const store = new TaskStore(root)
+    const previous = await store.getSettings()
+    expect(previous.access).toMatchObject({ maxRetries: 8, resourceMaxRetries: 3 })
+    await store.saveSettings({ access: { ...previous.access, resourceMaxRetries: 0 } })
+    await store.saveSettings({ autoCheckUpdates: true })
+    expect((await new TaskStore(root).getSettings()).access).toMatchObject({ maxRetries: 8, resourceMaxRetries: 0 })
+  })
+  it('persists attachment settings across reload and duplication', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-attachment-config-'))
+    temporaryDirectories.push(root)
+    const task = createTask('attachments')
+    task.detail.attachment = { enabled: true, fieldPath: ' file ' }
+    const store = new TaskStore(root)
+    await store.saveTask(task)
+    const reloaded = await new TaskStore(root).loadTask(task.id)
+    expect(reloaded?.detail.attachment).toEqual({ enabled: true, fieldPath: 'file' })
+    const copy = await store.duplicateTask(task.id)
+    expect(copy.detail.attachment).toEqual(reloaded?.detail.attachment)
+  })
+
   it('migrates legacy settings and clamps the formal task concurrency limit', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-store-settings-'))
     temporaryDirectories.push(root)

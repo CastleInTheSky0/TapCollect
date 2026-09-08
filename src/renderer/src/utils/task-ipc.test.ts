@@ -22,6 +22,7 @@ describe('snapshotForIpc', () => {
 describe('snapshotTaskForIpc', () => {
   it('converts a Vue reactive task into an Electron-cloneable JSON value', () => {
     const task = reactive(createTask('reactive-task'))
+    task.detail.attachment = { enabled: true, fieldPath: 'text' }
     task.listItem.selector = '.ListItem'
     task.pagination.mode = 'click'
     task.pagination.nextButton = { selectorType: 'xpath', selector: '//a[@title="下页"]' }

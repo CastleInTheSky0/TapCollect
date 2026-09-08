@@ -1,10 +1,18 @@
 <script setup lang="ts">
+import { watch } from 'vue'
+import { taskOutputMappings } from '@shared/output-template'
 import { ChevronRightIcon, CursorIcon, InternetIcon, LinkIcon, SearchIcon } from 'tdesign-icons-vue-next'
 import type { OutputFieldDefinition, TaskConfig } from '@shared/types'
 import type { PreviewOpenAction } from '@renderer/utils/preview-open-guard'
 
 // 任务草稿通过 v-model 传入；子组件直接编辑嵌套字段（与 FieldMappingEditor 的约定一致）
 const task = defineModel<TaskConfig>({ required: true })
+
+watch(() => task.value.detail.attachment.fieldPath, (path) => {
+  const mapping = taskOutputMappings(task.value).find((item) => item.fieldPath === path)
+  // 新选中的未配置字段以空值承接普通文章，已有映射保持用户设置。
+  if (mapping?.mode === 'unconfigured') mapping.mode = 'empty'
+})
 
 defineProps<{
   isClickDetail: boolean
@@ -151,6 +159,23 @@ const emit = defineEmits<{
           :label="outputFieldLabel(field)"
         />
       </t-select>
+    </div>
+  </div>
+  <div v-if="task.detail.enabled && !isClickDetail" class="section-line">
+    <div class="switch-line">
+      <span><strong>识别并下载附件链接</strong><small>详情链接直接指向文件时，保留列表字段并回填附件地址。</small></span>
+      <t-switch v-model="task.detail.attachment.enabled" aria-label="识别并下载附件链接" />
+    </div>
+    <div v-if="task.detail.attachment.enabled" class="field">
+      <span>附件链接回填字段</span>
+      <t-select v-model="task.detail.attachment.fieldPath" placeholder="请选择输出字段" aria-label="附件链接回填字段">
+        <t-option
+          v-for="field in activeOutputTemplate?.fields || []" :key="field.path"
+          :value="field.path" :label="outputFieldLabel(field)"
+        />
+      </t-select>
+      <small>附件地址覆盖所选字段；普通网页按第 4 步映射取值。请先导入模板再选择字段。</small>
+      <t-alert theme="info" message="请在第 5 步“资源处理”开启“下载资源”。附件保存位置和回填地址统一使用“资源存放根目录”及“输出内容中的资源访问前缀”。" />
     </div>
   </div>
   <div v-if="task.detail.navigationMode === 'link'" class="scope-note">

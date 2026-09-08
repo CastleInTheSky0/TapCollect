@@ -115,6 +115,9 @@ export const resolveFieldValueResult = (
   definition: OutputFieldDefinition,
   record: ExtractedRecord
 ): ResolvedFieldValue => {
+  if (record.detailAttachment?.fieldPath === definition.path) {
+    return { value: record.detailAttachment.url, warnings: [] }
+  }
   if (mapping.mode === 'unconfigured') throw new Error(`字段 ${definition.path} 尚未配置`)
   if (mapping.mode === 'preserve') return { value: definition.sampleValue, warnings: [] }
   if (mapping.mode === 'empty') return { value: '', warnings: [] }
@@ -144,11 +147,11 @@ export const resolveFieldValue = (
   record: ExtractedRecord
 ): string => resolveFieldValueResult(mapping, definition, record).value
 
-const ignoresExternalDetailRequirement = (
+const ignoresUnavailableDetailRequirement = (
   mapping: FieldMapping,
   record: ExtractedRecord
 ): boolean =>
-  Boolean(record.externalUrl) &&
+  Boolean(record.externalUrl || record.detailAttachment) &&
   mapping.mergeValues.length > 0 &&
   mapping.mergeValues.every((value) => value.mode === 'page' && value.pageSource === 'detail')
 
@@ -160,7 +163,7 @@ export const missingRequiredMergeFields = (
   if (!template) return []
   return template.mappings
     .filter((mapping) => mapping.mode === 'merge' && mapping.required)
-    .filter((mapping) => !ignoresExternalDetailRequirement(mapping, record))
+    .filter((mapping) => !ignoresUnavailableDetailRequirement(mapping, record))
     .filter((mapping) => {
       const definition = template.fields.find((field) => field.path === mapping.fieldPath)
       return !definition || !resolveFieldValue(mapping, definition, record).trim()

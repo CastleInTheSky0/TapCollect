@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTask } from '@shared/defaults'
 import { DEFAULT_ACCESS_POLICY } from '@shared/access-protection'
 import { AccessProtectionError, RequestInterruptedError } from '@main/core/access-errors'
-import { HttpClient } from '@main/core/http-client'
+import { HttpClient, HttpRequestError } from '@main/core/http-client'
 import { AccessCoordinator } from './access-coordinator'
 
 const setup = () => {
@@ -15,6 +15,70 @@ const setup = () => {
 afterEach(() => vi.useRealTimers())
 
 describe('shared access coordinator', () => {
+  it.each([400, 404, 405, 410, 422])('does not retry a resource HTTP %i or cool down the host', async (status) => {
+    const { access, config } = setup()
+    access.configure({ ...access.settings, failureThreshold: 1 })
+    const cancel = vi.fn()
+    const fetcher = vi.fn(async () => new Response(new ReadableStream({ cancel }), { status }))
+    const result = await new HttpClient(fetcher, access).fetchResource('https://example.com/file.doc', config).catch(error => error)
+    expect(result).toMatchObject({ status, retries: 0 })
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(access.getProtection('example.com')).toBeUndefined()
+  })
+
+  it.each([0, 1, 3, 5])('bounds resource failures to %i extra retries independently of page cooldowns', async (resourceMaxRetries) => {
+    vi.useFakeTimers()
+    for (const status of [0, 408, 425, 503]) {
+      const { access, config } = setup()
+      access.configure({ ...access.settings, resourceMaxRetries, maxRetries: 8, failureThreshold: 1 })
+      const fetcher = vi.fn(async () => {
+        if (!status) throw new Error('net::ERR_EMPTY_RESPONSE')
+        return new Response(null, { status })
+      })
+      const pending = new HttpClient(fetcher, access).fetchResource('http://example.com/legacy.doc', config).catch(error => error)
+      await vi.runAllTimersAsync()
+      const error = await pending
+      expect(error).toBeInstanceOf(HttpRequestError)
+      expect(error).toMatchObject({ status, retries: resourceMaxRetries })
+      expect(fetcher).toHaveBeenCalledTimes(resourceMaxRetries + 1)
+      expect(access.getProtection('example.com')).toBeUndefined()
+    }
+  })
+
+  it('keeps one resource retry budget through same-host redirects and continues page requests after exhaustion', async () => {
+    vi.useFakeTimers()
+    const { access, config } = setup()
+    access.configure({ ...access.settings, resourceMaxRetries: 1, failureThreshold: 1 })
+    const calls: string[] = []
+    const client = new HttpClient(async (url) => {
+      calls.push(String(url))
+      if (String(url).endsWith('/redirect')) return new Response(null, { status: 302, headers: { location: '/file.doc' } })
+      return String(url).endsWith('/file.doc') ? new Response(null, { status: 500 }) : new Response('<p>下一篇正文</p>')
+    }, access)
+    const pending = client.fetchResource('https://example.com/redirect', config).catch(error => error)
+    await vi.runAllTimersAsync()
+    expect(await pending).toMatchObject({ retries: 1 })
+    expect(calls).toEqual(['https://example.com/redirect', 'https://example.com/file.doc', 'https://example.com/redirect', 'https://example.com/file.doc'])
+    await expect(client.fetchHtml('https://example.com/article', config)).resolves.toMatchObject({ kind: 'success' })
+  })
+
+  it.each([
+    { status: 401, headers: {}, kind: 'action-required' },
+    { status: 403, headers: {}, kind: 'action-required' },
+    { status: 429, headers: {}, kind: 'cooling' },
+    { status: 503, headers: { 'retry-after': '3600' }, kind: 'cooling' }
+  ])('preserves explicit resource access protection for $status', async ({ status, headers, kind }) => {
+    const { access, config } = setup()
+    const fetcher = vi.fn(async () => new Response(null, { status, headers }))
+    const client = new HttpClient(fetcher, access)
+    await expect(client.fetchResource('https://example.com/file.doc', config)).rejects.toBeInstanceOf(AccessProtectionError)
+    await expect(client.fetchHtml('https://example.com/page', config)).rejects.toBeInstanceOf(AccessProtectionError)
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(access.getProtection('example.com')?.kind).toBe(kind)
+    if (status === 503) expect(access.getProtection('example.com')!.until - Date.now()).toBeGreaterThan(3590000)
+  })
+
   it('restores the submitter context when a queue starts work from another profile callback', async () => {
     const { access, config } = setup()
     const client = new HttpClient(async () => new Response('legacy'), access)
