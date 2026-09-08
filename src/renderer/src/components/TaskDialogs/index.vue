@@ -67,7 +67,7 @@ const emit = defineEmits<{
     width="500px"
     @closed="emit('closed')"
   >
-    <p class="dialog-copy">将导出当前全部已保存任务的完整配置，包括 XML/表格模板、本地目录和请求头。Cookie、Authorization 等请求头可能包含敏感信息，请妥善保管导出的 JSON 文件。</p>
+    <p class="dialog-copy">将导出全部已保存任务，包括模板、本地目录和非认证请求头。访问配置只保留本机标识，不包含会话；Cookie、Authorization、Proxy-Authorization 请求头会移除。导入其他环境后，缺失的访问配置需重新绑定。</p>
     <p v-if="hasUnsavedChanges" class="dialog-copy">当前任务存在未保存修改，本次只会导出上次保存的版本。</p>
     <div class="dialog-actions">
       <t-button theme="default" variant="text" @click="exportTaskConfigsPrompt = false">取消</t-button>

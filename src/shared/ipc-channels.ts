@@ -1,4 +1,9 @@
 export const IPC_CHANNELS = {
+  listAccessProfiles: 'access-profiles:list',
+  saveAccessProfile: 'access-profiles:save',
+  deleteAccessProfile: 'access-profiles:delete',
+  importAccessCookies: 'access-profiles:import-cookies',
+  clearAccessSession: 'access-profiles:clear-session',
   getAppRuntimeInfo: 'app:runtime-info',
   checkForUpdates: 'update:check',
   downloadUpdate: 'update:download',

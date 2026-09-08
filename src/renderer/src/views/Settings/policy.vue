@@ -50,7 +50,7 @@ defineProps<{ section: string }>()
     <section class="settings-section">
       <h3>诊断与数据</h3>
       <div class="setting-row"><div class="setting-copy"><strong>敏感信息脱敏</strong><p>运行诊断中的认证信息及常见敏感 URL 参数会隐藏。</p></div><t-tag theme="default" variant="light">始终开启</t-tag></div>
-      <div class="setting-row"><div class="setting-copy"><strong>会话与登录</strong><p>当前预览与采集会话相互隔离，预览中完成登录不会自动同步到采集任务。</p></div><t-tag theme="default" variant="light">独立会话</t-tag></div>
+      <div class="setting-row"><div class="setting-copy"><strong>会话与登录</strong><p>绑定同一访问配置的预览与采集共用 Cookie；未绑定任务保留独立会话。在“访问配置”中管理，在任务“基本信息”中绑定。</p></div><t-tag theme="default" variant="light">按配置隔离</t-tag></div>
     </section>
   </template>
 </template>

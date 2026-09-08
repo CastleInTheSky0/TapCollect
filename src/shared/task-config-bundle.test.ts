@@ -29,7 +29,8 @@ describe('task config bundle', () => {
       version: 1,
       exportedAt: '2026-08-09T01:00:00.000Z'
     })
-    expect(bundle.tasks[0]).toEqual(task)
+    expect(bundle.tasks[0]).toEqual({ ...task, request: { ...task.request, headers: [] } })
+    expect(JSON.stringify(bundle)).not.toContain('session=secret')
     expect(bundle.tasks[0]).not.toBe(task)
     expect(bundle.tasks[0]?.spreadsheet?.contentBase64).toBe('UEsDBAoAAAAA')
   })

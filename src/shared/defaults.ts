@@ -189,6 +189,7 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
   }
   return {
     ...task,
+    accessProfileId: typeof task.accessProfileId === 'string' ? task.accessProfileId.trim() : '',
     listUrl: analysis.firstUrl || task.listUrl.trim(),
     listPageRules: lines,
     detail,

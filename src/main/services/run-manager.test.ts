@@ -24,6 +24,7 @@ import { configureXmlRecord } from '@main/core/xml-template'
 import { RunManager } from './run-manager'
 import { TaskStore } from './task-store'
 import { AccessCoordinator } from './access-coordinator'
+import type { AccessProfileService, AccessProfileLease } from './access-profile-service'
 
 const temporaryDirectories: string[] = []
 
@@ -325,6 +326,39 @@ afterEach(async () => {
 })
 
 describe('RunManager', () => {
+  it('retains profile leases while queued, paused and testing and releases them on terminal states', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-profile-leases-'))
+    temporaryDirectories.push(root)
+    const store = new TaskStore(root)
+    await store.saveSettings({ maxConcurrentRuns: 1 })
+    for (const id of ['a', 'b', 'c']) await store.saveTask({ ...runnableTask(id, root), accessProfileId: 'c56a4180-65aa-42ec-a945-5fd21dec0538' })
+    const held = new Set<string>()
+    const profiles = { acquire: vi.fn(async (task: TaskConfig) => {
+      held.add(task.id)
+      return { release: () => held.delete(task.id) } as unknown as AccessProfileLease
+    }) } as unknown as AccessProfileService
+    const engine = new FakeCollectorEngine(store)
+    const manager = new RunManager(store, null, engine, undefined, profiles)
+    await manager.initialize()
+    await manager.start('a', false)
+    await manager.start('b', false)
+    expect(held).toEqual(new Set(['a', 'b']))
+    expect(manager.getSessionSnapshot().queuedCount).toBe(1)
+    await manager.cancel('b')
+    expect(held).toEqual(new Set(['a']))
+    await manager.pause('a')
+    await engine.settlePause('a')
+    await vi.waitFor(() => expect(manager.getSessionSnapshot().items.find(item => item.taskId === 'a')?.status).toBe('paused'))
+    expect(held.has('a')).toBe(true)
+    await manager.cancel('a')
+    await vi.waitFor(() => expect(held.size).toBe(0))
+    const testing = manager.testTask('c')
+    await vi.waitFor(() => expect(engine.hasPendingTest()).toBe(true))
+    expect(held.has('c')).toBe(true)
+    engine.completeTest()
+    await testing
+    expect(held.size).toBe(0)
+  })
   it('runs up to the configured limit and fills freed slots in FIFO order', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-run-manager-fifo-'))
     temporaryDirectories.push(root)

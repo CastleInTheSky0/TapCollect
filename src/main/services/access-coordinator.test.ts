@@ -15,6 +15,36 @@ const setup = () => {
 afterEach(() => vi.useRealTimers())
 
 describe('shared access coordinator', () => {
+  it('restores the submitter context when a queue starts work from another profile callback', async () => {
+    const { access, config } = setup()
+    const client = new HttpClient(async () => new Response('legacy'), access)
+    const identity = { userAgent: 'Profile-UA', language: 'en', fetch: async () => new Response('profile') }
+    let release!: () => void
+    const first = access.withContext('profile', undefined, () => access.run('https://example.com/slow', 0, () => new Promise<void>(resolve => { release = resolve })), identity)
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    const second = client.fetchHtml('https://example.com/legacy', config)
+    release()
+    await first
+    const result = await second
+    expect(result.kind === 'success' && result.html).toBe('legacy')
+  })
+  it('isolates concurrent profile transports and identities without splitting hostname cooldowns', async () => {
+    const { access, config } = setup()
+    const fallback = vi.fn(async () => new Response('<p>legacy</p>'))
+    const seen: string[] = []
+    const identity = (name: string) => ({ userAgent: `UA-${name}`, language: `lang-${name}`, fetch: (async (_url, init) => {
+      const headers = new Headers(init?.headers)
+      seen.push(`${headers.get('user-agent')} ${headers.get('accept-language')}`)
+      return new Response('<p>ok</p>')
+    }) as typeof fetch })
+    const client = new HttpClient(fallback, access)
+    await Promise.all(['one', 'two'].map(name => access.withContext(name, undefined, () => client.fetchHtml('https://example.com/list', config), identity(name))))
+    expect(seen.sort()).toEqual(['UA-one lang-one', 'UA-two lang-two'])
+    expect(fallback).not.toHaveBeenCalled()
+    access.protect('example.com', 'Retry-After', Date.now() + 60000)
+    await expect(access.withContext('other-profile', undefined, () => client.fetchHtml('https://example.com/list', config), identity('other'))).rejects.toBeInstanceOf(AccessProtectionError)
+    expect(seen).toHaveLength(2)
+  })
   it('spaces starts across tasks and schedules every redirect', async () => {
     const { access, config } = setup()
     access.configure({ ...access.settings, minIntervalMs: 50, hostConcurrency: 2 })

@@ -1,10 +1,20 @@
 import { normalizeTaskConfig } from './defaults'
+import { CREDENTIAL_REQUEST_HEADERS } from './access-profile'
 import type { TaskConfig, TaskConfigBundle } from './types'
 
 export const TASK_CONFIG_BUNDLE_FORMAT = 'tapcollect-task-bundle' as const
 export const TASK_CONFIG_BUNDLE_VERSION = 1 as const
 
 type JsonRecord = Record<string, unknown>
+
+const credentialFreeTask = (source: TaskConfig): TaskConfig => {
+  const task = JSON.parse(JSON.stringify(source)) as TaskConfig
+  task.request.headers = task.request.headers.filter(({ key }) => !CREDENTIAL_REQUEST_HEADERS.has(key.trim().toLowerCase()))
+  // Only the opaque reference belongs in a task bundle; reject injected session data.
+  const record = task as unknown as JsonRecord
+  for (const key of ['accessProfile', 'accessProfiles', 'cookies', 'credentials', 'session']) delete record[key]
+  return task
+}
 
 const asRecord = (value: unknown, label: string): JsonRecord => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -68,6 +78,7 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
     throw new Error('任务配置 version 必须为 1')
   }
   requireString(task, 'name', '任务配置')
+  if (task.accessProfileId !== undefined) requireString(task, 'accessProfileId', '任务配置')
   requireString(task, 'listUrl', '任务配置')
   if (task.listPageRules !== undefined) {
     requireStringArray(task, 'listPageRules', '任务配置')
@@ -152,7 +163,7 @@ export const createTaskConfigBundle = (
   format: TASK_CONFIG_BUNDLE_FORMAT,
   version: TASK_CONFIG_BUNDLE_VERSION,
   exportedAt,
-  tasks: JSON.parse(JSON.stringify(tasks)) as TaskConfig[]
+  tasks: tasks.map(credentialFreeTask)
 })
 
 export const parseTaskConfigBundle = (value: unknown): unknown[] => {
@@ -191,5 +202,5 @@ export const prepareImportedTaskConfig = (
       })
     ) as TaskConfig
   )
-  return { ...task, id, createdAt: now, updatedAt: now }
+  return credentialFreeTask({ ...task, id, createdAt: now, updatedAt: now })
 }

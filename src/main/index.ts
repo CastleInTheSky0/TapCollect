@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, Menu, net, shell, session } from 'electron'
 import { AccessCoordinator } from './services/access-coordinator'
+import { AccessProfileService } from './services/access-profile-service'
 import type { UpdateInstallResult } from '@shared/types'
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { registerIpcHandlers } from './ipc'
@@ -48,10 +49,13 @@ const createWindow = async (): Promise<void> => {
   const runtimeUserAgent = session.defaultSession.getUserAgent()
     .replace(/\s*Electron\/[^\s]+/g, '').replace(/\s*TapCollect\/[^\s]+/gi, '')
   const access = new AccessCoordinator(runtimeUserAgent)
-  const runManager = new RunManager(store, new ElectronDynamicPageProvider(window, access), null, access)
+  const profiles = new AccessProfileService(store.rootDirectory, access)
+  await profiles.initialize()
+  const runManager = new RunManager(store, new ElectronDynamicPageProvider(window, access, profiles), null, access, profiles)
   await runManager.initialize()
-  const preview = new PreviewService(window, access)
+  const preview = new PreviewService(window, access, profiles)
   let confirmedClose = false
+  let closing = false
   const updateService = new UpdateService({
     appName: APP_NAME,
     version: app.getVersion(),
@@ -92,8 +96,9 @@ const createWindow = async (): Promise<void> => {
       await runManager.restoreAfterFailedShutdown(shutdownSnapshot)
       throw error
     }
-    confirmedClose = true
     preview.close()
+    await profiles.flush()
+    confirmedClose = true
     setTimeout(() => app.quit(), 100)
     return { started: true, cancelled: false, message: '安装包已打开' }
   }
@@ -103,28 +108,33 @@ const createWindow = async (): Promise<void> => {
     runManager,
     preview,
     updateService,
-    installUpdate
+    installUpdate,
+    profiles
   )
 
   window.on('close', (event) => {
-    if (confirmedClose || !runManager.hasActiveRun()) return
+    if (confirmedClose) return
     event.preventDefault()
-    void dialog
-      .showMessageBox(window, {
-        type: 'warning',
-        title: '任务仍在运行',
-        message: '退出前会保存当前检查点，下次可以继续。确定退出吗？',
-        buttons: ['取消', '保存并退出'],
-        defaultId: 0,
-        cancelId: 0
-      })
-      .then(async (result) => {
+    if (closing) return
+    closing = true
+    void (async () => {
+      if (runManager.hasActiveRun()) {
+        const result = await dialog.showMessageBox(window, {
+          type: 'warning',
+          title: '任务仍在运行',
+          message: '退出前会保存当前检查点，下次可以继续。确定退出吗？',
+          buttons: ['取消', '保存并退出'],
+          defaultId: 0,
+          cancelId: 0
+        })
         if (result.response !== 1) return
         await runManager.prepareForShutdown()
-        confirmedClose = true
-        preview.close()
-        window.close()
-      })
+      }
+      preview.close()
+      await profiles.flush()
+      confirmedClose = true
+      window.close()
+    })().catch(() => dialog.showErrorBox('退出失败', '未能完成本机状态保存，请重试退出。')).finally(() => { closing = false })
   })
   window.on('closed', () => {
     preview.close()

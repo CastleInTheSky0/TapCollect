@@ -8,7 +8,8 @@ import type { RequestConfig } from '@shared/types'
 import { AccessProtectionError, RequestInterruptedError, RetryableRequestError, parseRetryAfter } from '@main/core/access-errors'
 import { detectBlockedPage } from '@main/core/block-detector'
 
-interface RequestContext { taskId: string; signal: AbortSignal | undefined }
+export interface AccessRequestIdentity { userAgent: string; language: string; fetch: typeof fetch }
+interface RequestContext { taskId: string; signal: AbortSignal | undefined; identity: AccessRequestIdentity | undefined }
 interface HostState {
   queue: PQueue
   starts: PQueue
@@ -45,18 +46,23 @@ export class AccessCoordinator extends EventEmitter {
     }
   }
 
-  withContext<T>(taskId: string, signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
-    return this.context.run({ taskId, signal }, operation)
+  withContext<T>(taskId: string, signal: AbortSignal | undefined, operation: () => Promise<T>, identity?: AccessRequestIdentity): Promise<T> {
+    return this.context.run({ taskId, signal, identity }, operation)
   }
 
   get signal(): AbortSignal | undefined { return this.context.getStore()?.signal }
+  get language(): string { return this.context.getStore()?.identity?.language ?? this.settings.language }
+  transport(url: string, init: RequestInit, fallback: typeof fetch): Promise<Response> {
+    return (this.context.getStore()?.identity?.fetch ?? fallback)(url, init)
+  }
 
   requestConfig(config: RequestConfig): RequestConfig {
+    const identity = this.context.getStore()?.identity
     return {
       ...config,
-      userAgent: this.settings.automaticUserAgent ? this.runtimeUserAgent : config.userAgent,
+      userAgent: identity?.userAgent ?? (this.settings.automaticUserAgent ? this.runtimeUserAgent : config.userAgent),
       headers: config.headers.filter(({ key }) =>
-        key.toLowerCase() !== 'accept-language' && (!this.settings.automaticUserAgent || key.toLowerCase() !== 'user-agent'))
+        key.trim().toLowerCase() !== 'accept-language' && (!(identity || this.settings.automaticUserAgent) || key.trim().toLowerCase() !== 'user-agent'))
     }
   }
 
@@ -126,6 +132,9 @@ export class AccessCoordinator extends EventEmitter {
   }
 
   async run<T>(url: string, minimumDelay: number, operation: () => Promise<T>, resource = false): Promise<T> {
+    // PQueue starts queued callbacks in the finishing request's async context.
+    // Retain the submitting task's identity through all shared queue layers.
+    const scopedOperation = AsyncLocalStorage.bind(operation)
     const hostname = new URL(url).hostname.toLowerCase()
     const state = this.host(hostname)
     const signal = this.signal
@@ -144,7 +153,7 @@ export class AccessCoordinator extends EventEmitter {
           this.assertAllowed(state, signal)
           state.lastStart = Date.now()
         }, { signal })
-        return operation()
+        return scopedOperation()
       }, { signal }) as T
     }
     try {

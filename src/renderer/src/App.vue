@@ -18,6 +18,7 @@ import UpdateAvailableNotice from '@renderer/components/UpdateAvailableNotice/in
 import { useFeedback } from '@renderer/composables/useFeedback'
 import { useAppNavigation } from '@renderer/composables/useAppNavigation'
 import { useAppSettings } from '@renderer/composables/useAppSettings'
+import { useAccessProfiles } from '@renderer/composables/useAccessProfiles'
 import { useAppUpdate } from '@renderer/composables/useAppUpdate'
 import { usePaneLayout } from '@renderer/composables/usePaneLayout'
 import { useRunSession } from '@renderer/composables/useRunSession'
@@ -29,6 +30,7 @@ const api = window.collector
 const aboutUpdateVisible = ref(false)
 
 const feedback = useFeedback()
+const accessProfileStore = useAccessProfiles(feedback)
 const navigationStore = useAppNavigation({
   showError: feedback.showError,
   getTasks: () => tasksStore.tasks.value,
@@ -108,7 +110,7 @@ const taskFormStore = useTaskForm({
     selectRunTask: runSessionStore.selectRunTask,
     setPreviewUrl: (url) => previewStore.setPreviewUrl(url),
     getPreviewVisible: () => previewVisible.value,
-    navigatePreview: (url) => api.previewNavigate(url),
+    navigatePreview: async (url) => { await previewStore.loadPreviewUrl(url); return true },
     schedulePreviewBounds: layoutStore.schedulePreviewBoundsUpdate,
     resetDetailSamples: () => previewStore.resetDetailSamples()
   }
@@ -144,6 +146,7 @@ const previewStore = usePreview({
 })
 
 provide(appStoreKey, {
+  accessProfileStore,
   openAboutDialog: () => { aboutUpdateVisible.value = true },
   navigationStore,
   settingsStore,
@@ -277,6 +280,7 @@ watch(runDrawerSurface, (current, previous) => {
 onMounted(async () => {
   try {
     settings.value = await api.getSettings()
+    await accessProfileStore.refresh()
     runSessionStore.applyRunSession(await api.getRunSession())
     await refreshTasks()
     await navigationStore.start()

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ChevronLeftIcon, ChevronRightIcon } from 'tdesign-icons-vue-next'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@renderer/store'
 import { WIZARD_STEPS } from '@renderer/constants/task'
 import WorkspaceHeader from '@renderer/components/WorkspaceHeader/index.vue'
@@ -10,7 +11,9 @@ import WizardStepList from '@renderer/components/WizardStepList/index.vue'
 import WizardStepOutput from '@renderer/components/WizardStepOutput/index.vue'
 import WizardStepTemplate from '@renderer/components/WizardStepTemplate/index.vue'
 
-const { settingsStore, runSessionStore, taskFormStore, previewStore } = useAppStore()
+const { settingsStore, runSessionStore, taskFormStore, previewStore, accessProfileStore } = useAppStore()
+const router = useRouter()
+const { profiles: accessProfiles, error: accessProfileError } = accessProfileStore
 const { saveDefaultOutputDirectory } = settingsStore
 const { runSession, activeTaskLocked, requestRun } = runSessionStore
 const {
@@ -119,6 +122,9 @@ const {
             :fixed-list-page-count="fixedListPageCount"
             :has-pagination-template="hasPaginationTemplate"
             :list-page-rule-analysis="listPageRuleAnalysis"
+            :access-profiles="accessProfiles"
+            :access-profile-error="accessProfileError"
+            @manage-profiles="router.push({ name: 'settings', params: { section: 'profiles' } })"
             @open-list-preview="openConfiguredListPreview('step-list')"
           />
           <WizardStepList

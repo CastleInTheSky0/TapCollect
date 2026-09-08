@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { AccessCoordinator } from './access-coordinator'
+import type { AccessProfileLease, AccessProfileService } from './access-profile-service'
+import { profileMatchesUrl } from '@shared/access-profile'
 import { BrowserWindow, WebContentsView } from 'electron'
 import type {
   PreviewBounds,
@@ -7,7 +9,8 @@ import type {
   PreviewEvaluateResult,
   PreviewNavigationState,
   PreviewPickRequest,
-  PreviewPickResult
+  PreviewPickResult,
+  TaskConfig
 } from '@shared/types'
 import { resolvePreviewSelection } from '@main/core/preview-selector'
 import { detectTextPrefix, stripTextPrefix, textMatchesPrefix } from '@shared/text-prefix'
@@ -88,13 +91,30 @@ export class PreviewService extends EventEmitter {
   private view: WebContentsView | null = null
   private pickSequence = 0
   private opening = false
+  private profile: AccessProfileLease | undefined
+  private identityKey = ''
+  private openSequence = 0
 
-  constructor(private readonly window: BrowserWindow, private readonly access?: AccessCoordinator) {
+  constructor(private readonly window: BrowserWindow, private readonly access?: AccessCoordinator, private readonly profiles?: AccessProfileService) {
     super()
   }
 
-  async open(url: string, bounds: PreviewBounds): Promise<boolean> {
+  async open(url: string, bounds: PreviewBounds, task?: TaskConfig): Promise<boolean> {
     const target = validatePreviewUrl(url)
+    const key = JSON.stringify([task?.accessProfileId ?? '', task?.request ?? null])
+    if (key !== this.identityKey) this.close()
+    const sequence = ++this.openSequence
+    if (!this.view && task?.accessProfileId) {
+      if (!this.profiles) throw new Error('访问配置服务不可用')
+      const profile = await this.profiles.acquire(task)
+      if (sequence !== this.openSequence) { profile?.release(); return false }
+      this.profile = profile
+    }
+    if (this.profile && !profileMatchesUrl(this.profile, target)) {
+      this.close()
+      throw new Error('预览地址与访问配置来源不匹配')
+    }
+    this.identityKey = key
     if (!this.view) this.createView()
     this.view?.setBounds(normalizeBounds(bounds))
     await this.view?.webContents.loadURL(target)
@@ -103,6 +123,7 @@ export class PreviewService extends EventEmitter {
 
   async navigate(url: string): Promise<boolean> {
     if (!this.view) throw new Error('网页预览尚未打开')
+    if (this.profile && !profileMatchesUrl(this.profile, url)) throw new Error('绑定访问配置的预览只能访问该配置来源')
     await this.view.webContents.loadURL(validatePreviewUrl(url))
     return true
   }
@@ -136,7 +157,11 @@ export class PreviewService extends EventEmitter {
 
   close(): boolean {
     const view = this.view
+    this.openSequence += 1
     this.opening = false
+    this.profile?.release()
+    this.profile = undefined
+    this.identityKey = ''
     if (!view) {
       this.emitNavigationState()
       return false
@@ -147,6 +172,8 @@ export class PreviewService extends EventEmitter {
     this.emitNavigationState()
     return true
   }
+
+  closeForProfile(id: string): void { if (this.profile?.id === id) this.close() }
 
   onNavigation(listener: (state: PreviewNavigationState) => void): () => void {
     this.on('navigation', listener)
@@ -436,11 +463,12 @@ export class PreviewService extends EventEmitter {
         contextIsolation: true,
         sandbox: true,
         javascript: true,
-        partition: 'web-info-collector-preview'
+        ...(this.profile ? { session: this.profile.session } : { partition: 'web-info-collector-preview' })
       }
     })
     this.view = view
-    if (this.access) {
+    if (this.profile) this.profile.attach(view.webContents)
+    else if (this.access) {
       view.webContents.setUserAgent(this.access.userAgent)
       view.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
         callback({ requestHeaders: { ...details.requestHeaders, 'Accept-Language': this.access!.settings.language } })
@@ -452,13 +480,16 @@ export class PreviewService extends EventEmitter {
     view.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
       callback(false)
     )
-    view.webContents.on('will-navigate', (event, url) => {
+    const guardNavigation = (event: Electron.Event, url: string): void => {
       try {
         validatePreviewUrl(url)
+        if (this.profile && !profileMatchesUrl(this.profile, url)) event.preventDefault()
       } catch {
         event.preventDefault()
       }
-    })
+    }
+    view.webContents.on('will-navigate', guardNavigation)
+    view.webContents.on('will-redirect', guardNavigation)
     view.webContents.on('did-navigate', () => {
       if (this.view === view) this.emitNavigationState()
     })

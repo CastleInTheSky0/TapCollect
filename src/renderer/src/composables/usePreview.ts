@@ -1,4 +1,4 @@
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import type {
   FieldMapping,
@@ -39,6 +39,10 @@ const emptyPreviewNavigationState = (): PreviewNavigationState => ({
 
 export const usePreview = (deps: PreviewDeps) => {
   const api = window.collector
+  watch(() => deps.getActiveTask()?.accessProfileId ?? '', () => {
+    deps.previewVisible.value = false
+    void api.previewClose().catch(deps.showError)
+  }, { flush: 'sync' })
   const previewUrl = ref('')
   const previewNavigationState = ref<PreviewNavigationState>(emptyPreviewNavigationState())
   const previewStatus = ref('尚未打开预览')
@@ -148,7 +152,8 @@ export const usePreview = (deps: PreviewDeps) => {
       const bounds = deps.layout.previewBounds()
       if (!bounds) throw new Error('无法确定网页预览区域，请调整窗口后重试')
       previewUrl.value = value
-      await api.previewOpen(value, bounds)
+      const task = deps.getActiveTask()
+      await api.previewOpen(value, bounds, task ? snapshotTaskForIpc(task) : undefined)
     } catch (error) {
       deps.previewVisible.value = false
       throw error

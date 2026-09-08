@@ -112,6 +112,25 @@ const run = async () => {
       throw new Error(output.error || `Electron preload 冒烟失败，退出码 ${String(exitCode)}`)
     }
 
+    // A second OS process proves encrypted sessions survive a real app restart.
+    await rm(resultPath, { force: true })
+    const restartExitCode = await new Promise((resolveExit, reject) => {
+      const child = spawn(electronPath, [`--user-data-dir=${userDataPath}`, temporaryRoot], {
+        cwd: projectRoot,
+        env: { ...process.env, TAPCOLLECT_PRELOAD_SMOKE_RESULT: resultPath,
+          TAPCOLLECT_PRELOAD_SMOKE_ENTRY: resolve(projectRoot, 'out/main/preload-smoke.js'),
+          TAPCOLLECT_PROFILE_RESTART_CHECK: '1' },
+        stdio: 'inherit', windowsHide: true
+      })
+      child.once('error', reject)
+      child.once('exit', resolveExit)
+    })
+    const restarted = JSON.parse(await readFile(resultPath, 'utf8'))
+    if (restartExitCode !== 0 || !restarted.ok || !restarted.result?.restartSessionWorks) {
+      throw new Error(restarted.error || '访问配置重启验证失败')
+    }
+    output.result.restartSessionWorks = true
+
     process.stdout.write(`${JSON.stringify(output.result, null, 2)}\n`)
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true })

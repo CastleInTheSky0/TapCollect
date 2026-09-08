@@ -18,6 +18,8 @@ import {
 import { allowedCustomRequestHeaders } from '@main/core/http-client'
 import { AccessProtectionError, RequestInterruptedError, isAccessInterruption, parseRetryAfter } from '@main/core/access-errors'
 import type { AccessCoordinator } from './access-coordinator'
+import type { AccessProfileService } from './access-profile-service'
+import { profileMatchesUrl } from '@shared/access-profile'
 
 const dynamicDomActionSource = resolveDynamicDomAction.toString()
 const dynamicDetailClickSource = resolveDynamicDetailClick.toString()
@@ -393,7 +395,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
 }
 
 export class ElectronDynamicPageProvider implements DynamicPageProvider {
-  constructor(private readonly hostWindow: BrowserWindow, private readonly access?: AccessCoordinator) {}
+  constructor(private readonly hostWindow: BrowserWindow, private readonly access?: AccessCoordinator, private readonly profiles?: AccessProfileService) {}
 
   async create(task: TaskConfig, requestedStartUrl?: string): Promise<DynamicPageSession> {
     const startUrl =
@@ -402,6 +404,9 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
       task.listUrl
     const parsed = validateHttpUrl(startUrl)
     const allowedHostname = parsed.hostname.toLowerCase()
+    if (task.accessProfileId && !this.profiles) throw new Error('访问配置服务不可用')
+    const profile = await this.profiles?.acquire(task)
+    if (profile && !profileMatchesUrl(profile, startUrl)) { profile.release(); throw new Error('动态页面地址与访问配置来源不匹配') }
     const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
@@ -409,9 +414,10 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
         sandbox: true,
         javascript: true,
         backgroundThrottling: false,
-        partition: `web-info-collector-dynamic-${randomUUID()}`
+        ...(profile ? { session: profile.session } : { partition: `web-info-collector-dynamic-${randomUUID()}` })
       }
     })
+    view.webContents.once('destroyed', () => profile?.release())
     view.setBackgroundColor('#ffffff')
     view.setBounds({ x: 100_000, y: 0, width: 1, height: 1 })
     const request = this.access?.requestConfig(task.request) ?? task.request
@@ -423,11 +429,11 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
     )
 
     const customHeaders = allowedCustomRequestHeaders(request)
-    view.webContents.session.webRequest.onBeforeSendHeaders(
+    if (!profile) view.webContents.session.webRequest.onBeforeSendHeaders(
       { urls: ['http://*/*', 'https://*/*'] },
       (details, callback) => {
         const headers = { ...details.requestHeaders }
-        if (this.access) headers['Accept-Language'] = this.access.settings.language
+        if (this.access) headers['Accept-Language'] = this.access.language
         try {
           if (new URL(details.url).hostname.toLowerCase() === allowedHostname) {
             for (const entry of customHeaders) headers[entry.key] = entry.value
@@ -447,9 +453,8 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
       allowedHostname,
       this.access
     )
-    if (this.access) {
-      view.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-        callback({})
+    const onResponse = (details: Electron.OnHeadersReceivedListenerDetails): void => {
+        if (!this.access) return
         if (details.resourceType !== 'mainFrame') return
         const status = details.statusCode
         if (status === 401 || status === 403) this.access?.protect(allowedHostname, `服务器返回 ${status}，请人工检查访问权限后重试`)
@@ -458,11 +463,12 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
           const duration = Math.max(parseRetryAfter(header), this.access?.settings.cooldownSeconds ? this.access.settings.cooldownSeconds * 1000 : 60000)
           this.access?.protect(allowedHostname, `动态页面返回 ${status}，站点进入冷却`, Date.now() + duration)
         }
-      })
     }
+    if (profile) profile.attach(view.webContents, onResponse)
+    else if (this.access) view.webContents.session.webRequest.onHeadersReceived((details, callback) => { callback({}); onResponse(details) })
     const guardNavigation = (event: Electron.Event, url: string): void => {
       try {
-        if (validateHttpUrl(url).hostname.toLowerCase() === allowedHostname) return
+        if (validateHttpUrl(url).hostname.toLowerCase() === allowedHostname && (!profile || profileMatchesUrl(profile, url))) return
       } catch {
         // Invalid and non-HTTP navigation is blocked below.
       }

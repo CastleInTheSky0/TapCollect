@@ -33,6 +33,7 @@ import type { TaskStore } from './task-store'
 import type { AccessCoordinator } from './access-coordinator'
 import { redactDiagnostic, type HostProtection } from '@shared/access-protection'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
+import type { AccessProfileLease, AccessProfileService } from './access-profile-service'
 
 const ACTIVE_STATUSES = new Set<RunSessionItem['status']>([
   'preparing',
@@ -60,6 +61,7 @@ interface CollectorEngineLike {
 }
 
 interface ManagedRun {
+  profile?: AccessProfileLease | undefined
   task: TaskConfig
   outputKey: string
   item: RunSessionItem
@@ -104,7 +106,8 @@ export class RunManager extends EventEmitter {
     private readonly store: TaskStore,
     dynamicPageProvider: DynamicPageProvider | null = null,
     engine: CollectorEngineLike | null = null,
-    private readonly access?: AccessCoordinator
+    private readonly access?: AccessCoordinator,
+    private readonly profiles?: AccessProfileService
   ) {
     super()
     this.engine =
@@ -208,12 +211,16 @@ export class RunManager extends EventEmitter {
     if (this.isTaskLocked(taskId)) throw new Error('该任务已经在运行、暂停或排队中')
 
     this.startingTaskIds.add(taskId)
+    let profile: AccessProfileLease | undefined
+    let admitted = false
     try {
       const task = await this.store.loadTask(taskId)
       if (!task) throw new Error('找不到任务')
       if (this.shuttingDown) throw new Error('应用正在退出，不能开始新任务')
       const issues = taskConfigurationIssues(task)
       if (issues.length > 0) throw new Error(`任务配置尚未完成：${issues.join('；')}`)
+      if (task.accessProfileId && !this.profiles) throw new Error('访问配置服务不可用')
+      profile = await this.profiles?.acquire(task)
 
       const checkpoint = resume ? await this.store.getCheckpoint(taskId) : null
       if (resume && !checkpoint) throw new Error('没有可继续的检查点')
@@ -240,6 +247,7 @@ export class RunManager extends EventEmitter {
         logs: []
       }
       this.runs.set(taskId, {
+        profile,
         task: clone(task),
         outputKey: normalizedOutputKey(task),
         item,
@@ -249,6 +257,7 @@ export class RunManager extends EventEmitter {
         finalizingCancellation: false,
         autoResumePending: false
       })
+      admitted = true
       this.queue.push(taskId)
       this.schedule()
       this.emitSession()
@@ -266,6 +275,7 @@ export class RunManager extends EventEmitter {
         message: current.message
       }
     } finally {
+      if (!admitted) profile?.release()
       this.startingTaskIds.delete(taskId)
     }
   }
@@ -480,6 +490,7 @@ export class RunManager extends EventEmitter {
     for (const previous of snapshot.runs) {
       const managed = this.runs.get(previous.taskId)
       if (previous.status === 'queued' && managed?.item.status === 'cancelled') {
+        managed.profile = await this.profiles?.acquire(managed.task)
         restoreQueuedItem(previous, '更新安装未启动，已恢复等待队列')
       }
     }
@@ -519,11 +530,15 @@ export class RunManager extends EventEmitter {
     if (this.isTaskLocked(taskId)) throw new Error('运行、暂停或排队中的任务不能执行测试')
     this.testingTaskId = taskId
     this.emitSession()
+    let profile: AccessProfileLease | undefined
     try {
       const task = await this.store.loadTask(taskId)
       if (!task) throw new Error('找不到任务')
-      return await (this.access ? this.access.withContext(taskId, undefined, () => operation(task)) : operation(task))
+      if (task.accessProfileId && !this.profiles) throw new Error('访问配置服务不可用')
+      profile = await this.profiles?.acquire(task)
+      return await (this.access ? this.access.withContext(taskId, undefined, () => operation(task), profile) : operation(task))
     } finally {
+      profile?.release()
       if (this.testingTaskId === taskId) this.testingTaskId = ''
       this.emitSession()
     }
@@ -593,7 +608,7 @@ export class RunManager extends EventEmitter {
         progress: (progress) => this.handleProgress(managed, progress),
         log: (log) => this.handleLog(managed, log)
       })
-      const result = await (this.access ? this.access.withContext(managed.item.taskId, control.signal, run) : run())
+      const result = await (this.access ? this.access.withContext(managed.item.taskId, control.signal, run, managed.profile) : run())
       if (result.status === 'paused') {
         managed.item.status = 'paused'
         managed.item.resume = true
@@ -723,6 +738,8 @@ export class RunManager extends EventEmitter {
   }
 
   private releaseOutputLock(managed: ManagedRun): void {
+    managed.profile?.release()
+    managed.profile = undefined
     if (this.outputLocks.get(managed.outputKey) === managed.item.taskId) {
       this.outputLocks.delete(managed.outputKey)
     }

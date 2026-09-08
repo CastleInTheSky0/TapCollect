@@ -6,6 +6,7 @@ import type { AppSettings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/defaults'
 import { useAppStore } from '@renderer/store'
 import SettingsPolicy from './policy.vue'
+import SettingsProfiles from './profiles.vue'
 
 const { settingsStore, openAboutDialog } = useAppStore()
 const { settings, settingsSaving, saveSettings } = settingsStore
@@ -15,12 +16,14 @@ const clone = (value: AppSettings): AppSettings => JSON.parse(JSON.stringify(val
 const baseline = ref(clone(settings.value))
 const draft = ref(clone(settings.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(baseline.value))
+const profileDirty = ref(false)
 const sections = [
   { id: 'general', title: '常规', icon: SettingIcon, description: '设置新任务的输出目录和应用更新偏好。' },
   { id: 'concurrency', title: '运行与并发', icon: ControlPlatformIcon, description: '统一限制任务与网络并发，控制多个任务访问同一站点时的总量。' },
   { id: 'pacing', title: '访问节奏', icon: TimeIcon, description: '让同一站点的请求保持间隔，列表、详情和资源共同遵守。' },
   { id: 'protection', title: '退避与保护', icon: SecuredIcon, description: '遇到临时故障时退避重试，遇到访问限制时保留进度并暂停。' },
-  { id: 'network', title: '网络与隐私', icon: InternetIcon, description: '统一浏览器身份与请求语言，保护诊断信息中的敏感内容。' }
+  { id: 'network', title: '网络与隐私', icon: InternetIcon, description: '统一浏览器身份与请求语言，保护诊断信息中的敏感内容。' },
+  { id: 'profiles', title: '访问配置', icon: SecuredIcon, description: '管理本机访问身份、Cookie 与会话，在任务的基本信息中选择绑定。' }
 ]
 const selected = computed(() => sections.find(item => item.id === route.params.section) ?? sections[0]!)
 const leaveVisible = ref(false)
@@ -31,7 +34,7 @@ const decideLeave = (value: boolean): void => {
   leaveDecision = null
 }
 onBeforeRouteLeave(() => {
-  if (!dirty.value) return true
+  if (!dirty.value && !profileDirty.value) return true
   return new Promise<boolean>(resolve => { leaveDecision = resolve; leaveVisible.value = true })
 })
 const resetDraft = (): void => { baseline.value = clone(settings.value); draft.value = clone(settings.value) }
@@ -56,7 +59,7 @@ const chooseDirectory = async (): Promise<void> => {
   <div class="settings-page">
     <header class="settings-header">
       <div><span>应用设置</span><h1>全局配置</h1></div>
-      <t-button theme="default" variant="outline" :disabled="settingsSaving" @click="draft = clone(DEFAULT_SETTINGS)">恢复默认设置</t-button>
+      <t-button v-if="selected.id !== 'profiles'" theme="default" variant="outline" :disabled="settingsSaving" @click="draft = clone(DEFAULT_SETTINGS)">恢复默认设置</t-button>
     </header>
     <div class="settings-layout">
       <nav class="settings-navigation" aria-label="设置分类">
@@ -92,12 +95,13 @@ const chooseDirectory = async (): Promise<void> => {
                 <div class="setting-row"><div class="setting-copy"><strong>关于与更新</strong><p>查看版本信息、手动检查更新和下载安装包。</p></div><t-button theme="primary" variant="text" @click="openAboutDialog">打开关于与更新</t-button></div>
               </section>
             </template>
-            <SettingsPolicy v-else v-model="draft" :section="selected.id" />
+            <SettingsPolicy v-else-if="selected.id !== 'profiles'" v-model="draft" :section="selected.id" />
+            <SettingsProfiles v-show="selected.id === 'profiles'" v-model:dirty="profileDirty" />
           </div>
         </div>
         <footer class="settings-footer">
-          <span :class="{ 'has-changes': dirty }">{{ dirty ? '有未保存的更改' : '设置保存在本机，不随任务配置导出' }}</span>
-          <div>
+          <span :class="{ 'has-changes': dirty || profileDirty }">{{ dirty || profileDirty ? '有未保存的更改' : selected.id === 'profiles' ? '访问配置使用独立保存按钮；Cookie 不随任务导出' : '设置保存在本机，不随任务配置导出' }}</span>
+          <div v-if="selected.id !== 'profiles'">
             <t-button theme="default" variant="outline" :disabled="!dirty || settingsSaving" @click="resetDraft">取消更改</t-button>
             <t-button theme="primary" :disabled="!dirty" :loading="settingsSaving" @click="save">保存设置</t-button>
           </div>

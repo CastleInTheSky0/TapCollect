@@ -1,4 +1,5 @@
 import type { AccessPolicySettings, HostProtection } from './access-protection'
+import type { AccessProfile, AccessProfileInput } from './access-profile'
 
 export type SelectorType = 'css' | 'xpath'
 export type PageLocatorType = SelectorType | 'markers'
@@ -195,6 +196,7 @@ export interface TaskConfig {
   version: 1
   id: string
   name: string
+  accessProfileId?: string
   listUrl: string
   listPageRules: string[]
   listItem: SelectorConfig
@@ -555,6 +557,11 @@ export interface UpdateInstallResult {
 }
 
 export interface CollectorApi {
+  listAccessProfiles: () => Promise<AccessProfile[]>
+  saveAccessProfile: (profile: AccessProfileInput) => Promise<AccessProfileInput>
+  deleteAccessProfile: (id: string) => Promise<boolean>
+  importAccessCookies: (id: string, json: string) => Promise<void>
+  clearAccessSession: (id: string) => Promise<void>
   getAppRuntimeInfo: () => Promise<AppRuntimeInfo>
   checkForUpdates: () => Promise<UpdateCheckResult>
   downloadUpdate: () => Promise<DownloadedUpdate>
@@ -597,7 +604,7 @@ export interface CollectorApi {
   cancelAllRuns: () => Promise<boolean>
   openOutputDirectory: (taskId: string) => Promise<boolean>
   openErrorLog: (taskId: string, path: string) => Promise<boolean>
-  previewOpen: (url: string, bounds: PreviewBounds) => Promise<boolean>
+  previewOpen: (url: string, bounds: PreviewBounds, task?: TaskConfig) => Promise<boolean>
   previewNavigate: (url: string) => Promise<boolean>
   previewGoBack: () => Promise<boolean>
   previewGoForward: () => Promise<boolean>

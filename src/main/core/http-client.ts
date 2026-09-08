@@ -1,6 +1,7 @@
 import chardet from 'chardet'
 import iconv from 'iconv-lite'
 import type { RequestConfig } from '@shared/types'
+import { CREDENTIAL_REQUEST_HEADERS } from '@shared/access-profile'
 import { retry, handleWhen, ExponentialBackoff, noJitterGenerator } from 'cockatiel'
 import type { AccessCoordinator } from '@main/services/access-coordinator'
 import { RetryableRequestError, RequestInterruptedError, isAccessInterruption } from './access-errors'
@@ -12,9 +13,7 @@ const FORBIDDEN_CUSTOM_HEADERS = new Set([
   'host',
   'content-length',
   'connection',
-  'cookie',
-  'authorization',
-  'proxy-authorization'
+  ...CREDENTIAL_REQUEST_HEADERS
 ])
 
 export const allowedCustomRequestHeaders = (
@@ -267,15 +266,18 @@ export class HttpClient {
       try {
         const effective = this.access?.requestConfig(config) ?? config
         const headers = buildHeaders(effective, accept)
-        if (this.access) headers.set('accept-language', this.access.settings.language)
+        if (this.access) headers.set('accept-language', this.access.language)
         const signal = this.access?.signal
-        const fetchResponse = (): Promise<Response> => this.fetchImplementation(currentUrl, {
+        const init: RequestInit = {
           method: 'GET',
           redirect: 'manual',
           headers,
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(config.timeoutSeconds * 1000)])
             : AbortSignal.timeout(config.timeoutSeconds * 1000)
-        })
+        }
+        const fetchResponse = (): Promise<Response> => this.access
+          ? this.access.transport(currentUrl, init, this.fetchImplementation)
+          : this.fetchImplementation(currentUrl, init)
         response = this.access
           ? await this.access.fetch(currentUrl, config, fetchResponse, accept === '*/*')
           : await fetchResponse()

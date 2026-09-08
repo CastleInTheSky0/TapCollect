@@ -29,6 +29,8 @@ import type { PreviewService } from './services/preview-service'
 import type { RunManager } from './services/run-manager'
 import { atomicWrite, type TaskStore } from './services/task-store'
 import type { UpdateService } from './services/update-service'
+import type { AccessProfileService } from './services/access-profile-service'
+import type { AccessProfileInput } from '@shared/access-profile'
 
 const decodeXmlFile = (bytes: Buffer): string => {
   const prefix = bytes.subarray(0, Math.min(bytes.length, 1_024)).toString('latin1')
@@ -60,8 +62,30 @@ export const registerIpcHandlers = (
   runManager: RunManager,
   preview: PreviewService,
   updateService: UpdateService,
-  installUpdate: (downloadId: string) => Promise<UpdateInstallResult>
+  installUpdate: (downloadId: string) => Promise<UpdateInstallResult>,
+  profiles?: AccessProfileService
 ): void => {
+  const requireProfiles = (): AccessProfileService => {
+    if (!profiles) throw new Error('访问配置服务不可用')
+    return profiles
+  }
+  ipcMain.handle(IPC_CHANNELS.listAccessProfiles, () => profiles?.list() ?? [])
+  ipcMain.handle(IPC_CHANNELS.saveAccessProfile, (_event, input: AccessProfileInput) => {
+    preview.closeForProfile(input.id)
+    return requireProfiles().save(input)
+  })
+  ipcMain.handle(IPC_CHANNELS.deleteAccessProfile, (_event, id: string) => {
+    preview.closeForProfile(id)
+    return requireProfiles().remove(id, async () => (await store.listTaskConfigs()).some(task => task.accessProfileId === id))
+  })
+  ipcMain.handle(IPC_CHANNELS.importAccessCookies, (_event, id: string, json: string) => {
+    preview.closeForProfile(id)
+    return requireProfiles().importCookies(id, json)
+  })
+  ipcMain.handle(IPC_CHANNELS.clearAccessSession, (_event, id: string) => {
+    preview.closeForProfile(id)
+    return requireProfiles().clearSession(id)
+  })
   ipcMain.handle(IPC_CHANNELS.getAppRuntimeInfo, () => updateService.getRuntimeInfo())
   ipcMain.handle(IPC_CHANNELS.checkForUpdates, () => updateService.checkForUpdates())
   ipcMain.handle(IPC_CHANNELS.downloadUpdate, () => updateService.downloadUpdate())
@@ -258,8 +282,8 @@ export const registerIpcHandlers = (
       return error === ''
     }
   )
-  ipcMain.handle(IPC_CHANNELS.previewOpen, (_event, url: string, bounds: PreviewBounds) =>
-    preview.open(url, bounds)
+  ipcMain.handle(IPC_CHANNELS.previewOpen, (_event, url: string, bounds: PreviewBounds, task?: TaskConfig) =>
+    preview.open(url, bounds, task)
   )
   ipcMain.handle(IPC_CHANNELS.previewNavigate, (_event, url: string) => preview.navigate(url))
   ipcMain.handle(IPC_CHANNELS.previewGoBack, () => preview.goBack())

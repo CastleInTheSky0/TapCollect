@@ -13,6 +13,9 @@ import { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
 import { UpdateService } from '@main/services/update-service'
 import { createTask } from '@shared/defaults'
+import { AccessCoordinator } from '@main/services/access-coordinator'
+import { AccessProfileService } from '@main/services/access-profile-service'
+import { verifyAccessProfiles, seedProfileRestartCheck, verifyProfileAfterRestart } from './access-profile-smoke'
 import type {
   PreviewEvaluateResult,
   PreviewNavigationState,
@@ -20,6 +23,7 @@ import type {
 } from '@shared/types'
 
 interface PreloadSmokeResult {
+  accessProfilesWork: boolean
   hasCollector: boolean
   hasUpdateApi: boolean
   hasRunSubscription: boolean
@@ -765,9 +769,12 @@ const run = async (): Promise<PreloadSmokeResult> => {
     })
     const store = new TaskStore(taskDataDirectory.rootDirectory)
     await store.initialize()
-    const runManager = new RunManager(store)
+    const access = new AccessCoordinator('Smoke-Chromium-UA')
+    const profiles = new AccessProfileService(store.rootDirectory, access)
+    await profiles.initialize()
+    const runManager = new RunManager(store, new ElectronDynamicPageProvider(window, access, profiles), null, access, profiles)
     await runManager.initialize()
-    preview = new PreviewService(window)
+    preview = new PreviewService(window, access, profiles)
     const updateService = new UpdateService({
       appName: 'TapCollect',
       version: app.getVersion(),
@@ -785,7 +792,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       started: false,
       cancelled: true,
       message: '冒烟测试不执行安装'
-    }))
+    }), profiles)
 
     previewServer = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
@@ -1003,6 +1010,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       | 'previewPickWorks'
       | 'dynamicPartialLoadWorks'
       | 'usesUserDataTaskStore'
+      | 'accessProfilesWork'
     >
     writeStage('renderer-evaluated')
 
@@ -1015,9 +1023,13 @@ const run = async (): Promise<PreloadSmokeResult> => {
       `${previewUrl}partial-load`
     )
     writeStage('dynamic-partial-load-verified')
+    const accessProfilesWork = await verifyAccessProfiles(window, store, profiles, access, runManager, preview)
+    writeStage('access-profiles-verified')
+    await seedProfileRestartCheck(store, profiles)
 
     return {
       ...result,
+      accessProfilesWork,
       previewNavigationWorks,
       previewPickWorks,
       dynamicPartialLoadWorks,
@@ -1038,9 +1050,16 @@ const run = async (): Promise<PreloadSmokeResult> => {
 
 const main = async (): Promise<void> => {
   try {
+    if (process.env.TAPCOLLECT_PROFILE_RESTART_CHECK === '1') {
+      const restartSessionWorks = await verifyProfileAfterRestart()
+      await writeFile(resultPath, JSON.stringify({ ok: true, result: { restartSessionWorks } }), 'utf8')
+      app.exit(0)
+      return
+    }
     const result = await run()
     if (
       !result.hasCollector ||
+      !result.accessProfilesWork ||
       !result.hasUpdateApi ||
       !result.hasRunSubscription ||
       !result.hasTaskConfigTransfer ||

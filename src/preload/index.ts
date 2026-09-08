@@ -17,6 +17,11 @@ const eventSubscription = <T>(channel: string, listener: (payload: T) => void): 
 }
 
 const api: CollectorApi = {
+  listAccessProfiles: () => ipcRenderer.invoke(IPC_CHANNELS.listAccessProfiles),
+  saveAccessProfile: (profile) => ipcRenderer.invoke(IPC_CHANNELS.saveAccessProfile, profile),
+  deleteAccessProfile: (id) => ipcRenderer.invoke(IPC_CHANNELS.deleteAccessProfile, id),
+  importAccessCookies: (id, json) => ipcRenderer.invoke(IPC_CHANNELS.importAccessCookies, id, json),
+  clearAccessSession: (id) => ipcRenderer.invoke(IPC_CHANNELS.clearAccessSession, id),
   getAppRuntimeInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppRuntimeInfo),
   checkForUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.checkForUpdates),
   downloadUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.downloadUpdate),
@@ -58,7 +63,7 @@ const api: CollectorApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openOutputDirectory, taskId),
   openErrorLog: (taskId, path) =>
     ipcRenderer.invoke(IPC_CHANNELS.openErrorLog, taskId, path),
-  previewOpen: (url, bounds) => ipcRenderer.invoke(IPC_CHANNELS.previewOpen, url, bounds),
+  previewOpen: (url, bounds, task) => ipcRenderer.invoke(IPC_CHANNELS.previewOpen, url, bounds, task),
   previewNavigate: (url) => ipcRenderer.invoke(IPC_CHANNELS.previewNavigate, url),
   previewGoBack: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoBack),
   previewGoForward: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoForward),
