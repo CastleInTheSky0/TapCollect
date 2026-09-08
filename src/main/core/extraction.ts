@@ -142,7 +142,9 @@ const extractMappingValue = (
       matchCount = result.matchCount
     } else {
       matchCount = selectMappingNodes(root, mapping).length
-      raw = extractRawValue(root, mapping, task.html.cleanHtml)
+      // HTML cleanup must first recover known script-backed resource references.
+      // Explicit content filters still run here, before resources are planned.
+      raw = extractRawValue(root, mapping, task.html.cleanHtml && mapping.extraction !== 'html')
     }
   } catch (error) {
     if (error instanceof ContentFilterSelectorError) {

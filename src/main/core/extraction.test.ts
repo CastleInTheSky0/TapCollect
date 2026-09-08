@@ -97,6 +97,43 @@ const template = (): XmlTemplateConfig => ({
 })
 
 describe('page extraction', () => {
+  it.each(['css', 'xpath'] as const)('recovers script resources in %s HTML mappings after explicit filters', (selectorType) => {
+    const task = createTask('script-resource-extraction')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a.title'
+    task.xml = template()
+    task.resources.download = { enabled: true, rootDirectory: 'D:/resources', urlPrefix: '/resources' }
+    const mapping = task.xml.mappings[1]!
+    mapping.selectorType = selectorType
+    mapping.selector = selectorType === 'css' ? '#content' : '//*[@id="content"]'
+    mapping.contentFilterSelectors = ['.excluded']
+    const candidate = extractListPage(task,
+      '<div class="item"><a class="title" href="/detail/1">标题</a></div>',
+      task.listUrl, 1, 0).candidates[0]!
+    const html = '<div id="content">正文<script>showVsbpdfIframe("/files/report.pdf");</script>' +
+      '<script name="_videourl" vurl="/media/movie.mp4"></script>' +
+      '<div class="excluded"><script>showVsbVideo("/media/excluded.mp4");</script></div></div>'
+
+    const detail = extractDetailPage(task, candidate, html, candidate.detailUrl)
+    expect(detail.missingFields).toEqual([])
+    expect(detail.record.resources?.map(({ kind }) => kind)).toEqual(['attachment', 'video'])
+    expect(detail.record.values.text).toContain('href="/resources/files/report.pdf"')
+    expect(detail.record.values.text).toContain('src="/resources/media/movie.mp4"')
+    expect(detail.record.values.text).not.toContain('excluded')
+    expect(detail.record.values.text).not.toContain('script')
+
+    mapping.contentFilterSelectors = ['script']
+    const filtered = extractDetailPage(task, candidate, html, candidate.detailUrl)
+    expect(filtered.record.resources).toEqual([])
+
+    mapping.contentFilterSelectors = ['.excluded']
+    mapping.extraction = 'text'
+    const text = extractDetailPage(task, candidate, html, candidate.detailUrl)
+    expect(text.record.values.text).toBe('正文')
+    expect(text.record.resources).toEqual([])
+  })
+
   it('extracts relative list fields and a cleaned detail body', () => {
     const task = createTask('task')
     task.listUrl = 'https://www.example.com/list?page=1'

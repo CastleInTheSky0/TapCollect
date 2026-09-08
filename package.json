@@ -95,6 +95,7 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "0.9.10",
+    "acorn": "8.18.0",
     "chardet": "2.2.0",
     "cockatiel": "4.0.0",
     "fontoxpath": "3.34.0",

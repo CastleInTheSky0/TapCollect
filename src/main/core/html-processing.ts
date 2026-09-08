@@ -7,6 +7,7 @@ import type {
   TaskConfig
 } from '@shared/types'
 import { applyReplacementRules, hasSameHostname, resolveHttpUrl } from './url-utils'
+import { materializeScriptResources } from './script-resources'
 import {
   classifyResourceReference,
   createResourcePlan,
@@ -116,6 +117,8 @@ const createHtmlDocument = (
   const sanitizedUrlAttributes = new Set(
     [...attributes, ...OTHER_URL_ATTRIBUTES].map((attribute) => attribute.toLowerCase())
   )
+
+  materializeScriptResources(document, baseUrl)
 
   if (config.cleanHtml) {
     document.querySelectorAll('script,noscript').forEach((element) => element.remove())
