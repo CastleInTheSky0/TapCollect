@@ -4,6 +4,8 @@ import { normalizeResourceUrlPrefix } from '@shared/resource-config'
 import type { ResourceKind, ResourcePlan } from '@shared/types'
 import { hasSameHostname, resolveHttpUrl, sanitizeFileName } from './url-utils'
 
+export const PDF_PREVIEW_CLASS = 'article-pdf-preview'
+
 const IMAGE_EXTENSIONS = new Set([
   '.avif', '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.svg', '.tif', '.tiff', '.webp'
 ])
@@ -23,6 +25,7 @@ const ATTACHMENT_EXTENSIONS = new Set([
 
 export interface ResourceReferenceContext {
   tagName: string
+  className?: string
   parentTagName?: string
   attributeName: string
   hasDownloadAttribute?: boolean
@@ -67,6 +70,10 @@ export const classifyResourceReference = (
 
   if (context.styleUrl) return extensionKind ?? 'other'
   if (attributeName === 'poster') return 'image'
+  if (
+    tagName === 'iframe' && attributeName === 'src' &&
+    context.className?.split(/\s+/).includes(PDF_PREVIEW_CLASS)
+  ) return 'attachment'
   if (tagName === 'img' || tagName === 'image' || parentTagName === 'picture') return 'image'
   if (tagName === 'audio' || parentTagName === 'audio') return 'audio'
   if (tagName === 'video' || parentTagName === 'video') return 'video'

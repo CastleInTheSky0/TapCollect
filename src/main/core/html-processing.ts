@@ -7,7 +7,7 @@ import type {
   TaskConfig
 } from '@shared/types'
 import { applyReplacementRules, hasSameHostname, resolveHttpUrl } from './url-utils'
-import { materializeScriptResources } from './script-resources'
+import { isLegacyAttachmentPreview, materializeScriptResources } from './script-resources'
 import {
   classifyResourceReference,
   createResourcePlan,
@@ -37,6 +37,7 @@ const elementReferenceContext = (
   styleUrl = false
 ): ResourceReferenceContext => ({
   tagName: element?.tagName ?? '',
+  className: element?.getAttribute('class') ?? '',
   parentTagName: element?.parentElement?.tagName ?? '',
   attributeName,
   hasDownloadAttribute: element?.hasAttribute('download') ?? false,
@@ -87,11 +88,6 @@ const removeComments = (document: Document): void => {
   comments.forEach((comment) => comment.remove())
 }
 
-const shouldRemoveAttachmentPreview = (element: Element): boolean => {
-  if (element.tagName.toLowerCase() !== 'iframe') return false
-  return (element.getAttribute('src') ?? '').toLowerCase().includes('docview.aspx')
-}
-
 interface HtmlDocumentContext {
   document: Document
   attributes: Set<string>
@@ -123,7 +119,7 @@ const createHtmlDocument = (
   if (config.cleanHtml) {
     document.querySelectorAll('script,noscript').forEach((element) => element.remove())
     document.querySelectorAll('iframe').forEach((element) => {
-      if (shouldRemoveAttachmentPreview(element)) element.remove()
+      if (isLegacyAttachmentPreview(element)) element.remove()
     })
     removeComments(document)
     document.body.querySelectorAll('*').forEach((element) => {

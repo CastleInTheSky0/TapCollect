@@ -113,13 +113,16 @@ describe('page extraction', () => {
       task.listUrl, 1, 0).candidates[0]!
     const html = '<div id="content">正文<script>showVsbpdfIframe("/files/report.pdf");</script>' +
       '<script name="_videourl" vurl="/media/movie.mp4"></script>' +
+      '<script name="_videourl" vurl="/media/song.mp3"></script>' +
       '<div class="excluded"><script>showVsbVideo("/media/excluded.mp4");</script></div></div>'
 
     const detail = extractDetailPage(task, candidate, html, candidate.detailUrl)
     expect(detail.missingFields).toEqual([])
-    expect(detail.record.resources?.map(({ kind }) => kind)).toEqual(['attachment', 'video'])
-    expect(detail.record.values.text).toContain('href="/resources/files/report.pdf"')
+    expect(detail.record.resources?.map(({ kind }) => kind)).toEqual(['attachment', 'video', 'audio'])
+    expect(detail.record.values.text).toContain('src="/resources/files/report.pdf"')
+    expect(detail.record.values.text).toContain('class="article-pdf-preview"')
     expect(detail.record.values.text).toContain('src="/resources/media/movie.mp4"')
+    expect(detail.record.values.text).toContain('<audio controls="" src="/resources/media/song.mp3">音频</audio>')
     expect(detail.record.values.text).not.toContain('excluded')
     expect(detail.record.values.text).not.toContain('script')
 

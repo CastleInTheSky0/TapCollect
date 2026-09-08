@@ -1,9 +1,9 @@
 import { parse } from 'acorn'
-import { classifyResourceReference } from './resource-planner'
+import { classifyResourceReference, PDF_PREVIEW_CLASS } from './resource-planner'
 import { resolveHttpUrl } from './url-utils'
 
 interface ScriptResource {
-  kind: 'attachment' | 'video'
+  kind: 'pdf' | 'media'
   url: string
 }
 
@@ -31,7 +31,7 @@ const readScriptResources = (script: Element): ScriptResource[] => {
         const argument = call.arguments[0]
         if (argument?.type !== 'Literal' || typeof argument.value !== 'string') continue
         resources.push({
-          kind: name === 'showVsbVideo' ? 'video' : 'attachment',
+          kind: name === 'showVsbVideo' ? 'media' : 'pdf',
           url: argument.value
         })
       }
@@ -40,26 +40,36 @@ const readScriptResources = (script: Element): ScriptResource[] => {
     }
   }
 
-  if (script.getAttribute('name') === '_videourl' && !resources.some(({ kind }) => kind === 'video')) {
+  if (script.getAttribute('name') === '_videourl' && !resources.some(({ kind }) => kind === 'media')) {
     const url = script.getAttribute('vurl')
-    if (url) resources.push({ kind: 'video', url })
+    if (url) resources.push({ kind: 'media', url })
   }
   return resources
 }
 
+export const isLegacyAttachmentPreview = (element: Element): boolean =>
+  element.tagName.toLowerCase() === 'iframe' &&
+  !element.classList.contains(PDF_PREVIEW_CLASS) &&
+  (element.getAttribute('src') ?? '').toLowerCase().includes('docview.aspx')
+
 export const materializeScriptResources = (document: Document, baseUrl: string): void => {
   const existing = new Set<string>()
-  for (const element of document.body.querySelectorAll('a[href],video[src],video source[src]')) {
-    if (element.closest('noscript')) continue
-    const kind = element.tagName.toLowerCase() === 'a' ? 'attachment' : 'video'
-    const attributeName = kind === 'attachment' ? 'href' : 'src'
-    const url = resolveHttpUrl(element.getAttribute(attributeName) ?? '', baseUrl)
-    if (url && classifyResourceReference(url, {
+  for (const element of document.body.querySelectorAll(
+    'iframe[src],video[src],video source[src],audio[src],audio source[src]'
+  )) {
+    if (element.closest('noscript') || isLegacyAttachmentPreview(element)) continue
+    const url = resolveHttpUrl(element.getAttribute('src') ?? '', baseUrl)
+    if (!url) continue
+    const kind = classifyResourceReference(url, {
       tagName: element.tagName,
+      className: element.getAttribute('class') ?? '',
       parentTagName: element.parentElement?.tagName ?? '',
-      attributeName,
-      hasDownloadAttribute: element.hasAttribute('download')
-    })) existing.add(`${kind}:${url}`)
+      attributeName: 'src'
+    })
+    if (element.tagName.toLowerCase() === 'iframe' && kind !== 'attachment') continue
+    if (kind === 'attachment' || kind === 'audio' || kind === 'video') {
+      existing.add(`${kind === 'attachment' ? 'pdf' : kind}:${url}`)
+    }
   }
 
   for (const script of document.body.querySelectorAll('script')) {
@@ -71,19 +81,33 @@ export const materializeScriptResources = (document: Document, baseUrl: string):
       const absoluteUrl = resolveHttpUrl(sourceUrl, baseUrl)
       if (!absoluteUrl) continue
       recognized = true
-      const key = `${resource.kind}:${absoluteUrl}`
+      const kind = resource.kind === 'pdf' ? 'pdf' :
+        classifyResourceReference(absoluteUrl, { tagName: '', attributeName: 'src' }) === 'audio'
+          ? 'audio' : 'video'
+      const key = `${kind}:${absoluteUrl}`
       if (existing.has(key)) continue
       existing.add(key)
 
-      const element = document.createElement(resource.kind === 'video' ? 'video' : 'a')
-      if (resource.kind === 'video') {
+      const element = document.createElement(kind === 'pdf' ? 'iframe' : kind)
+      if (kind === 'pdf') {
         element.setAttribute('src', sourceUrl)
+        element.setAttribute('scrolling', 'no')
+        element.setAttribute('frameborder', '0')
+        element.setAttribute('style', 'width: 90%;height: 1000px;margin: 0px auto 0;display: block;')
+        element.setAttribute('class', PDF_PREVIEW_CLASS)
+      } else if (kind === 'video') {
+        element.setAttribute('class', 'edui-upload-video  video-js')
         element.setAttribute('controls', '')
-        element.setAttribute('preload', 'metadata')
+        element.setAttribute('preload', 'none')
+        element.setAttribute('width', '640')
+        element.setAttribute('height', '480')
+        element.setAttribute('src', sourceUrl)
+        element.setAttribute('data-setup', '{}')
+        element.setAttribute('autoplay', 'true')
       } else {
-        element.setAttribute('href', sourceUrl)
-        element.setAttribute('download', '')
-        element.textContent = 'PDF 附件'
+        element.setAttribute('controls', '')
+        element.setAttribute('src', sourceUrl)
+        element.textContent = '音频'
       }
       script.before(element)
     }

@@ -139,7 +139,7 @@ https://www.example.com/list.aspx?classid=5&page={page}
 
 ### 正文清理与资源处理
 
-- HTML 字段可保留正文排版和标签；清理前会将 VSB 脚本中的 PDF、视频引用转换为普通附件链接或视频元素，再移除其余 `script`、`noscript` 及其内容、注释、事件属性、危险脚本协议和 DocView 预览框。
+- HTML 字段可保留正文排版和标签；清理前会将 VSB 脚本中的 PDF、视频、音频引用转换为 `iframe`、`video`、`audio` 元素，再移除其余 `script`、`noscript` 及其内容、注释、事件属性、危险脚本协议和旧 DocView 预览框。生成的 `article-pdf-preview` PDF 预览会保留。
 - 字段级内容过滤先于资源处理执行，被过滤区块中的图片、视频和附件不会进入下载计划。
 - 支持 `src`、`data-src`、`data-original`、`href`、`srcset`、行内样式 URL、`poster` 及用户补充的资源属性。
 - “资源路径 URL 转码”默认关闭，已识别图片、音视频和附件路径中的中文文件名保持中文；开启后使用百分号编码，普通网页链接不受该开关影响。
@@ -150,7 +150,15 @@ https://www.example.com/list.aspx?classid=5&page={page}
   - 使用“自定义前缀 + 原 URL 路径”直接改写站内资源地址。
 - 可开启资源下载，将最终输出实际引用的站内图片、音频、视频和常见附件保存到指定目录。
 - 图片或附件位于正文字段的 HTML 中时，其链接会在正文内同步改写，文件也会加入下载计划。
-- 支持正文内 `showVsbpdfIframe("文件地址", ...)`、`showVsbVideo("文件地址", ...)` 和 `<script name="_videourl" vurl="文件地址">` 的静态资源引用。PDF 下载原文件，不下载脚本数组中的逐页预览图；视频按原地址下载，查询参数参与文件名区分。
+- 支持正文内 `showVsbpdfIframe("文件地址", ...)`、`showVsbVideo("文件地址", ...)` 和 `<script name="_videourl" vurl="文件地址">` 的静态资源引用。PDF 使用内嵌预览，只下载原文件，不下载脚本数组中的逐页预览图；媒体地址的路径扩展名属于 MP3、M4A、WAV、OGG 等已识别音频类型时输出音频元素，其余媒体引用输出视频元素。查询参数参与下载文件名区分。
+- 脚本转换使用下列结构，`src` 按资源设置改写；生成的 PDF 预览即使地址没有 `.pdf` 后缀，也会按附件处理。视频包含 `autoplay="true"`，实际自动播放取决于展示环境；采集器不额外引入播放器脚本。已有附件链接保留，相同资源不会重复生成预览，正式采集时只下载一次。
+
+  ```html
+  <iframe src="资源地址" scrolling="no" frameborder="0" style="width: 90%;height: 1000px;margin: 0px auto 0;display: block;" class="article-pdf-preview"></iframe>
+  <video class="edui-upload-video  video-js" controls="" preload="none" width="640" height="480" src="资源地址" data-setup="{}" autoplay="true"></video>
+  <audio controls="" src="资源地址">音频</audio>
+  ```
+
 - 这类页面请用 CSS 或 XPath 选中包含脚本的完整正文容器（例如 `#vsb_content`），在“提取内容”选择“HTML 内容（保留排版和标签）”，在“资源处理”开启“下载资源”，填写“资源存放根目录”和“输出内容中的资源访问前缀”。“清理脚本、事件和 DocView 预览”可保持开启，无需补充 `vurl` 属性；字段“内容过滤”不要删除 `script` 或附件所在区块。
 - 脚本资源识别仅解析上述直接调用的字符串参数和视频属性，不执行脚本，也不推断变量、拼接表达式或任意脚本中的链接。纯文字和“前后标记”取值不经过这项 HTML 资源转换；测试采集只展示资源计划，正式采集才下载文件。
 - 本地资源目录按原 URL 路径建立；同一路径带不同查询参数时会追加稳定短标识，避免文件互相覆盖。

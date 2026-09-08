@@ -36,11 +36,47 @@ describe('script-backed HTML resources', () => {
       kind: 'video'
     })
     expect(result.resources[1]?.xmlUrl).toMatch(/^\/resources\/media\/movie__[a-f0-9]{8}\.mp4$/)
-    expect(document.querySelector('a')?.getAttribute('href')).toBe(result.resources[0]?.xmlUrl)
-    expect(document.querySelector('video')?.getAttribute('src')).toBe(result.resources[1]?.xmlUrl)
-    expect(document.querySelector('video')?.hasAttribute('controls')).toBe(true)
-    expect(document.querySelectorAll('script,img')).toHaveLength(0)
-    expect(result.value).not.toContain('preview')
+    expect(Object.fromEntries([...document.querySelector('iframe')!.attributes]
+      .map(({ name, value }) => [name, value]))).toEqual({
+      src: result.resources[0]?.xmlUrl,
+      scrolling: 'no',
+      frameborder: '0',
+      style: 'width: 90%;height: 1000px;margin: 0px auto 0;display: block;',
+      class: 'article-pdf-preview'
+    })
+    expect(Object.fromEntries([...document.querySelector('video')!.attributes]
+      .map(({ name, value }) => [name, value]))).toEqual({
+      class: 'edui-upload-video  video-js',
+      controls: '',
+      preload: 'none',
+      width: '640',
+      height: '480',
+      src: result.resources[1]?.xmlUrl,
+      'data-setup': '{}',
+      autoplay: 'true'
+    })
+    expect(document.querySelectorAll('script,img,a')).toHaveLength(0)
+    expect(result.value).not.toContain('/preview/')
+  })
+
+  it.each(['MP3', 'm4a', 'ogg'])('uses the audio template and resource type for %s media', (extension) => {
+    const source = `/media/录音.${extension}?download=1`
+    const result = processHtmlWithResources(
+      `<script name="_videourl" vurl="/ignored.mp4">showVsbVideo("${source}");</script>` +
+        `<script name="_videourl" vurl="${source}"></script>`,
+      pageUrl, pageUrl, downloadTask()
+    )
+    const document = new JSDOM(result.value).window.document
+    expect(result.resources).toHaveLength(1)
+    expect(result.resources[0]).toMatchObject({ kind: 'audio' })
+    expect(result.resources[0]?.sourceUrl).toBe(new URL(source, pageUrl).href)
+    expect(result.resources[0]?.xmlUrl).toMatch(
+      new RegExp(`^/resources/media/录音__[a-f0-9]{8}\\.${extension}$`)
+    )
+    expect(document.querySelectorAll('audio')).toHaveLength(1)
+    expect(document.querySelector('audio')?.outerHTML)
+      .toBe(`<audio controls="" src="${result.resources[0]?.xmlUrl}">音频</audio>`)
+    expect(document.querySelectorAll('script,video')).toHaveLength(0)
   })
 
   it('recovers video metadata and decodes JavaScript string escapes without evaluating expressions', () => {
@@ -98,8 +134,39 @@ describe('script-backed HTML resources', () => {
     )
     const document = new JSDOM(result.value).window.document
     expect(document.querySelectorAll('a')).toHaveLength(1)
+    expect(document.querySelectorAll('iframe.article-pdf-preview')).toHaveLength(1)
     expect(document.querySelectorAll('video')).toHaveLength(1)
-    expect(result.resources).toHaveLength(2)
+    expect(result.resources).toHaveLength(3)
+    expect(new Set(result.resources.map(({ normalizedUrl }) => normalizedUrl)).size).toBe(2)
+  })
+
+  it('deduplicates existing PDF and audio previews without downloading ordinary iframe pages', () => {
+    const result = processHtmlWithResources(
+      '<iframe src="/page.html"></iframe>' +
+        '<iframe class="existing article-pdf-preview" src="/download?id=1"></iframe>' +
+        '<audio><source src="/media/song.mp3"></audio>' +
+        '<script>showVsbpdfIframe("/download?id=1");showVsbVideo("/media/song.mp3");</script>',
+      pageUrl, pageUrl, downloadTask()
+    )
+    const document = new JSDOM(result.value).window.document
+    expect(document.querySelectorAll('iframe')).toHaveLength(2)
+    expect(document.querySelectorAll('iframe.article-pdf-preview')).toHaveLength(1)
+    expect(document.querySelectorAll('audio')).toHaveLength(1)
+    expect(document.querySelectorAll('script,video')).toHaveLength(0)
+    expect(result.resources.map(({ kind }) => kind)).toEqual(['attachment', 'audio'])
+  })
+
+  it('keeps generated PDF previews when cleaning legacy DocView frames', () => {
+    const result = processHtmlWithResources(
+      '<iframe src="/files/DocView.aspx.pdf"></iframe>' +
+        '<script>showVsbpdfIframe("/files/DocView.aspx.pdf");</script>',
+      pageUrl, pageUrl, downloadTask()
+    )
+    const document = new JSDOM(result.value).window.document
+    expect(document.querySelectorAll('iframe')).toHaveLength(1)
+    expect(document.querySelector('iframe')?.className).toBe('article-pdf-preview')
+    expect(result.resources).toHaveLength(1)
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(result.resources[0]?.xmlUrl)
   })
 
   it('keeps downloads when duplicate links are removed by cleanup or lack file semantics', () => {
@@ -115,21 +182,25 @@ describe('script-backed HTML resources', () => {
       'https://www.example.com/download?id=1'
     ])
     expect(result.value).not.toContain('备用链接')
+    expect(new JSDOM(result.value).window.document.querySelectorAll('iframe')).toHaveLength(2)
   })
 
   it('uses existing absolute, replacement and prefix modes without scheduling downloads', () => {
     const task = createTask('script-without-download')
+    const html = scriptHtml + '<script name="_videourl" vurl="/media/song.mp3"></script>'
     task.resourceReplacements = [{ id: '1', from: 'https://www.example.com/', to: '/legacy/' }]
-    const absolute = processHtmlWithResources(scriptHtml, pageUrl, pageUrl, task)
-    expect(absolute.value).toContain('href="/legacy/files/report.PDF"')
+    const absolute = processHtmlWithResources(html, pageUrl, pageUrl, task)
+    expect(absolute.value).toContain('src="/legacy/files/report.PDF"')
     expect(absolute.value).toContain('src="/legacy/media/movie.mp4?e=.mp4"')
+    expect(absolute.value).toContain('<audio controls="" src="/legacy/media/song.mp3">音频</audio>')
     expect(absolute.resources).toEqual([])
 
     task.resources.addressMode = 'prefix'
     task.resources.urlPrefix = '/static'
-    const prefixed = processHtmlWithResources(scriptHtml, pageUrl, pageUrl, task)
-    expect(prefixed.value).toContain('href="/static/files/report.PDF"')
+    const prefixed = processHtmlWithResources(html, pageUrl, pageUrl, task)
+    expect(prefixed.value).toContain('src="/static/files/report.PDF"')
     expect(prefixed.value).toContain('src="/static/media/movie.mp4"')
+    expect(prefixed.value).toContain('<audio controls="" src="/static/media/song.mp3">音频</audio>')
     expect(prefixed.resources).toEqual([])
   })
 })
