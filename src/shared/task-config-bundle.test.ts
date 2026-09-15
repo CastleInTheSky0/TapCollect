@@ -42,7 +42,7 @@ describe('task config bundle', () => {
 
     expect(bundle).toMatchObject({
       format: TASK_CONFIG_BUNDLE_FORMAT,
-      version: 1,
+      version: 2,
       exportedAt: '2026-08-09T01:00:00.000Z'
     })
     expect(bundle.tasks[0]).toEqual({ ...task, request: { ...task.request, headers: [] } })
@@ -59,7 +59,7 @@ describe('task config bundle', () => {
       .toThrow('不是 TapCollect 任务配置文件')
     expect(() => parseTaskConfigBundle({
       format: TASK_CONFIG_BUNDLE_FORMAT,
-      version: 2,
+      version: 99,
       tasks: [task]
     })).toThrow('不支持任务配置文件版本')
     expect(() => parseTaskConfigBundle({
@@ -67,6 +67,14 @@ describe('task config bundle', () => {
       version: 1,
       tasks: []
     })).toThrow('没有可导入的任务')
+  })
+
+  it('rejects malformed version 2 membership arrays before any task can be imported', () => {
+    const bundle = createTaskConfigBundle([createTask('task-1')])
+    for (const taskGroupIds of [undefined, 'group-id', [], [null, null], [42], [{}]]) {
+      expect(() => parseTaskConfigBundle({ ...bundle, taskGroupIds })).toThrow('taskGroupIds')
+    }
+    expect(() => parseTaskConfigBundle({ ...bundle, groups: undefined })).toThrow('分组文件')
   })
 
   it('replaces identity fields while preserving complete task configuration', () => {

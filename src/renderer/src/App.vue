@@ -13,6 +13,7 @@ import AboutUpdateDialog from '@renderer/components/AboutUpdateDialog/index.vue'
 import PreviewPane from '@renderer/components/PreviewPane/index.vue'
 import RunDrawer from '@renderer/components/RunDrawer/index.vue'
 import TaskDialogs from '@renderer/components/TaskDialogs/index.vue'
+import TaskGroupDialogs from '@renderer/components/TaskGroupDialogs/index.vue'
 import TaskSidebar from '@renderer/components/TaskSidebar/index.vue'
 import UpdateAvailableNotice from '@renderer/components/UpdateAvailableNotice/index.vue'
 import { useFeedback } from '@renderer/composables/useFeedback'
@@ -23,6 +24,7 @@ import { useAppUpdate } from '@renderer/composables/useAppUpdate'
 import { usePaneLayout } from '@renderer/composables/usePaneLayout'
 import { useRunSession } from '@renderer/composables/useRunSession'
 import { useTasks } from '@renderer/composables/useTasks'
+import { useTaskGroups } from '@renderer/composables/useTaskGroups'
 import { useTaskForm } from '@renderer/composables/useTaskForm'
 import { usePreview } from '@renderer/composables/usePreview'
 
@@ -126,7 +128,18 @@ const tasksStore = useTasks({
   getRunItem: runSessionStore.getRunItem,
   getTestingTaskId: () => runSessionStore.runSession.value.testingTaskId,
   loadTask: (id) => navigationStore.openTask(id),
-  clearActiveTask: taskFormStore.clearActiveTask
+  clearActiveTask: taskFormStore.clearActiveTask,
+  refreshGroups: () => taskGroupStore.refreshGroups()
+})
+
+const taskGroupStore = useTaskGroups({
+  getTasks: () => tasksStore.tasks.value,
+  getActiveTaskId: () => taskFormStore.activeId.value,
+  getDraftGroupId: () => taskFormStore.newTaskGroupId.value,
+  isNewTask: () => taskFormStore.savedTaskFingerprint.value === null,
+  createNewTask: (groupId, name) => taskFormStore.createNewTask(groupId, name),
+  showError: feedback.showError,
+  showNotice: feedback.showNotice
 })
 
 const previewStore = usePreview({
@@ -152,6 +165,7 @@ provide(appStoreKey, {
   settingsStore,
   runSessionStore,
   taskFormStore,
+  taskGroupStore,
   previewStore
 })
 
@@ -194,9 +208,15 @@ const {
   busy,
   saving,
   activeId,
-  hasUnsavedChanges,
-  createNewTask
+  hasUnsavedChanges
 } = taskFormStore
+const {
+  registry: taskGroups, loadError: groupLoadError, dialog: groupDialog,
+  dialogName: groupDialogName, dialogDestination: groupDialogDestination, dialogError: groupDialogError,
+  pending: groupPending, batchMode, selectedIds,
+  requestCreateGroup, requestCreateTask, requestRenameGroup, requestDeleteGroup, requestMove,
+  startBatch, finishBatch, toggleTaskSelection, confirmDialog: confirmGroupDialog, closeDialog: closeGroupDialog
+} = taskGroupStore
 const {
   tasks,
   taskConfigTransferring,
@@ -246,6 +266,7 @@ const {
 const blockingDialogVisible = computed(() =>
   Boolean(
     aboutUpdateVisible.value ||
+    groupDialog.value ||
     resumePrompt.value ||
     pendingDeleteTaskId.value ||
     exportTaskConfigsPrompt.value ||
@@ -331,8 +352,12 @@ onBeforeUnmount(() => {
     <TaskSidebar
       :collapsed="sidebarCollapsed" :tasks="tasks" :active-id="routeTaskId || activeId" :view="appView"
       :run-items="runSession.items" :testing-task-id="runSession.testingTaskId"
+      :registry="taskGroups" :group-disabled="groupPending || Boolean(groupLoadError)" :group-load-error="groupLoadError"
+      :batch-mode="batchMode" :selected-ids="selectedIds"
       :disabled="busy || saving || taskConfigTransferring" @select="openTask" @show-run-center="showRunCenter"
-      @create="createNewTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
+      @create="requestCreateTask" @import-configs="importTaskConfigs" @export-configs="requestExportTaskConfigs"
+      @create-group="requestCreateGroup" @rename-group="requestRenameGroup" @delete-group="requestDeleteGroup"
+      @move="requestMove" @start-batch="startBatch" @finish-batch="finishBatch" @toggle-selection="toggleTaskSelection"
       @duplicate="duplicateTask" @remove="removeTask" @run="requestRun" @show-about="openUpdateDetails" @show-settings="navigationStore.openSettings"
       @toggle-sidebar="toggleSidebarPane"
     />
@@ -391,11 +416,19 @@ onBeforeUnmount(() => {
       @closed="releasePreviewAfterDialogClosed"
     />
 
+    <TaskGroupDialogs
+      v-model:name="groupDialogName" v-model:destination="groupDialogDestination" :dialog="groupDialog"
+      :registry="taskGroups" :tasks="tasks" :pending="groupPending" :error="groupDialogError"
+      @confirm="confirmGroupDialog" @close="closeGroupDialog" @closed="releasePreviewAfterDialogClosed"
+    />
+
     <TaskDialogs
       v-model:resume-prompt="resumePrompt" v-model:pending-delete-task-id="pendingDeleteTaskId"
       v-model:export-task-configs-prompt="exportTaskConfigsPrompt"
       v-model:task-config-import-result="taskConfigImportResult" v-model:cancel-prompt-task-id="cancelPromptTaskId"
-      v-model:cancel-all-prompt="cancelAllPrompt" :has-unsaved-changes="hasUnsavedChanges" @launch-run="launchRun"
+      v-model:cancel-all-prompt="cancelAllPrompt" :has-unsaved-changes="hasUnsavedChanges" :delete-task-name="tasks.find(task => task.id === pendingDeleteTaskId)?.name || ''"
+      :deleting-unsaved-task="hasUnsavedChanges && pendingDeleteTaskId === activeId"
+      @launch-run="launchRun"
       @confirm-remove="confirmRemoveTask" @export-configs="exportTaskConfigs" @confirm-cancel-run="confirmCancelRun"
       @confirm-cancel-all="confirmCancelAllRuns" @closed="releasePreviewAfterDialogClosed"
     />

@@ -19,6 +19,7 @@ export interface TasksDeps {
   getTestingTaskId: () => string
   loadTask: (id: string) => Promise<void>
   clearActiveTask: (id: string) => void
+  refreshGroups: () => Promise<void>
 }
 
 export const useTasks = (deps: TasksDeps): {
@@ -44,14 +45,16 @@ export const useTasks = (deps: TasksDeps): {
 
   const refreshTasks = async (): Promise<void> => {
     tasks.value = await api.listTasks()
+    await deps.refreshGroups()
   }
 
   const duplicateTask = async (id: string): Promise<void> => {
     try {
       const copy = await api.duplicateTask(id)
       await refreshTasks()
-      await deps.loadTask(copy.id)
-      deps.showNotice('已创建任务副本')
+      await deps.loadTask(copy.task.id)
+      if (copy.warning) deps.showWarning(copy.warning)
+      else deps.showNotice('已创建任务副本')
     } catch (error) {
       deps.showError(error)
     }

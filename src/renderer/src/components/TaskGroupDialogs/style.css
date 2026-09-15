@@ -1,0 +1,16 @@
+.task-group-dialog { color: var(--ink); }
+.group-dialog-copy { margin: 0 0 20px; color: var(--muted); line-height: 1.8; overflow-wrap: anywhere; }
+.group-dialog-copy strong { color: var(--ink); font-weight: 500; }
+.group-field-label { display: block; margin-bottom: 8px; }
+.group-field-spaced { margin-top: 20px; }
+.group-field-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.group-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
+.group-dialog-error { margin-top: 18px; }
+.group-destinations.t-radio-group { display: flex; flex-direction: column; align-items: stretch; gap: 8px; max-height: 330px; overflow: auto; width: 100%; }
+.group-destinations .group-destination { display: flex; flex: none; width: 100%; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.group-destination:has(:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.group-destination :deep(.t-radio__label) { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; white-space: normal; }
+.group-destination :deep(.t-radio__input) { flex: none; }
+.group-destination :deep(.t-icon) { flex: none; }
+.group-destination span { min-width: 0; flex: 1; overflow-wrap: anywhere; white-space: normal; }
+.group-destination small { flex: none; color: var(--muted); font-size: 12px; }

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { TaskGroupStore } from './task-group-store'
+import { taskGroupFor, taskGroupNameKey } from '@shared/task-groups'
 import {
   createEmptyResourceCounters,
   DEFAULT_SETTINGS,
@@ -17,7 +19,10 @@ import type {
   AppSettings,
   ExtractedRecord,
   RunCheckpoint,
+  ParsedTaskConfigBundle,
   TaskConfig,
+  TaskCreationResult,
+  TaskGroupRegistry,
   TaskConfigImportFailure,
   TaskConfigImportSuccess,
   TaskSummary
@@ -57,13 +62,12 @@ const readJson = async <T>(path: string, fallback: T): Promise<T> => {
 export const atomicWrite = async (path: string, content: string | Buffer): Promise<void> => {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`
-  await writeFile(temporary, content)
   try {
+    await writeFile(temporary, content)
     await rename(temporary, path)
-  } catch (error) {
-    if (!['EEXIST', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
-    await rm(path, { force: true })
-    await rename(temporary, path)
+  } finally {
+    // 替换失败时保留旧文件；不可先删目标，否则第二次重命名失败会丢失数据。
+    await rm(temporary, { force: true }).catch(() => undefined)
   }
 }
 
@@ -81,12 +85,14 @@ const readNdjson = async <T>(path: string): Promise<T[]> => {
 }
 
 export class TaskStore {
+  readonly groups: TaskGroupStore
   private readonly settingsPath: string
   private readonly tasksDirectory: string
   private readonly checkpointsDirectory: string
   private readonly manifestsDirectory: string
 
   constructor(readonly rootDirectory: string) {
+    this.groups = new TaskGroupStore(rootDirectory, atomicWrite)
     this.settingsPath = join(rootDirectory, 'settings.json')
     this.tasksDirectory = join(rootDirectory, 'tasks')
     this.checkpointsDirectory = join(rootDirectory, 'checkpoints')
@@ -164,54 +170,138 @@ export class TaskStore {
     return normalized
   }
 
-  async duplicateTask(id: string): Promise<TaskConfig> {
-    const source = await this.loadTask(id)
-    if (!source) throw new Error('找不到要复制的任务')
-    const now = new Date().toISOString()
-    const copy: TaskConfig = {
-      ...JSON.parse(JSON.stringify(source)) as TaskConfig,
-      id: randomUUID(),
-      name: `${source.name} - 副本`,
-      createdAt: now,
-      updatedAt: now
-    }
-    return this.saveTask(copy)
+  async saveNewTask(task: TaskConfig, groupId: string | null): Promise<TaskCreationResult> {
+    if (groupId !== null && typeof groupId !== 'string') throw new Error('请选择有效的分组或“不分组”')
+    return this.groups.serialize(async () => {
+      if (await this.loadTask(task.id)) throw new Error('任务已存在，请刷新后再保存')
+      const saved = await this.saveTask(task)
+      return this.assignCreatedTask(saved, groupId)
+    })
   }
 
-  async importTaskConfigs(entries: unknown[]): Promise<{
+  private async assignCreatedTask(task: TaskConfig, groupId: string | null): Promise<TaskCreationResult> {
+    if (groupId === null) return { task, warning: '' }
+    try {
+      const registry = await this.groups.read()
+      if (!registry.groups.some(group => group.id === groupId)) {
+        return { task, warning: '任务已保存，原分组已不存在，任务已保留在“不分组”位置' }
+      }
+      Object.defineProperty(registry.memberships, task.id, { value: groupId, enumerable: true, configurable: true, writable: true })
+      await this.groups.persist(registry)
+      return { task, warning: '' }
+    } catch {
+      return { task, warning: '任务已保存，但分组保存失败，任务已保留在“不分组”位置，请稍后重新移动' }
+    }
+  }
+
+  async moveTasksToGroup(ids: string[], destination: string | null): Promise<TaskGroupRegistry> {
+    return this.groups.serialize(async () => {
+      if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== 'string')) {
+        throw new Error('请至少选择一个已保存任务')
+      }
+      const registry = await this.groups.read()
+      this.groups.validateDestination(registry, destination)
+      for (const id of new Set(ids)) {
+        if (!await this.loadTask(id)) throw new Error('找不到任务，请刷新列表后重试')
+        if (destination === null) delete registry.memberships[id]
+        else Object.defineProperty(registry.memberships, id, { value: destination, enumerable: true, configurable: true, writable: true })
+      }
+      return this.groups.persist(registry)
+    })
+  }
+
+  async duplicateTask(id: string): Promise<TaskCreationResult> {
+    return this.groups.serialize(async () => {
+      const source = await this.loadTask(id)
+      if (!source) throw new Error('找不到要复制的任务')
+      const now = new Date().toISOString()
+      const copy: TaskConfig = {
+        ...JSON.parse(JSON.stringify(source)) as TaskConfig,
+        id: randomUUID(),
+        name: `${source.name} - 副本`,
+        createdAt: now,
+        updatedAt: now
+      }
+      const saved = await this.saveTask(copy)
+      try {
+        const groupId = taskGroupFor(await this.groups.read(), id)?.id ?? null
+        return await this.assignCreatedTask(saved, groupId)
+      } catch {
+        return { task: saved, warning: '副本已创建，但无法读取原任务分组，副本已保留在“不分组”位置' }
+      }
+    })
+  }
+
+  async importTaskConfigs(input: unknown[] | ParsedTaskConfigBundle): Promise<{
     imported: TaskConfigImportSuccess[]
     skipped: TaskConfigImportFailure[]
+    warnings: TaskConfigImportFailure[]
   }> {
-    const imported: TaskConfigImportSuccess[] = []
-    const skipped: TaskConfigImportFailure[] = []
+    return this.groups.serialize(async () => {
+      const bundle = Array.isArray(input) ? { tasks: input, groups: [], taskGroupIds: [] } : input
+      const entries = bundle.tasks
+      const imported: TaskConfigImportSuccess[] = []
+      const skipped: TaskConfigImportFailure[] = []
+      const warnings: TaskConfigImportFailure[] = []
 
-    for (const [index, entry] of entries.entries()) {
-      const sourceIndex = index + 1
-      const name = importedTaskCandidateName(entry)
-      try {
-        const prepared = prepareImportedTaskConfig(entry, randomUUID())
-        const saved = await this.saveTask(prepared)
-        imported.push({ sourceIndex, id: saved.id, name: saved.name })
-      } catch (error) {
-        skipped.push({
-          sourceIndex,
-          name,
-          reason: error instanceof Error ? error.message : String(error)
-        })
+      for (const [index, entry] of entries.entries()) {
+        const sourceIndex = index + 1
+        const name = importedTaskCandidateName(entry)
+        try {
+          const prepared = prepareImportedTaskConfig(entry, randomUUID())
+          const saved = await this.saveTask(prepared)
+          imported.push({ sourceIndex, id: saved.id, name: saved.name })
+        } catch (error) {
+          skipped.push({
+            sourceIndex,
+            name,
+            reason: error instanceof Error ? error.message : String(error)
+          })
+        }
       }
-    }
 
-    return { imported, skipped }
+      if (imported.length > 0 && (bundle.groups.length > 0 || bundle.taskGroupIds.some(Boolean))) {
+        try {
+          const registry = await this.groups.read()
+          const groupMap = new Map<string, string>()
+          for (const group of bundle.groups) {
+            const local = registry.groups.find(item => taskGroupNameKey(item.name) === taskGroupNameKey(group.name))
+            groupMap.set(group.id, local?.id ?? this.groups.addGroup(registry, group.name))
+          }
+          for (const entry of imported) {
+            const sourceGroupId = bundle.taskGroupIds[entry.sourceIndex - 1]
+            if (!sourceGroupId) continue
+            const groupId = groupMap.get(sourceGroupId)
+            if (groupId) registry.memberships[entry.id] = groupId
+            else warnings.push({ ...entry, reason: '引用的分组不存在，任务已保留在“不分组”位置' })
+          }
+          await this.groups.persist(registry)
+        } catch {
+          warnings.length = 0
+          for (const entry of imported) {
+            warnings.push({ ...entry, reason: '任务已导入，但分组保存失败，任务已保留在“不分组”位置' })
+          }
+        }
+      }
+      return { imported, skipped, warnings }
+    })
   }
 
   async deleteTask(id: string): Promise<boolean> {
-    validateId(id)
-    const task = await this.loadTask(id)
-    if (!task) return false
-    await rm(join(this.tasksDirectory, id), { recursive: true, force: true })
-    await this.clearCheckpoint(id)
-    await rm(this.manifestPath(id), { force: true })
-    return true
+    return this.groups.serialize(async () => {
+      validateId(id)
+      const task = await this.loadTask(id)
+      if (!task) return false
+      const registry = await this.groups.read()
+      if (Object.hasOwn(registry.memberships, id)) {
+        delete registry.memberships[id]
+        await this.groups.persist(registry)
+      }
+      await rm(join(this.tasksDirectory, id), { recursive: true, force: true })
+      await this.clearCheckpoint(id)
+      await rm(this.manifestPath(id), { force: true })
+      return true
+    })
   }
 
   async hasCheckpoint(taskId: string): Promise<boolean> {

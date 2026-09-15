@@ -4,6 +4,7 @@ import type { useAccessProfiles } from '@renderer/composables/useAccessProfiles'
 import type { usePreview } from '@renderer/composables/usePreview'
 import type { useRunSession } from '@renderer/composables/useRunSession'
 import type { useTaskForm } from '@renderer/composables/useTaskForm'
+import type { useTaskGroups } from '@renderer/composables/useTaskGroups'
 
 export interface AppStore {
   accessProfileStore: ReturnType<typeof useAccessProfiles>
@@ -12,5 +13,6 @@ export interface AppStore {
   settingsStore: ReturnType<typeof useAppSettings>
   runSessionStore: ReturnType<typeof useRunSession>
   taskFormStore: ReturnType<typeof useTaskForm>
+  taskGroupStore: ReturnType<typeof useTaskGroups>
   previewStore: ReturnType<typeof usePreview>
 }

@@ -40,7 +40,7 @@ describe('TaskStore', () => {
     const reloaded = await new TaskStore(root).loadTask(task.id)
     expect(reloaded?.detail.attachment).toEqual({ enabled: true, fieldPath: 'file' })
     const copy = await store.duplicateTask(task.id)
-    expect(copy.detail.attachment).toEqual(reloaded?.detail.attachment)
+    expect(copy.task.detail.attachment).toEqual(reloaded?.detail.attachment)
   })
 
   it('migrates legacy settings and clamps the formal task concurrency limit', async () => {

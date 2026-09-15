@@ -1,0 +1,18 @@
+.task-menu-item.t-menu__item { position: relative; height: auto; min-height: 54px; margin: 2px 0; align-items: stretch; border-radius: 6px; line-height: normal; padding-top: 2px; padding-right: 4px; padding-bottom: 2px; }
+.task-menu-item.t-is-active::before { position: absolute; top: calc(50% - 11px); left: -1px; width: 2px; height: 22px; border-radius: 2px; background: var(--accent); content: ''; }
+.task-menu-item :deep(.t-menu__content) { display: flex; min-width: 0; flex: 1; line-height: normal; }
+.task-entry-shell { position: relative; display: flex; min-width: 0; flex: 1; align-items: center; gap: 3px; }
+.task-row-main { display: flex; min-width: 0; flex: 1; padding: 5px 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; font: inherit; text-align: left; }
+.task-row-main:disabled { cursor: default; }
+.task-copy { display: block; min-width: 0; flex: 1; }
+.task-title-line { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.task-title-line strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.task-menu-item.t-is-active .task-title-line strong { color: var(--accent); }
+.task-title-line :deep(.t-tag) { height: 18px; flex: 0 0 auto; padding: 0 4px; font-size: 10px; }
+.task-copy > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.task-actions { display: flex; flex: none; }
+.task-actions :deep(.t-button) { width: 28px; height: 28px; min-width: 28px; padding: 0; border-radius: 5px; color: var(--muted); }
+.task-check { display: flex; flex: none; margin-right: 8px; }
+:global(.task-actions-dropdown) { padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--td-bg-color-container); box-shadow: 0 8px 24px rgba(22, 42, 48, .16); }
+:global(.task-actions-dropdown .t-dropdown__item) { min-height: 36px; border-radius: 5px; }
+@media (prefers-reduced-motion: reduce) { .task-actions { transition: none; } }

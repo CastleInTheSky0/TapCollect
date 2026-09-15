@@ -102,7 +102,9 @@ export class PreviewService extends EventEmitter {
   async open(url: string, bounds: PreviewBounds, task?: TaskConfig): Promise<boolean> {
     const target = validatePreviewUrl(url)
     const key = JSON.stringify([task?.accessProfileId ?? '', task?.request ?? null])
-    if (key !== this.identityKey) this.close()
+    // 更换身份是同一次打开操作的一部分；不要发送“预览已关闭”状态，
+    // 否则渲染器会丢失可见标记，后续弹窗无法调度原生视图边界。
+    if (key !== this.identityKey) this.releaseView(true)
     const sequence = ++this.openSequence
     if (!this.view && task?.accessProfileId) {
       if (!this.profiles) throw new Error('访问配置服务不可用')
@@ -156,20 +158,24 @@ export class PreviewService extends EventEmitter {
   }
 
   close(): boolean {
+    return this.releaseView(false)
+  }
+
+  private releaseView(preserveOpening: boolean): boolean {
     const view = this.view
     this.openSequence += 1
-    this.opening = false
+    if (!preserveOpening) this.opening = false
     this.profile?.release()
     this.profile = undefined
     this.identityKey = ''
     if (!view) {
-      this.emitNavigationState()
+      if (!preserveOpening) this.emitNavigationState()
       return false
     }
     this.view = null
     this.window.contentView.removeChildView(view)
     view.webContents.close()
-    this.emitNavigationState()
+    if (!preserveOpening) this.emitNavigationState()
     return true
   }
 

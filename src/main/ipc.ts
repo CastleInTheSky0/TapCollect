@@ -9,6 +9,7 @@ import type {
   PreviewBounds,
   PreviewEvaluateRequest,
   PreviewPickRequest,
+  ParsedTaskConfigBundle,
   TaskConfig,
   UpdateInstallResult
 } from '@shared/types'
@@ -23,7 +24,7 @@ import { importSpreadsheetTemplate as parseSpreadsheetTemplate } from '@main/cor
 import { outputFileExtension, renderOutputFile } from '@main/services/output-writer'
 import {
   createTaskConfigBundle,
-  parseTaskConfigBundle
+  parseTaskConfigBundleWithGroups
 } from '@shared/task-config-bundle'
 import type { PreviewService } from './services/preview-service'
 import type { RunManager } from './services/run-manager'
@@ -47,9 +48,9 @@ const jsonExportPath = (path: string): string =>
 const testFileExportPath = (path: string, extension: string): string =>
   extname(path).toLowerCase() === `.${extension}` ? path : `${path}.${extension}`
 
-const parseTaskConfigFile = (content: string): unknown[] => {
+const parseTaskConfigFile = (content: string): ParsedTaskConfigBundle => {
   try {
-    return parseTaskConfigBundle(JSON.parse(content) as unknown)
+    return parseTaskConfigBundleWithGroups(JSON.parse(content) as unknown)
   } catch (error) {
     if (error instanceof SyntaxError) throw new Error(`任务配置 JSON 格式错误：${error.message}`)
     throw error
@@ -100,6 +101,17 @@ export const registerIpcHandlers = (
     return saved
   })
   ipcMain.handle(IPC_CHANNELS.listTasks, () => store.listTasks())
+  ipcMain.handle(IPC_CHANNELS.getTaskGroups, () => store.groups.serialize(() => store.groups.read()))
+  ipcMain.handle(IPC_CHANNELS.createTaskGroup, (_event, name: string) => store.groups.create(name))
+  ipcMain.handle(IPC_CHANNELS.renameTaskGroup, (_event, id: string, name: string) => store.groups.rename(id, name))
+  ipcMain.handle(IPC_CHANNELS.deleteTaskGroup, (_event, id: string, destination: string | null) => store.groups.remove(id, destination))
+  ipcMain.handle(IPC_CHANNELS.moveTasksToGroup, (_event, ids: string[], destination: string | null) => store.moveTasksToGroup(ids, destination))
+  ipcMain.handle(IPC_CHANNELS.saveNewTask, (_event, task: TaskConfig, groupId: string | null) => {
+    if (runManager.isTaskMutationLocked(task.id)) {
+      throw new Error('运行、暂停、排队或测试中的任务不能保存配置')
+    }
+    return store.saveNewTask(task, groupId)
+  })
   ipcMain.handle(IPC_CHANNELS.loadTask, (_event, id: string) => store.loadTask(id))
   ipcMain.handle(IPC_CHANNELS.saveTask, (_event, task: TaskConfig) => {
     if (runManager.isTaskMutationLocked(task.id)) {
@@ -116,7 +128,7 @@ export const registerIpcHandlers = (
       filters: [{ name: 'TapCollect 任务配置', extensions: ['json'] }]
     })
     if (result.canceled || !result.filePaths[0]) {
-      return { cancelled: true, imported: [], skipped: [] }
+      return { cancelled: true, imported: [], skipped: [], warnings: [] }
     }
     const entries = parseTaskConfigFile(await readFile(result.filePaths[0], 'utf8'))
     const imported = await store.importTaskConfigs(entries)
@@ -134,11 +146,15 @@ export const registerIpcHandlers = (
       return { cancelled: true, taskCount: 0, filePath: '' }
     }
     const filePath = jsonExportPath(result.filePath)
+    const bundle = await store.groups.serialize(async () => createTaskConfigBundle(
+      await store.listTaskConfigs(), new Date().toISOString(), await store.groups.read()
+    ))
+    if (bundle.tasks.length === 0) throw new Error('当前没有已保存的任务配置可以导出')
     await atomicWrite(
       filePath,
-      `${JSON.stringify(createTaskConfigBundle(tasks), null, 2)}\n`
+      `${JSON.stringify(bundle, null, 2)}\n`
     )
-    return { cancelled: false, taskCount: tasks.length, filePath }
+    return { cancelled: false, taskCount: bundle.tasks.length, filePath }
   })
   ipcMain.handle(IPC_CHANNELS.chooseOutputDirectory, async () => {
     const result = await dialog.showOpenDialog(window, {

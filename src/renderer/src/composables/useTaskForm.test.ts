@@ -7,7 +7,7 @@ import type {
   TestCollectionResult,
   XmlFieldDefinition
 } from '@shared/types'
-import { useTaskForm } from './useTaskForm'
+import { useTaskForm, type TaskFormDeps } from './useTaskForm'
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void
@@ -95,6 +95,63 @@ describe('useTaskForm task loading', () => {
 })
 
 describe('useTaskForm draft saving', () => {
+  const dependencies = (): TaskFormDeps => ({
+    showError: vi.fn(), showNotice: vi.fn(), showWarning: vi.fn(),
+    formatConfigurationIssues: (intro, issues) => `${intro}：${issues.join('；')}`,
+    settings: ref({ ...DEFAULT_SETTINGS }), refreshTasks: vi.fn(async () => {}), isActiveTaskLocked: () => false,
+    navigation: { openTask: vi.fn(async () => {}), selectRunTask: vi.fn(), setPreviewUrl: vi.fn(),
+      getPreviewVisible: () => false, navigatePreview: vi.fn(async () => true),
+      schedulePreviewBounds: vi.fn(), resetDetailSamples: vi.fn() }
+  })
+
+  it('assigns ownership only on the first save and keeps grouping outside the task and fingerprint', async () => {
+    const saveNewTask = vi.fn(async (task: TaskConfig) => ({ task: structuredClone(task), warning: '' }))
+    const saveTask = vi.fn(async (task: TaskConfig) => structuredClone(task))
+    vi.stubGlobal('window', { collector: { saveNewTask, saveTask } })
+    const store = useTaskForm(dependencies())
+    store.createNewTask('group-a', '分组任务')
+    expect(store.newTaskGroupId.value).toBe('group-a')
+    const saved = await store.saveCurrent(true)
+    expect(saved).not.toBeNull()
+    expect(saveNewTask).toHaveBeenCalledWith(expect.not.objectContaining({ groupId: expect.anything() }), 'group-a')
+    expect(store.newTaskGroupId.value).toBeNull()
+    expect(store.hasUnsavedChanges.value).toBe(false)
+    await store.saveCurrent(true)
+    expect(saveNewTask).toHaveBeenCalledOnce()
+    expect(saveTask).toHaveBeenCalledOnce()
+  })
+
+  it('retains a successfully saved task and reports group failure even for silent saves', async () => {
+    const warning = '任务已保存，但分组保存失败'
+    vi.stubGlobal('window', { collector: { saveNewTask: async (task: TaskConfig) => ({ task: structuredClone(task), warning }) } })
+    const deps = dependencies()
+    const store = useTaskForm(deps)
+    store.createNewTask('group-a', '保存任务')
+    await store.saveCurrent(true)
+    expect(store.activeTask.value?.name).toBe('保存任务')
+    expect(store.hasUnsavedChanges.value).toBe(false)
+    expect(store.newTaskGroupId.value).toBeNull()
+    expect(deps.showWarning).toHaveBeenCalledExactlyOnceWith(warning)
+    expect(deps.showNotice).not.toHaveBeenCalled()
+  })
+
+  it('does not replace a newer draft when an earlier group-aware save finishes later', async () => {
+    const pending = deferred<{ task: TaskConfig; warning: string }>()
+    vi.stubGlobal('window', { collector: { saveNewTask: () => pending.promise } })
+    const store = useTaskForm(dependencies())
+    store.createNewTask('group-a', '旧草稿')
+    const oldTask = structuredClone(JSON.parse(JSON.stringify(store.activeTask.value)) as TaskConfig)
+    const saving = store.saveCurrent(true)
+    store.createNewTask('group-b', '新草稿')
+    const newId = store.activeId.value
+    pending.resolve({ task: oldTask, warning: '' })
+    await saving
+    expect(store.activeId.value).toBe(newId)
+    expect(store.activeTask.value?.name).toBe('新草稿')
+    expect(store.newTaskGroupId.value).toBe('group-b')
+    expect(store.savedTaskFingerprint.value).toBeNull()
+  })
+
   it('blocks a disabled-detail mapping conflict before IPC even for a silent save', async () => {
     const saveTask = vi.fn()
     const showWarning = vi.fn()
@@ -184,6 +241,7 @@ describe('useTaskForm test file export', () => {
     vi.stubGlobal('window', {
       collector: {
         saveTask: vi.fn(async (value: TaskConfig) => structuredClone(value)),
+        saveNewTask: vi.fn(async (value: TaskConfig) => ({ task: structuredClone(value), warning: '' })),
         testTask: vi.fn(async () => testResult),
         exportTestFile
       }

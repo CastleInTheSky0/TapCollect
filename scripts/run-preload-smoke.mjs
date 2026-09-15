@@ -38,7 +38,32 @@ const run = async () => {
     )
     await writeFile(
       bootstrapPath,
-      `import { writeFileSync } from 'node:fs'\nimport { pathToFileURL } from 'node:url'\nimport process from 'node:process'\nimport { app } from 'electron'\nconst entry = process.env.TAPCOLLECT_PRELOAD_SMOKE_ENTRY\nconst marker = process.env.TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP\nconst errorPath = process.env.TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP_ERROR\nif (marker) writeFileSync(marker, 'started', 'utf8')\nif (!entry) {\n  process.stderr.write('缺少 TAPCOLLECT_PRELOAD_SMOKE_ENTRY\\n')\n  app.exit(1)\n} else {\n  import(pathToFileURL(entry).href).then(() => {\n    if (marker) writeFileSync(marker, 'imported', 'utf8')\n  }).catch((error) => {\n    const message = error instanceof Error ? error.stack : String(error)\n    if (errorPath) writeFileSync(errorPath, message, 'utf8')\n    process.stderr.write(\`${'${message}'}\\n\`)\n    app.exit(1)\n  })\n}\n`,
+      `import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import process from 'node:process'
+import { app } from 'electron'
+const root = process.env.TAPCOLLECT_SMOKE_ROOT
+if (!root) throw new Error('Missing isolated smoke root')
+for (const [key, folder] of [['userData', 'user-data'], ['sessionData', 'browser-session']]) {
+  const path = join(root, folder)
+  mkdirSync(path, { recursive: true })
+  app.setPath(key, path)
+}
+const entry = process.env.TAPCOLLECT_PRELOAD_SMOKE_ENTRY
+const marker = process.env.TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP
+const errorPath = process.env.TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP_ERROR
+if (marker) writeFileSync(marker, 'started', 'utf8')
+if (!entry) throw new Error('Missing smoke entry')
+import(pathToFileURL(entry).href).then(() => {
+  if (marker) writeFileSync(marker, 'imported', 'utf8')
+}).catch((error) => {
+  const message = error instanceof Error ? error.stack : String(error)
+  if (errorPath) writeFileSync(errorPath, message, 'utf8')
+  process.stderr.write(message)
+  app.exit(1)
+})
+`,
       'utf8'
     )
 
@@ -50,6 +75,7 @@ const run = async () => {
           cwd: projectRoot,
           env: {
             ...process.env,
+            TAPCOLLECT_SMOKE_ROOT: temporaryRoot,
             TAPCOLLECT_PRELOAD_SMOKE_RESULT: resultPath,
             TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP: bootstrapMarkerPath,
             TAPCOLLECT_PRELOAD_SMOKE_BOOTSTRAP_ERROR: bootstrapErrorPath,
@@ -117,7 +143,7 @@ const run = async () => {
     const restartExitCode = await new Promise((resolveExit, reject) => {
       const child = spawn(electronPath, [`--user-data-dir=${userDataPath}`, temporaryRoot], {
         cwd: projectRoot,
-        env: { ...process.env, TAPCOLLECT_PRELOAD_SMOKE_RESULT: resultPath,
+        env: { ...process.env, TAPCOLLECT_SMOKE_ROOT: temporaryRoot, TAPCOLLECT_PRELOAD_SMOKE_RESULT: resultPath,
           TAPCOLLECT_PRELOAD_SMOKE_ENTRY: resolve(projectRoot, 'out/main/preload-smoke.js'),
           TAPCOLLECT_PROFILE_RESTART_CHECK: '1' },
         stdio: 'inherit', windowsHide: true
@@ -133,7 +159,12 @@ const run = async () => {
 
     process.stdout.write(`${JSON.stringify(output.result, null, 2)}\n`)
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true })
+    if (!resolve(temporaryRoot).startsWith(resolve(tmpdir()) + '\\') && process.platform === 'win32') {
+      process.stderr.write('Refusing cleanup outside the temporary directory\n')
+      process.exitCode = 1
+    } else {
+      await rm(temporaryRoot, { recursive: true, force: true })
+    }
   }
 }
 

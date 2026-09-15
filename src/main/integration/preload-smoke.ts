@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { app, BrowserWindow, dialog, WebContentsView } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
 import { prepareDataDirectory } from '@main/services/data-directory'
@@ -16,6 +16,7 @@ import { createTask } from '@shared/defaults'
 import { AccessCoordinator } from '@main/services/access-coordinator'
 import { AccessProfileService } from '@main/services/access-profile-service'
 import { verifyAccessProfiles, seedProfileRestartCheck, verifyProfileAfterRestart } from './access-profile-smoke'
+import { verifyTaskGroups } from './task-group-smoke'
 import type {
   PreviewEvaluateResult,
   PreviewNavigationState,
@@ -24,6 +25,7 @@ import type {
 
 interface PreloadSmokeResult {
   accessProfilesWork: boolean
+  taskGroupsWork: boolean
   hasCollector: boolean
   hasUpdateApi: boolean
   hasRunSubscription: boolean
@@ -760,9 +762,12 @@ const run = async (): Promise<PreloadSmokeResult> => {
         preload: join(__dirname, '../preload/index.cjs'),
         nodeIntegration: false,
         contextIsolation: true,
+        // 保持独立测试窗口的渲染节奏，避免后台计时器影响界面验证。
+        backgroundThrottling: false,
         sandbox: true
       }
     })
+    window.showInactive()
     writeStage('window-created')
     window.webContents.on('console-message', (_event, level, message) => {
       if (level >= 3) consoleErrors.push(message)
@@ -911,26 +916,27 @@ const run = async (): Promise<PreloadSmokeResult> => {
           document.body.textContent?.includes('导入任务配置') === true &&
           document.body.textContent?.includes('导出全部任务配置') === true
         taskConfigToolsButton?.click()
+        const setInputValue = (element, value) => {
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set
+          setter?.call(element, value)
+          element.dispatchEvent(new Event('input', { bubbles: true }))
+        }
         const createButton = [...document.querySelectorAll('button')].find((button) =>
           button.textContent?.includes('新建任务')
         )
         createButton?.click()
         await new Promise((resolve) => setTimeout(resolve, 100))
+        const newTaskName = document.querySelector('.task-group-dialog input')
+        if (newTaskName) setInputValue(newTaskName, 'Preload Smoke')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        ;[...document.querySelectorAll('.task-group-dialog button')].find(button => button.textContent.trim() === '创建任务')?.click()
+        await new Promise((resolve) => setTimeout(resolve, 350))
 
         const taskNameInput = document.querySelector('input[placeholder="例如：图片新闻"]')
         const listUrlInput = document.querySelector(
           'textarea[placeholder*="包含 {page} 的模板"]'
         )
         const createTaskWorks = Boolean(taskNameInput && listUrlInput)
-
-        const setInputValue = (element, value) => {
-          const setter = Object.getOwnPropertyDescriptor(
-            Object.getPrototypeOf(element),
-            'value'
-          )?.set
-          setter?.call(element, value)
-          element.dispatchEvent(new Event('input', { bubbles: true }))
-        }
 
         if (taskNameInput && listUrlInput) {
           setInputValue(taskNameInput, 'Preload Smoke')
@@ -1011,9 +1017,12 @@ const run = async (): Promise<PreloadSmokeResult> => {
       | 'dynamicPartialLoadWorks'
       | 'usesUserDataTaskStore'
       | 'accessProfilesWork'
+      | 'taskGroupsWork'
     >
     writeStage('renderer-evaluated')
 
+    const taskGroupsWork = await verifyTaskGroups(window, store, runManager, previewUrl, dataRoot)
+    writeStage('task-groups-verified')
     const previewNavigationWorks = await verifyPreviewNavigation(window, previewUrl)
     writeStage('preview-navigation-verified')
     const previewPickWorks = await verifyPreviewPick(window, preview, previewUrl)
@@ -1026,9 +1035,12 @@ const run = async (): Promise<PreloadSmokeResult> => {
     const accessProfilesWork = await verifyAccessProfiles(window, store, profiles, access, runManager, preview)
     writeStage('access-profiles-verified')
     await seedProfileRestartCheck(store, profiles)
+    const restartGroups = await store.groups.create('分组重启验证')
+    await store.moveTasksToGroup(['profile-restart'], restartGroups.groups[0]!.id)
 
     return {
       ...result,
+      taskGroupsWork,
       accessProfilesWork,
       previewNavigationWorks,
       previewPickWorks,
@@ -1050,7 +1062,18 @@ const run = async (): Promise<PreloadSmokeResult> => {
 
 const main = async (): Promise<void> => {
   try {
+    const isolatedRoot = process.env.TAPCOLLECT_SMOKE_ROOT
+    if (!isolatedRoot || !resolve(isolatedRoot).startsWith(resolve(tmpdir())) ||
+        resolve(app.getPath('userData')) !== resolve(isolatedRoot, 'user-data') ||
+        resolve(app.getPath('sessionData')) !== resolve(isolatedRoot, 'browser-session')) {
+      throw new Error('冒烟测试必须显式隔离 userData 和 sessionData，请使用 run-preload-smoke.mjs')
+    }
     if (process.env.TAPCOLLECT_PROFILE_RESTART_CHECK === '1') {
+      const restartStore = new TaskStore(join(app.getPath('userData'), 'collector-data'))
+      const registry = await restartStore.groups.read()
+      if (registry.groups.length !== 1 || registry.groups[0]?.name !== '分组重启验证' || registry.memberships['profile-restart'] !== registry.groups[0].id) {
+        throw new Error('分组及任务归属未在重启后保留')
+      }
       const restartSessionWorks = await verifyProfileAfterRestart()
       await writeFile(resultPath, JSON.stringify({ ok: true, result: { restartSessionWorks } }), 'utf8')
       app.exit(0)
@@ -1059,6 +1082,7 @@ const main = async (): Promise<void> => {
     const result = await run()
     if (
       !result.hasCollector ||
+      !result.taskGroupsWork ||
       !result.accessProfilesWork ||
       !result.hasUpdateApi ||
       !result.hasRunSubscription ||

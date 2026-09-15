@@ -192,6 +192,11 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
     await wait(600)
     assert(await window.webContents.executeJavaScript(`document.body.innerText.includes('访问配置 A（已编辑）')`))
     assert(await window.webContents.executeJavaScript(`document.querySelector('.app-shell').classList.contains('run-center-view')`))
+    // 样式读取可能才触发被遮挡窗口的过渡；等待实际隐藏状态，而非固定延时。
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (await window.webContents.executeJavaScript(`getComputedStyle(document.querySelector('.preview-pane')).opacity === '0'`)) break
+      await wait(50)
+    }
     assert.equal(await window.webContents.executeJavaScript(`getComputedStyle(document.querySelector('.preview-pane')).opacity`), '0')
     for (const [width, height] of [[1500, 920], [1180, 720]]) {
       window.setContentSize(width!, height!)

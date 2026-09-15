@@ -1,4 +1,5 @@
 .task-sidebar {
+  container-type: inline-size;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -34,8 +35,54 @@
   min-height: 42px;
 }
 
-.task-menu :deep(.tasks-submenu > .t-menu__sub .task-menu-item) {
-  padding-left: 44px;
+.task-sidebar:not(.collapsed) .task-menu :deep(.primary-menu-item.t-menu__item) {
+  height: 38px;
+  min-height: 38px;
+  margin: 0 6px 18px;
+  padding-left: 13px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+}
+
+.task-sidebar:not(.collapsed) .task-menu :deep(.primary-menu-item > .t-icon) {
+  color: inherit;
+  font-size: 17px;
+}
+
+.task-sidebar:not(.collapsed) .task-menu :deep(.tasks-submenu > .t-menu__item) {
+  height: 38px;
+  padding: 0 5px 0 11px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.task-sidebar:not(.collapsed) .task-menu :deep(.tasks-submenu > .t-menu__item > .t-fake-arrow),
+.task-sidebar:not(.collapsed) .task-menu :deep(.task-group-submenu > .t-menu__item > .t-fake-arrow) {
+  display: none;
+}
+
+.task-menu :deep(.tasks-submenu > .t-menu__sub > .task-menu-item) {
+  padding-left: 9px;
+}
+
+.task-menu :deep(.task-group-submenu > .t-menu__item) {
+  height: 38px;
+  min-height: 38px;
+  margin-top: 4px;
+  padding: 0 3px 0 6px;
+}
+
+.task-menu :deep(.task-group-submenu > .t-menu__sub) {
+  margin-left: 15px;
+  padding-left: 7px;
+  border-left: 1px solid var(--line);
+}
+
+.task-menu :deep(.task-group-submenu .task-menu-item),
+.task-menu :deep(.group-empty-item) {
+  padding-left: 9px;
 }
 
 :deep(.t-menu__content) {
@@ -188,7 +235,7 @@
 
 .task-management-title {
   flex: 1;
-  gap: 5px;
+  gap: 7px;
 }
 
 .task-management-label {
@@ -204,13 +251,13 @@
 }
 
 .task-config-tools {
-  margin-right: 4px;
+  margin-right: 0;
 }
 
 .task-config-tools :deep(.t-button) {
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   padding: 0;
   border-radius: 6px;
   color: #63767d;
@@ -220,6 +267,8 @@
   background: #dceced;
   color: var(--accent);
 }
+
+.task-config-tools :deep(.t-icon) { color: inherit; }
 
 .menu-count {
   display: grid;
@@ -245,3 +294,9 @@
 
 .about-entry.navigation-selected { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .about-entry .menu-count { margin-left: auto; }
+
+@container (max-width: 235px) {
+  .task-management-label { gap: 4px; font-size: 12px; }
+  .task-management-title { gap: 2px; }
+  .menu-count { min-width: 16px; height: 18px; padding: 0 4px; }
+}

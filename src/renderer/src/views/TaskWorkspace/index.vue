@@ -11,7 +11,8 @@ import WizardStepList from '@renderer/components/WizardStepList/index.vue'
 import WizardStepOutput from '@renderer/components/WizardStepOutput/index.vue'
 import WizardStepTemplate from '@renderer/components/WizardStepTemplate/index.vue'
 
-const { settingsStore, runSessionStore, taskFormStore, previewStore, accessProfileStore } = useAppStore()
+const { settingsStore, runSessionStore, taskFormStore, taskGroupStore, previewStore, accessProfileStore } = useAppStore()
+const { activeGroupName, requestCreateTask } = taskGroupStore
 const router = useRouter()
 const { profiles: accessProfiles, error: accessProfileError } = accessProfileStore
 const { saveDefaultOutputDirectory } = settingsStore
@@ -46,7 +47,6 @@ const {
   outputFieldLabel,
   selectStep,
   synchronizeListPageMetadata,
-  createNewTask,
   saveCurrent,
   detectPagination,
   applyPaginationSuggestion,
@@ -79,6 +79,7 @@ const {
 
 <template>
   <WorkspaceHeader
+    :group-name="activeGroupName"
     :task-name="activeTask?.name || '尚未选择任务'"
     :has-task="Boolean(activeTask)"
     :active-task-locked="activeTaskLocked"
@@ -223,7 +224,7 @@ const {
     </footer>
   </template>
 
-  <WelcomeEmpty v-else @create="createNewTask" />
+  <WelcomeEmpty v-else @create="requestCreateTask()" />
 </template>
 
 <style src="./style.css"></style>

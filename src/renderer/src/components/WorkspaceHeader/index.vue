@@ -3,6 +3,7 @@ import { PlayIcon, SaveIcon } from 'tdesign-icons-vue-next'
 
 defineProps<{
   taskName: string
+  groupName: string
   hasTask: boolean
   activeTaskLocked: boolean
   testingTaskId: string
@@ -22,7 +23,9 @@ const emit = defineEmits<{
 <template>
   <header class="workspace-header">
     <div class="workspace-title">
-      <span class="context-label">任务配置</span>
+      <span class="context-label workspace-breadcrumb" :title="groupName ? `任务配置 > ${groupName}` : '任务配置'">
+        <span>任务配置</span><template v-if="groupName"><span aria-hidden="true">&gt;</span><span class="breadcrumb-group">{{ groupName }}</span></template>
+      </span>
       <strong>{{ taskName }}</strong>
     </div>
     <div class="header-actions">
@@ -60,3 +63,9 @@ const emit = defineEmits<{
     </div>
   </header>
 </template>
+
+<style scoped>
+.workspace-breadcrumb { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.workspace-breadcrumb > span:first-child { flex: 0 0 auto; }
+.breadcrumb-group { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

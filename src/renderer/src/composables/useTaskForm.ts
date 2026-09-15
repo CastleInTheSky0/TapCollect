@@ -48,6 +48,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
   const api = window.collector
   const activeTask = ref<TaskConfig | null>(null)
   const savedTaskFingerprint = ref<string | null>(null)
+  const newTaskGroupId = ref<string | null>(null)
   const currentStep = ref(1)
   const busy = ref(false)
   const saving = ref(false)
@@ -194,6 +195,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       const inspectedXmlTree = task.xml ? await api.inspectXmlTemplate(task.xml.content) : []
       if (sequence !== loadTaskSequence) return
       activeTask.value = task
+      newTaskGroupId.value = null
       deps.navigation.selectRunTask(id)
       savedTaskFingerprint.value = taskDraftFingerprint(task)
       const previewUrl = firstTaskListPageUrl(task)
@@ -215,10 +217,12 @@ export const useTaskForm = (deps: TaskFormDeps) => {
     }
   }
 
-  const createNewTask = (): void => {
+  const createNewTask = (groupId: string | null = null, name = ''): void => {
     loadTaskSequence += 1
     busy.value = false
     const task = createTask(crypto.randomUUID())
+    if (name.trim()) task.name = name.trim()
+    newTaskGroupId.value = groupId
     task.output.rootDirectory = deps.settings.value.defaultOutputDirectory
     activeTask.value = task
     deps.navigation.selectRunTask(task.id)
@@ -239,12 +243,13 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       loadTaskSequence += 1
       busy.value = false
       activeTask.value = null
+      newTaskGroupId.value = null
       savedTaskFingerprint.value = null
     }
   }
 
   const saveCurrent = async (silent = false): Promise<TaskConfig | null> => {
-    if (!activeTask.value) return null
+    if (!activeTask.value || saving.value) return null
     if (deps.isActiveTaskLocked()) {
       if (!silent) deps.showWarning('当前任务正在运行、暂停、排队或测试，暂时不能保存配置')
       return null
@@ -265,11 +270,19 @@ export const useTaskForm = (deps: TaskFormDeps) => {
       if (!activeTask.value.output.rootDirectory && deps.settings.value.defaultOutputDirectory) {
         activeTask.value.output.rootDirectory = deps.settings.value.defaultOutputDirectory
       }
-      const saved = await api.saveTask(snapshotTaskForIpc(activeTask.value))
-      activeTask.value = saved
-      savedTaskFingerprint.value = taskDraftFingerprint(saved)
+      const snapshot = snapshotTaskForIpc(activeTask.value)
+      const result = savedTaskFingerprint.value === null
+        ? await api.saveNewTask(snapshot, newTaskGroupId.value)
+        : { task: await api.saveTask(snapshot), warning: '' }
+      const saved = result.task
+      if (activeTask.value?.id === saved.id) {
+        activeTask.value = saved
+        savedTaskFingerprint.value = taskDraftFingerprint(saved)
+        newTaskGroupId.value = null
+      }
       await deps.refreshTasks()
-      if (!silent) {
+      if (result.warning) deps.showWarning(result.warning)
+      else if (!silent) {
         const issues = taskConfigurationIssues(saved)
         if (issues.length > 0) {
           deps.showWarning(deps.formatConfigurationIssues('草稿已保存，但还有配置未完成', issues))
@@ -448,6 +461,7 @@ export const useTaskForm = (deps: TaskFormDeps) => {
   return {
     activeTask,
     savedTaskFingerprint,
+    newTaskGroupId,
     currentStep,
     busy,
     saving,

@@ -227,11 +227,35 @@ export interface TaskSummary {
   hasCheckpoint: boolean
 }
 
+export interface TaskGroup {
+  id: string
+  name: string
+}
+
+export interface TaskGroupRegistry {
+  version: 1
+  groups: TaskGroup[]
+  memberships: Record<string, string>
+}
+
+export interface TaskCreationResult {
+  task: TaskConfig
+  warning: string
+}
+
 export interface TaskConfigBundle {
   format: 'tapcollect-task-bundle'
-  version: 1
+  version: 2
   exportedAt: string
   tasks: TaskConfig[]
+  groups: TaskGroup[]
+  taskGroupIds: Array<string | null>
+}
+
+export interface ParsedTaskConfigBundle {
+  tasks: unknown[]
+  groups: TaskGroup[]
+  taskGroupIds: Array<string | null>
 }
 
 export interface TaskConfigImportSuccess {
@@ -250,6 +274,7 @@ export interface TaskConfigImportResult {
   cancelled: boolean
   imported: TaskConfigImportSuccess[]
   skipped: TaskConfigImportFailure[]
+  warnings: TaskConfigImportFailure[]
 }
 
 export interface TaskConfigExportResult {
@@ -575,9 +600,15 @@ export interface CollectorApi {
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   listTasks: () => Promise<TaskSummary[]>
+  getTaskGroups: () => Promise<TaskGroupRegistry>
+  createTaskGroup: (name: string) => Promise<TaskGroupRegistry>
+  renameTaskGroup: (id: string, name: string) => Promise<TaskGroupRegistry>
+  deleteTaskGroup: (id: string, destination: string | null) => Promise<TaskGroupRegistry>
+  moveTasksToGroup: (ids: string[], destination: string | null) => Promise<TaskGroupRegistry>
   loadTask: (id: string) => Promise<TaskConfig | null>
   saveTask: (task: TaskConfig) => Promise<TaskConfig>
-  duplicateTask: (id: string) => Promise<TaskConfig>
+  saveNewTask: (task: TaskConfig, groupId: string | null) => Promise<TaskCreationResult>
+  duplicateTask: (id: string) => Promise<TaskCreationResult>
   deleteTask: (id: string) => Promise<boolean>
   importTaskConfigs: () => Promise<TaskConfigImportResult>
   exportTaskConfigs: () => Promise<TaskConfigExportResult>

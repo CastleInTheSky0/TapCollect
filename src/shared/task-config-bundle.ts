@@ -1,9 +1,10 @@
 import { normalizeTaskConfig } from './defaults'
 import { CREDENTIAL_REQUEST_HEADERS } from './access-profile'
-import type { TaskConfig, TaskConfigBundle } from './types'
+import { emptyTaskGroups, parseTaskGroups, taskGroupFor } from './task-groups'
+import type { ParsedTaskConfigBundle, TaskConfig, TaskConfigBundle, TaskGroupRegistry } from './types'
 
 export const TASK_CONFIG_BUNDLE_FORMAT = 'tapcollect-task-bundle' as const
-export const TASK_CONFIG_BUNDLE_VERSION = 1 as const
+export const TASK_CONFIG_BUNDLE_VERSION = 2 as const
 
 type JsonRecord = Record<string, unknown>
 
@@ -74,7 +75,7 @@ const validateTemplate = (value: unknown, label: string, spreadsheet: boolean): 
 
 const validateTaskConfigShape = (value: unknown): JsonRecord => {
   const task = asRecord(value, '任务配置')
-  if (task.version !== TASK_CONFIG_BUNDLE_VERSION) {
+  if (task.version !== 1) {
     throw new Error('任务配置 version 必须为 1')
   }
   requireString(task, 'name', '任务配置')
@@ -163,26 +164,37 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
 
 export const createTaskConfigBundle = (
   tasks: TaskConfig[],
-  exportedAt = new Date().toISOString()
+  exportedAt = new Date().toISOString(),
+  registry: TaskGroupRegistry = emptyTaskGroups()
 ): TaskConfigBundle => ({
   format: TASK_CONFIG_BUNDLE_FORMAT,
   version: TASK_CONFIG_BUNDLE_VERSION,
   exportedAt,
-  tasks: tasks.map(credentialFreeTask)
+  tasks: tasks.map(credentialFreeTask),
+  groups: registry.groups.map(group => ({ ...group })),
+  taskGroupIds: tasks.map(task => taskGroupFor(registry, task.id)?.id ?? null)
 })
 
-export const parseTaskConfigBundle = (value: unknown): unknown[] => {
+export const parseTaskConfigBundleWithGroups = (value: unknown): ParsedTaskConfigBundle => {
   const bundle = asRecord(value, '任务配置文件')
   if (bundle.format !== TASK_CONFIG_BUNDLE_FORMAT) {
     throw new Error(`不是 TapCollect 任务配置文件（format 应为 ${TASK_CONFIG_BUNDLE_FORMAT}）`)
   }
-  if (bundle.version !== TASK_CONFIG_BUNDLE_VERSION) {
+  if (bundle.version !== 1 && bundle.version !== TASK_CONFIG_BUNDLE_VERSION) {
     throw new Error(`不支持任务配置文件版本：${String(bundle.version ?? '')}`)
   }
   const tasks = requireArray(bundle, 'tasks', '任务配置文件')
   if (tasks.length === 0) throw new Error('任务配置文件中没有可导入的任务')
-  return tasks
+  if (bundle.version === 1) return { tasks, groups: [], taskGroupIds: tasks.map(() => null) }
+  const groups = parseTaskGroups({ version: 1, groups: bundle.groups, memberships: {} }).groups
+  const taskGroupIds = requireArray(bundle, 'taskGroupIds', '任务配置文件')
+  if (taskGroupIds.length !== tasks.length || taskGroupIds.some(id => id !== null && typeof id !== 'string')) {
+    throw new Error('任务配置文件.taskGroupIds 必须与 tasks 一一对应，且仅包含分组 ID 或 null')
+  }
+  return { tasks, groups, taskGroupIds: taskGroupIds as Array<string | null> }
 }
+
+export const parseTaskConfigBundle = (value: unknown): unknown[] => parseTaskConfigBundleWithGroups(value).tasks
 
 export const importedTaskCandidateName = (value: unknown): string => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return '无法识别的任务'

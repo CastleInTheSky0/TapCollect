@@ -3,19 +3,24 @@ import { computed, ref, watch } from 'vue'
 import type { DropdownOption } from 'tdesign-vue-next/es/dropdown/type'
 import {
   AddIcon,
-  CopyIcon,
+  ChevronRightIcon,
   DataSearchIcon,
   DeleteIcon,
+  EditIcon,
   EllipsisIcon,
   FileExportIcon,
   FileImportIcon,
+  FolderAddIcon,
+  FolderIcon,
+  FolderOpenIcon,
   SettingIcon,
-  PlayIcon,
   TaskIcon,
   ViewModuleIcon
 } from 'tdesign-icons-vue-next'
-import type { RunSessionItem, TaskSummary } from '@shared/types'
+import type { RunSessionItem, TaskGroupRegistry, TaskSummary } from '@shared/types'
+import { taskGroupFor } from '@shared/task-groups'
 import type { AppView } from '@renderer/router'
+import TaskSidebarEntry from '@renderer/components/TaskSidebarEntry/index.vue'
 import appIconUrl from '@renderer/assets/images/tapcollect-icon.png'
 import sidebarToggleIconUrl from './sidebar-toggle.svg'
 
@@ -27,12 +32,24 @@ const props = defineProps<{
   testingTaskId: string
   disabled: boolean
   collapsed: boolean
+  registry: TaskGroupRegistry
+  groupDisabled: boolean
+  groupLoadError: string
+  batchMode: boolean
+  selectedIds: string[]
 }>()
 
 const emit = defineEmits<{
   select: [id: string]
   showRunCenter: []
-  create: []
+  create: [groupId?: string]
+  createGroup: []
+  renameGroup: [id: string]
+  deleteGroup: [id: string]
+  move: [ids: string[]]
+  startBatch: []
+  finishBatch: []
+  toggleSelection: [id: string]
   importConfigs: []
   exportConfigs: []
   duplicate: [id: string]
@@ -44,6 +61,24 @@ const emit = defineEmits<{
 }>()
 
 const tasksExpanded = ref(true)
+const expandedGroups = ref<string[]>([])
+const groupedTasks = computed(() => props.registry.groups.map(group => ({
+  ...group, tasks: props.tasks.filter(task => taskGroupFor(props.registry, task.id)?.id === group.id)
+})))
+const rootTasks = computed(() => props.tasks.filter(task => !taskGroupFor(props.registry, task.id)))
+watch(() => props.registry.groups.map(group => group.id), (ids, previous = []) => {
+  expandedGroups.value = [...new Set([...expandedGroups.value.filter(id => ids.includes(id)),
+    ...ids.filter(id => !previous.includes(id))])]
+}, { immediate: true })
+watch(() => taskGroupFor(props.registry, props.activeId)?.id, (id) => {
+  if (id && !expandedGroups.value.includes(id)) expandedGroups.value.push(id)
+})
+watch(() => props.batchMode, (enabled) => {
+  if (enabled) {
+    tasksExpanded.value = true
+    expandedGroups.value = props.registry.groups.map(group => group.id)
+  }
+})
 const taskConfigToolsOpen = ref(false)
 const sidebarToggleTooltipVisible = ref(false)
 watch(() => props.collapsed, () => { sidebarToggleTooltipVisible.value = false })
@@ -60,11 +95,19 @@ const menuValue = computed(() => {
   if (props.view === 'run-center') return 'run-center'
   return props.activeId ? `task:${props.activeId}` : 'tasks'
 })
-const expandedMenuValues = computed(() => (tasksExpanded.value ? ['tasks'] : []))
-
-const taskMenuValue = (taskId: string): string => `task:${taskId}`
+const expandedMenuValues = computed(() => [
+  ...(tasksExpanded.value ? ['tasks'] : []), ...expandedGroups.value.map(id => `group:${id}`)
+])
 
 const emitTaskConfigAction = (key: string): boolean => {
+  if (key === 'create-group') {
+    emit('createGroup')
+    return true
+  }
+  if (key === 'batch') {
+    emit('startBatch')
+    return true
+  }
   if (key === 'import-configs') {
     emit('importConfigs')
     return true
@@ -87,7 +130,10 @@ const handleMenuChange = (value: string | number): void => {
     emit('showRunCenter')
     return
   }
-  if (key.startsWith('task:')) emit('select', key.slice(5))
+  if (key.startsWith('task:')) {
+    if (props.batchMode) emit('toggleSelection', key.slice(5))
+    else emit('select', key.slice(5))
+  }
 }
 
 const handleTaskConfigToolClick = (option: DropdownOption): void => {
@@ -101,60 +147,16 @@ const handleTaskConfigToolsVisibleChange = (visible: boolean): void => {
 const handleMenuExpand = (values: Array<string | number>): void => {
   if (props.collapsed) return
   tasksExpanded.value = values.map(String).includes('tasks')
-}
-
-const shortDate = (value: string): string => {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { hour12: false })
-}
-
-const statusLabel = (taskId: string): string => {
-  if (props.testingTaskId === taskId) return '测试中'
-  const item = runItemMap.value.get(taskId)
-  if (!item) return ''
-  if (item.protection) return item.protection.kind === 'cooling' ? '冷却中' : '需要人工处理'
-  if (item.status === 'queued') return `排队 ${item.queuePosition}`
-  return {
-    preparing: '准备中',
-    running: '运行中',
-    pausing: '暂停中',
-    paused: '已暂停',
-    completed: '已完成',
-    cancelled: '已取消',
-    failed: '失败'
-  }[item.status]
-}
-
-const statusTheme = (taskId: string): 'default' | 'primary' | 'success' | 'warning' | 'danger' => {
-  if (props.testingTaskId === taskId) return 'primary'
-  const status = runItemMap.value.get(taskId)?.status
-  if (status === 'running' || status === 'preparing') return 'primary'
-  if (status === 'completed') return 'success'
-  if (status === 'failed' || status === 'cancelled') return 'danger'
-  if (status === 'queued' || status === 'paused' || status === 'pausing') return 'warning'
-  return 'default'
-}
-
-const taskLocked = (taskId: string): boolean => {
-  if (props.testingTaskId === taskId) return true
-  const status = runItemMap.value.get(taskId)?.status
-  return Boolean(status && ['queued', 'preparing', 'running', 'pausing', 'paused'].includes(status))
-}
-
-const runDisabled = (taskId: string): boolean => {
-  const status = runItemMap.value.get(taskId)?.status
-  return (
-    props.disabled ||
-    props.testingTaskId === taskId ||
-    Boolean(status && status !== 'paused' && taskLocked(taskId))
-  )
+  expandedGroups.value = values.map(String).filter(key => key.startsWith('group:')).map(key => key.slice(6))
 }
 </script>
 
 <template>
   <aside class="task-sidebar" :class="{ collapsed }">
-    <t-menu class="task-menu" theme="light" :collapsed="collapsed" :width="['100%', '64px']" :value="menuValue"
-      :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand">
+    <t-menu
+      class="task-menu" theme="light" :collapsed="collapsed" :width="['100%', '64px']" :value="menuValue"
+      :expanded="expandedMenuValues" expand-type="normal" @change="handleMenuChange" @expand="handleMenuExpand"
+    >
       <template #logo>
         <div class="brand-block">
           <div v-if="!collapsed" class="brand-mark" aria-hidden="true">
@@ -188,25 +190,35 @@ const runDisabled = (taskId: string): boolean => {
       </t-menu-item>
 
       <t-submenu value="tasks" class="tasks-submenu" :popup-props="{ overlayClassName: 'task-sidebar-popup' }">
-        <template #icon>
+        <template v-if="collapsed" #icon>
           <TaskIcon />
         </template>
         <template #title>
           <span class="task-management-title">
             <span class="task-management-label">
               <span>任务管理</span>
-              <span class="menu-count">{{ tasks.length }}</span>
+              <span class="task-total">{{ tasks.length }}</span>
             </span>
             <span v-if="!collapsed" class="task-config-tools" @click.stop @pointerdown.stop @keydown.stop>
-              <t-dropdown trigger="click" placement="right-top" :disabled="disabled" :min-column-width="206"
+              <span class="new-group-shortcut"><t-tooltip content="新建分组" placement="top">
+                <t-button
+                  aria-label="新建分组" theme="default" variant="text" shape="square" size="small"
+                  :disabled="groupDisabled || disabled" @click="emit('createGroup')"
+                ><FolderAddIcon size="17px" /></t-button>
+              </t-tooltip></span>
+              <t-dropdown
+                trigger="click" placement="right-top" :disabled="disabled" :min-column-width="206"
                 :popup-props="{
                   overlayInnerClassName: 'task-config-tools-dropdown',
                   onVisibleChange: handleTaskConfigToolsVisibleChange
-                }" @click="handleTaskConfigToolClick">
+                }" @click="handleTaskConfigToolClick"
+              >
                 <span class="task-config-tools-trigger">
                   <t-tooltip content="任务配置工具" placement="top" :visible="taskConfigToolsOpen ? false : undefined">
-                    <t-button aria-label="任务配置工具" theme="default" variant="text" shape="square" size="small"
-                      :disabled="disabled">
+                    <t-button
+                      aria-label="任务配置工具" theme="default" variant="text" shape="square" size="small"
+                      :disabled="disabled"
+                    >
                       <template #icon>
                         <EllipsisIcon size="17px" />
                       </template>
@@ -214,6 +226,12 @@ const runDisabled = (taskId: string): boolean => {
                   </t-tooltip>
                 </span>
                 <t-dropdown-menu>
+                  <t-dropdown-item value="create-group" :disabled="groupDisabled">
+                    <template #prefix-icon><FolderAddIcon size="16px" /></template>新建分组
+                  </t-dropdown-item>
+                  <t-dropdown-item value="batch" :disabled="groupDisabled || !tasks.length || batchMode">
+                    <template #prefix-icon><FolderIcon size="16px" /></template>批量整理
+                  </t-dropdown-item>
                   <t-dropdown-item value="import-configs">
                     <template #prefix-icon>
                       <FileImportIcon size="16px" />
@@ -239,61 +257,89 @@ const runDisabled = (taskId: string): boolean => {
           导入任务配置
         </t-menu-item>
 
-        <t-menu-item v-if="collapsed" value="export-configs" class="task-config-popup-item task-config-popup-item-last"
-          :disabled="disabled">
+        <t-menu-item
+          v-if="collapsed" value="export-configs" class="task-config-popup-item task-config-popup-item-last"
+          :disabled="disabled"
+        >
           <template #icon>
             <FileExportIcon />
           </template>
           导出全部任务配置
         </t-menu-item>
 
-        <t-menu-item v-for="item in tasks" :key="item.id" :value="taskMenuValue(item.id)" class="task-menu-item">
-          <span class="task-entry-shell">
-            <button type="button" class="task-row-main" @click.stop="emit('select', item.id)">
-              <span class="task-copy">
-                <span class="task-title-line">
-                  <strong>{{ item.name }}</strong>
-                  <t-tag v-if="statusLabel(item.id)" size="small" :theme="statusTheme(item.id)" variant="light">
-                    {{ statusLabel(item.id) }}
-                  </t-tag>
-                  <t-tag v-else-if="item.hasCheckpoint" size="small" theme="warning" variant="light">
-                    可续采
-                  </t-tag>
-                </span>
-                <small>{{ item.listUrl || '尚未填写列表地址' }}</small>
-                <time>{{ shortDate(item.updatedAt) }}</time>
-              </span>
-            </button>
-            <span class="task-actions">
-              <t-tooltip :content="runItemMap.get(item.id)?.status === 'paused' ? '继续任务' : '运行任务'" placement="top">
-                <t-button theme="primary" variant="text" shape="square" size="small" :disabled="runDisabled(item.id)"
-                  @click.stop="emit('run', item.id)">
-                  <template #icon>
-                    <PlayIcon size="18px" />
-                  </template>
-                </t-button>
-              </t-tooltip>
-              <t-tooltip content="复制任务" placement="top">
-                <t-button theme="default" variant="text" shape="square" size="small" :disabled="disabled"
-                  @click.stop="emit('duplicate', item.id)">
-                  <template #icon>
-                    <CopyIcon size="18px" />
-                  </template>
-                </t-button>
-              </t-tooltip>
-              <t-tooltip content="删除任务" placement="top">
-                <t-button theme="danger" variant="text" shape="square" size="small"
-                  :disabled="disabled || taskLocked(item.id)" @click.stop="emit('remove', item.id)">
-                  <template #icon>
-                    <DeleteIcon size="18px" />
-                  </template>
-                </t-button>
-              </t-tooltip>
-            </span>
-          </span>
+        <t-menu-item v-if="collapsed" value="create-group" class="task-config-popup-item" :disabled="groupDisabled || disabled">
+          <template #icon><FolderAddIcon /></template>新建分组
         </t-menu-item>
+        <t-menu-item v-if="collapsed" value="batch" class="task-config-popup-item" :disabled="groupDisabled || disabled || !tasks.length || batchMode">
+          <template #icon><FolderIcon /></template>批量整理
+        </t-menu-item>
+        <p v-if="groupLoadError" class="group-load-error" role="alert">分组读取失败，任务仍可使用。请检查分组文件后重试。</p>
+        <div v-if="batchMode" class="task-batch-toolbar" @click.stop @keydown.stop>
+          <span>已选 {{ selectedIds.length }} 项</span>
+          <t-button
+            size="small" variant="text" :disabled="!selectedIds.length || groupDisabled || disabled"
+            @click="emit('move', selectedIds)"
+          >
+            移动到分组
+          </t-button>
+          <t-button size="small" variant="text" :disabled="groupDisabled" @click="emit('finishBatch')">完成</t-button>
+        </div>
 
-        <t-menu-item v-if="tasks.length === 0" value="empty" class="task-empty-item" disabled>
+        <TaskSidebarEntry
+          v-for="item in rootTasks" :key="item.id" :task="item"
+          :run-item="runItemMap.get(item.id) ?? null" :testing="testingTaskId === item.id"
+          :disabled="disabled" :group-disabled="groupDisabled" :batch-mode="batchMode" :checked="selectedIds.includes(item.id)"
+          @select="emit('select', $event)" @run="emit('run', $event)" @duplicate="emit('duplicate', $event)"
+          @remove="emit('remove', $event)" @move="emit('move', [$event])" @toggle-selection="emit('toggleSelection', $event)"
+        />
+
+        <t-submenu
+          v-for="group in groupedTasks" :key="group.id" :value="`group:${group.id}`" class="task-group-submenu"
+          :popup-props="{ overlayClassName: 'task-sidebar-popup task-group-popup' }"
+        >
+          <template #icon>
+            <span class="group-leading">
+              <ChevronRightIcon v-if="!collapsed" class="group-chevron" :class="{ 'is-open': expandedGroups.includes(group.id) }" />
+              <FolderOpenIcon v-if="expandedGroups.includes(group.id) && !collapsed" />
+              <FolderIcon v-else />
+            </span>
+          </template>
+          <template #title>
+            <span class="group-title" :data-group-id="group.id">
+              <span class="group-name" :title="group.name">{{ group.name }}</span>
+              <span class="group-count">{{ group.tasks.length }}</span>
+              <span class="group-actions" @click.stop @pointerdown.stop @keydown.stop>
+                <t-dropdown trigger="click" placement="right-top" :min-column-width="180">
+                  <t-button
+                    theme="default" variant="text" shape="square" size="small" :aria-label="`${group.name}的分组菜单`"
+                    :disabled="groupDisabled || disabled"
+                  ><EllipsisIcon size="17px" /></t-button>
+                  <t-dropdown-menu>
+                    <t-dropdown-item @click="emit('create', group.id)">
+                      <template #prefix-icon><AddIcon /></template>在此组新建任务
+                    </t-dropdown-item>
+                    <t-dropdown-item :divider="true" @click="emit('renameGroup', group.id)">
+                      <template #prefix-icon><EditIcon /></template>重命名分组
+                    </t-dropdown-item>
+                    <t-dropdown-item theme="error" @click="emit('deleteGroup', group.id)">
+                      <template #prefix-icon><DeleteIcon /></template>删除分组
+                    </t-dropdown-item>
+                  </t-dropdown-menu>
+                </t-dropdown>
+              </span>
+            </span>
+          </template>
+          <TaskSidebarEntry
+            v-for="item in group.tasks" :key="item.id" :task="item"
+            :run-item="runItemMap.get(item.id) ?? null" :testing="testingTaskId === item.id"
+            :disabled="disabled" :group-disabled="groupDisabled" :batch-mode="batchMode" :checked="selectedIds.includes(item.id)"
+            @select="emit('select', $event)" @run="emit('run', $event)" @duplicate="emit('duplicate', $event)"
+            @remove="emit('remove', $event)" @move="emit('move', [$event])" @toggle-selection="emit('toggleSelection', $event)"
+          />
+          <t-menu-item v-if="!group.tasks.length" :value="`empty-group:${group.id}`" disabled class="group-empty-item">暂无任务</t-menu-item>
+        </t-submenu>
+
+        <t-menu-item v-if="tasks.length === 0 && registry.groups.length === 0" value="empty" class="task-empty-item" disabled>
           <template #icon>
             <DataSearchIcon />
           </template>
@@ -307,19 +353,25 @@ const runDisabled = (taskId: string): boolean => {
       <template #operations>
         <div class="sidebar-operations">
           <t-tooltip content="运行中心" placement="right" :disabled="!collapsed">
-            <t-button class="about-entry" :class="{ 'navigation-selected': view === 'run-center' }" theme="default"
-              variant="text" aria-label="运行中心" @click="emit('showRunCenter')">
+            <t-button
+              class="about-entry" :class="{ 'navigation-selected': view === 'run-center' }" theme="default"
+              variant="text" aria-label="运行中心" @click="emit('showRunCenter')"
+            >
               <template #icon>
                 <ViewModuleIcon />
               </template>
-              <span v-if="!collapsed">运行中心</span><span v-if="sessionActivityCount && !collapsed"
-                class="menu-count active-count">{{
-                  sessionActivityCount }}</span>
+              <span v-if="!collapsed">运行中心</span><span
+                v-if="sessionActivityCount && !collapsed"
+                class="menu-count active-count"
+              >{{
+                sessionActivityCount }}</span>
             </t-button>
           </t-tooltip>
           <t-tooltip content="设置" placement="right" :disabled="!collapsed">
-            <t-button class="about-entry" :class="{ 'navigation-selected': view === 'settings' }" theme="default"
-              variant="text" aria-label="设置" @click="emit('showSettings')">
+            <t-button
+              class="about-entry" :class="{ 'navigation-selected': view === 'settings' }" theme="default"
+              variant="text" aria-label="设置" @click="emit('showSettings')"
+            >
               <template #icon>
                 <SettingIcon />
               </template>

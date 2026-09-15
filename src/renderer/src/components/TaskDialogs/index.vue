@@ -13,6 +13,8 @@ const cancelAllPrompt = defineModel<boolean>('cancelAllPrompt', { required: true
 
 defineProps<{
   hasUnsavedChanges: boolean
+  deleteTaskName: string
+  deletingUnsavedTask: boolean
 }>()
 
 const emit = defineEmits<{
@@ -52,7 +54,8 @@ const emit = defineEmits<{
     @closed="emit('closed')"
     @close="pendingDeleteTaskId = ''"
   >
-    <p class="dialog-copy">任务配置和运行中心记录会从本机删除；已经生成的 XML、表格、附件及其他采集输出文件不会被删除。</p>
+    <p class="dialog-copy">将删除“{{ deleteTaskName }}”的任务配置、分组归属和运行中心记录；已经生成的 XML、表格、附件及其他采集输出文件不会被删除。</p>
+    <p v-if="deletingUnsavedTask" class="dialog-copy">当前任务还有未保存修改，删除后将一并丢弃。</p>
     <div class="dialog-actions">
       <t-button theme="default" variant="text" @click="pendingDeleteTaskId = ''">取消</t-button>
       <t-button theme="danger" @click="emit('confirm-remove')">删除任务</t-button>
@@ -68,6 +71,7 @@ const emit = defineEmits<{
     @closed="emit('closed')"
   >
     <p class="dialog-copy">将导出全部已保存任务，包括模板、本地目录和非认证请求头。访问配置只保留本机标识，不包含会话；Cookie、Authorization、Proxy-Authorization 请求头会移除。导入其他环境后，缺失的访问配置需重新绑定。</p>
+    <p class="dialog-copy">同时包含分组及任务归属，采用版本 2 配置包；请使用支持任务分组的版本导入。</p>
     <p v-if="hasUnsavedChanges" class="dialog-copy">当前任务存在未保存修改，本次只会导出上次保存的版本。</p>
     <div class="dialog-actions">
       <t-button theme="default" variant="text" @click="exportTaskConfigsPrompt = false">取消</t-button>
@@ -84,13 +88,21 @@ const emit = defineEmits<{
     @close="taskConfigImportResult = null"
   >
     <t-alert
-      :theme="taskConfigImportResult?.skipped.length ? 'warning' : 'success'"
+      :theme="taskConfigImportResult?.skipped.length || taskConfigImportResult?.warnings.length ? 'warning' : 'success'"
       :message="`成功导入 ${taskConfigImportResult?.imported.length ?? 0} 个任务，跳过 ${taskConfigImportResult?.skipped.length ?? 0} 个任务。`"
     />
     <div v-if="taskConfigImportResult?.skipped.length" class="task-import-failures">
       <strong>未导入项目</strong>
       <ol>
         <li v-for="item in taskConfigImportResult.skipped" :key="`${item.sourceIndex}-${item.name}`">
+          第 {{ item.sourceIndex }} 项 · {{ item.name }}：{{ item.reason }}
+        </li>
+      </ol>
+    </div>
+    <div v-if="taskConfigImportResult?.warnings.length" class="task-import-failures">
+      <strong>已导入任务的分组提示</strong>
+      <ol>
+        <li v-for="item in taskConfigImportResult.warnings" :key="`${item.sourceIndex}-${item.name}`">
           第 {{ item.sourceIndex }} 项 · {{ item.name }}：{{ item.reason }}
         </li>
       </ol>
