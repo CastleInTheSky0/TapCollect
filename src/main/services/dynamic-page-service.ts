@@ -3,12 +3,13 @@ import { WebContentsView, type BrowserWindow } from 'electron'
 import type { TaskConfig } from '@shared/types'
 import { taskOutputMappings } from '@shared/output-template'
 import {
-  countDynamicSelectorMatches,
+  readDynamicDetailRenderState,
   isReadyDynamicPageChange,
   resolveDynamicDetailClick,
   resolveDynamicDomAction,
   type DynamicDetailDomActionResult,
   type DynamicDetailLocator,
+  type DynamicDetailRenderState,
   type DynamicDomActionResult,
   type DynamicPageAdvance,
   type DynamicPageProvider,
@@ -23,8 +24,9 @@ import { profileMatchesUrl } from '@shared/access-profile'
 
 const dynamicDomActionSource = resolveDynamicDomAction.toString()
 const dynamicDetailClickSource = resolveDynamicDetailClick.toString()
-const dynamicSelectorCountSource = countDynamicSelectorMatches.toString()
+const dynamicDetailRenderSource = readDynamicDetailRenderState.toString()
 const POLL_INTERVAL_MS = 150
+const DETAIL_STABLE_MS = 450
 
 const wait = async (milliseconds: number): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
@@ -56,16 +58,22 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   private latestSnapshot: DynamicPageSnapshot | null = null
   private blockedNavigation = ''
   private closed = false
+  private closing: Promise<void> | null = null
+  private detailView: WebContentsView | null = null
+  private detailClickActive = false
+  private detailNavigationError: Error | null = null
   private readonly signal: AbortSignal | undefined
   private readonly detailLocators: DynamicDetailLocator[]
 
   constructor(
     private readonly hostWindow: BrowserWindow,
-    private readonly view: WebContentsView,
+    private readonly listView: WebContentsView,
     private readonly task: TaskConfig,
     private readonly startUrl: string,
     private readonly allowedHostname: string,
-    private readonly access?: AccessCoordinator
+    private readonly access: AccessCoordinator | undefined,
+    private readonly createDetailView: () => WebContentsView,
+    private readonly permitsUrl: (url: string) => boolean
   ) {
     this.signal = access?.signal
     this.detailLocators = taskOutputMappings(task).flatMap((mapping) => {
@@ -75,7 +83,10 @@ class ElectronDynamicPageSession implements DynamicPageSession {
             selectorType: mapping.selectorType,
             selector: mapping.selector,
             startMarker: mapping.startMarker,
-            endMarker: mapping.endMarker
+            endMarker: mapping.endMarker,
+            extraction: mapping.extraction,
+            attribute: mapping.attribute,
+            matchMode: mapping.matchMode
           }
         ]
       }
@@ -86,9 +97,32 @@ class ElectronDynamicPageSession implements DynamicPageSession {
           selectorType: value.selectorType,
           selector: value.selector,
           startMarker: value.startMarker,
-          endMarker: value.endMarker
+          endMarker: value.endMarker,
+          extraction: value.extraction,
+          attribute: value.attribute,
+          matchMode: value.matchMode
         }))
     })
+  }
+
+  private get view(): WebContentsView {
+    return this.detailView ?? this.listView
+  }
+
+  handleDetailWindowOpen(details: Electron.HandlerDetails): void {
+    if (!this.detailClickActive || this.detailView) return
+    try {
+      this.assertAlive()
+      if (!this.permitsUrl(details.url)) throw new Error('详情新窗口地址不在允许的站点或访问配置来源内')
+      if (details.postBody) throw new Error('点击式详情不支持通过新窗口提交表单')
+      const detailView = this.createDetailView()
+      this.detailView = detailView
+      void detailView.webContents.loadURL(details.url, { httpReferrer: details.referrer }).catch((error: unknown) => {
+        if (this.detailView === detailView) this.detailNavigationError = error instanceof Error ? error : new Error(String(error))
+      })
+    } catch (error) {
+      this.detailNavigationError = error instanceof Error ? error : new Error(String(error))
+    }
   }
 
   async initialize(): Promise<void> {
@@ -216,41 +250,65 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   async openDetail(itemIndex: number): Promise<DynamicPageSnapshot> {
     this.assertAlive()
     const listSnapshot = this.latestSnapshot ?? (await this.current())
-    const action = await this.executeDetailClick(itemIndex)
-    if (action.kind === 'error') throw new Error(action.reason)
-
+    const before = await this.readDetailRenderState()
     const timeoutMs = this.task.request.timeoutSeconds * 1_000
     const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      await wait(POLL_INTERVAL_MS)
-      this.assertAlive()
-      this.assertAllowedPage()
-      const snapshot = await this.readSnapshot()
-      const detailMatchCount = await this.readDetailMatchCount()
-      if (
-        snapshot.url !== listSnapshot.url ||
-        (snapshot.html !== listSnapshot.html &&
-          (detailMatchCount > 0 ||
-            (this.detailLocators.length === 0 && snapshot.itemCount === 0)))
-      ) {
-        await wait(POLL_INTERVAL_MS * 2)
+    let stableSignature = ''
+    let stableSince = Date.now()
+    let latestDetail: DynamicPageSnapshot | null = null
+    this.detailNavigationError = null
+    this.detailClickActive = true
+    try {
+      const action = await this.executeDetailClick(itemIndex)
+      if (action.kind === 'error') throw new Error(action.reason)
+      while (Date.now() < deadline) {
+        await wait(POLL_INTERVAL_MS)
         this.assertAlive()
-        this.assertAllowedPage()
-        return {
-          html: await this.readDocumentHtml(),
-          url: this.view.webContents.getURL(),
-          itemCount: 0,
-          signature: ''
+        if (this.detailNavigationError) throw this.detailNavigationError
+        if (this.blockedNavigation) this.assertAllowedPage()
+        try {
+          // A new main frame can briefly be unreadable while navigation commits.
+          const state = await this.readDetailRenderState()
+          const snapshot = await this.readSnapshot()
+          const changed = snapshot.url !== listSnapshot.url ||
+            (state.signature !== before.signature && state.matchCount > 0) ||
+            (this.detailLocators.length === 0 && snapshot.html !== listSnapshot.html && snapshot.itemCount === 0)
+          if (!changed) continue
+          latestDetail = { ...snapshot, itemCount: 0, signature: '' }
+          const signature = `${snapshot.url}\n${state.signature}`
+          if (signature !== stableSignature) {
+            stableSignature = signature
+            stableSince = Date.now()
+          }
+          if (state.populatedCount === this.detailLocators.length && Date.now() - stableSince >= DETAIL_STABLE_MS) {
+            return latestDetail
+          }
+        } catch (error) {
+          if (isAccessInterruption(error)) throw error
+          if (this.blockedNavigation) this.assertAllowedPage()
         }
       }
+      // Optional/missing fields retain their normal extraction semantics at the
+      // bounded deadline; a selector existing with an empty value is not ready.
+      if (latestDetail) return latestDetail
+      throw new Error(`点击后页面在 ${this.task.request.timeoutSeconds} 秒内没有进入详情`)
+    } finally {
+      this.detailClickActive = false
     }
-    throw new Error(`点击后页面在 ${this.task.request.timeoutSeconds} 秒内没有进入详情`)
   }
 
   async returnToList(): Promise<DynamicPageSnapshot> {
     this.assertAlive()
     const previous = this.latestSnapshot
     if (!previous) throw new Error('没有可返回的动态列表页状态')
+    this.detailClickActive = false
+    this.detailNavigationError = null
+    this.blockedNavigation = ''
+    if (this.detailView) {
+      await this.closeView(this.detailView)
+      this.detailView = null
+      return this.current()
+    }
     const timeoutMs = this.task.request.timeoutSeconds * 1_000
     try {
       const current = await this.readSnapshot()
@@ -276,16 +334,31 @@ class ElectronDynamicPageSession implements DynamicPageSession {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    if (this.closing) return this.closing
     this.closed = true
+    this.detailClickActive = false
+    this.closing = (async () => {
+      if (this.detailView) await this.closeView(this.detailView)
+      this.detailView = null
+      await this.closeView(this.listView)
+    })()
+    return this.closing
+  }
+
+  private async closeView(view: WebContentsView): Promise<void> {
     if (!this.hostWindow.isDestroyed()) {
       try {
-        this.hostWindow.contentView.removeChildView(this.view)
+        this.hostWindow.contentView.removeChildView(view)
       } catch {
         // The parent window may already be tearing down its child views.
       }
     }
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close()
+    if (!view.webContents.isDestroyed()) {
+      await new Promise<void>((resolve) => {
+        view.webContents.once('destroyed', resolve)
+        view.webContents.close({ waitForBeforeUnload: false })
+      })
+    }
   }
 
   private async readSnapshot(): Promise<DynamicPageSnapshot> {
@@ -301,17 +374,9 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     }
   }
 
-  private async readDocumentHtml(): Promise<string> {
-    return this.executeInMainFrame<string>(
-      'document.documentElement ? document.documentElement.outerHTML : ""',
-      true
-    )
-  }
-
-  private async readDetailMatchCount(): Promise<number> {
-    if (this.detailLocators.length === 0) return 0
-    return this.executeInMainFrame<number>(
-      `(${dynamicSelectorCountSource})(document,${JSON.stringify(this.detailLocators)})`,
+  private async readDetailRenderState(): Promise<DynamicDetailRenderState> {
+    return this.executeInMainFrame<DynamicDetailRenderState>(
+      `(${dynamicDetailRenderSource})(document,${JSON.stringify(this.detailLocators)})`,
       true
     )
   }
@@ -407,22 +472,20 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
     if (task.accessProfileId && !this.profiles) throw new Error('访问配置服务不可用')
     const profile = await this.profiles?.acquire(task)
     if (profile && !profileMatchesUrl(profile, startUrl)) { profile.release(); throw new Error('动态页面地址与访问配置来源不匹配') }
-    const view = new WebContentsView({
+    const browserSession = profile ? { session: profile.session } : { partition: `web-info-collector-dynamic-${randomUUID()}` }
+    const createView = (): WebContentsView => new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
         javascript: true,
         backgroundThrottling: false,
-        ...(profile ? { session: profile.session } : { partition: `web-info-collector-dynamic-${randomUUID()}` })
+        ...browserSession
       }
     })
+    const view = createView()
     view.webContents.once('destroyed', () => profile?.release())
-    view.setBackgroundColor('#ffffff')
-    view.setBounds({ x: 100_000, y: 0, width: 1, height: 1 })
     const request = this.access?.requestConfig(task.request) ?? task.request
-    view.webContents.setUserAgent(request.userAgent)
-    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     view.webContents.session.setPermissionCheckHandler(() => false)
     view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
       callback(false)
@@ -445,13 +508,32 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
       }
     )
 
+    const permitsUrl = (url: string): boolean => {
+      try {
+        return validateHttpUrl(url).hostname.toLowerCase() === allowedHostname && (!profile || profileMatchesUrl(profile, url))
+      } catch {
+        return false
+      }
+    }
     const session = new ElectronDynamicPageSession(
       this.hostWindow,
       view,
       task,
       parsed.toString(),
       allowedHostname,
-      this.access
+      this.access,
+      () => {
+        const detailView = createView()
+        try {
+          configureView(detailView)
+          this.hostWindow.contentView.addChildView(detailView)
+          return detailView
+        } catch (error) {
+          detailView.webContents.close()
+          throw error
+        }
+      },
+      permitsUrl
     )
     const onResponse = (details: Electron.OnHeadersReceivedListenerDetails): void => {
         if (!this.access) return
@@ -469,19 +551,25 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
           this.access?.protect(allowedHostname, `动态页面返回 ${status}，站点进入冷却`, Date.now() + duration)
         }
     }
-    if (profile) profile.attach(view.webContents, onResponse)
-    else if (this.access) view.webContents.session.webRequest.onHeadersReceived((details, callback) => { callback({}); onResponse(details) })
+    if (!profile && this.access) view.webContents.session.webRequest.onHeadersReceived((details, callback) => { callback({}); onResponse(details) })
     const guardNavigation = (event: Electron.Event, url: string): void => {
-      try {
-        if (validateHttpUrl(url).hostname.toLowerCase() === allowedHostname && (!profile || profileMatchesUrl(profile, url))) return
-      } catch {
-        // Invalid and non-HTTP navigation is blocked below.
-      }
+      if (permitsUrl(url)) return
       event.preventDefault()
       session.markBlockedNavigation(url)
     }
-    view.webContents.on('will-navigate', guardNavigation)
-    view.webContents.on('will-redirect', guardNavigation)
+    const configureView = (target: WebContentsView): void => {
+      target.setBackgroundColor('#ffffff')
+      target.setBounds({ x: 100_000, y: 0, width: 1, height: 1 })
+      target.webContents.setUserAgent(request.userAgent)
+      target.webContents.setWindowOpenHandler((details) => {
+        if (target === view) session.handleDetailWindowOpen(details)
+        return { action: 'deny' }
+      })
+      if (profile) profile.attach(target.webContents, onResponse)
+      target.webContents.on('will-navigate', guardNavigation)
+      target.webContents.on('will-redirect', guardNavigation)
+    }
+    configureView(view)
     this.hostWindow.contentView.addChildView(view)
 
     try {

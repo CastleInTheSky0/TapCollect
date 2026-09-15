@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  countDynamicSelectorMatches,
+  readDynamicDetailRenderState,
   isReadyDynamicPageChange,
   resolveDynamicDetailClick,
   resolveDynamicDomAction
@@ -167,7 +167,7 @@ describe('dynamic page DOM actions', () => {
     )
 
     expect(
-      countDynamicSelectorMatches(dom.window.document, [
+      readDynamicDetailRenderState(dom.window.document, [
         css('#detail'),
         { selectorType: 'xpath', selector: '//div[@id="detail"]/p' },
         {
@@ -177,11 +177,11 @@ describe('dynamic page DOM actions', () => {
           endMarker: '\r\n<!--结束-->'
         }
       ])
-    ).toBe(3)
+    ).toMatchObject({ matchCount: 3, populatedCount: 3 })
 
     const serialized = dom.window.eval(
-      `(${countDynamicSelectorMatches.toString()})`
-    ) as typeof countDynamicSelectorMatches
+      `(${readDynamicDetailRenderState.toString()})`
+    ) as typeof readDynamicDetailRenderState
     expect(
       serialized(dom.window.document, [
         {
@@ -191,6 +191,47 @@ describe('dynamic page DOM actions', () => {
           endMarker: '\r\n<!--结束-->'
         }
       ])
-    ).toBe(1)
+    ).toMatchObject({ matchCount: 1, populatedCount: 1 })
+  })
+
+  it('waits for populated values rather than empty skeleton elements', () => {
+    const dom = new JSDOM('<h1></h1><main><script>placeholder()</script></main><img>')
+    const selectors = [css('h1'), css('main'), { ...css('img'), extraction: 'attribute' as const, attribute: 'src' }]
+    const skeleton = readDynamicDetailRenderState(dom.window.document, selectors)
+    expect(skeleton).toMatchObject({ matchCount: 3, populatedCount: 0 })
+    dom.window.document.querySelector('h1')!.textContent = '标题'
+    const partial = readDynamicDetailRenderState(dom.window.document, selectors)
+    expect(partial.populatedCount).toBe(1)
+    dom.window.document.querySelector('main')!.textContent = '延迟正文'
+    dom.window.document.querySelector('img')!.setAttribute('src', '/photo.png')
+    const ready = readDynamicDetailRenderState(dom.window.document, selectors)
+    expect(ready.populatedCount).toBe(3)
+    expect(ready.signature).not.toBe(partial.signature)
+  })
+
+  it('supports attribute XPath values and HTML-only content without confusing first/all matches', () => {
+    const dom = new JSDOM('<div><img src="/photo.png"></div><p></p><p>第二个</p>')
+    expect(readDynamicDetailRenderState(dom.window.document, [
+      { selectorType: 'xpath', selector: '//img/@src' },
+      { ...css('div'), extraction: 'html' },
+      css('p'),
+      { ...css('p'), matchMode: 'all' },
+      css('.missing')
+    ])).toMatchObject({ matchCount: 6, populatedCount: 3 })
+  })
+
+  it('does not treat marker text skeletons or script bodies as rendered values', () => {
+    const dom = new JSDOM('<body><!--begin--><p></p><script>loading()</script><!--end--></body>', { runScripts: 'outside-only' })
+    const selectors = [{
+      selectorType: 'markers' as const,
+      selector: '',
+      startMarker: '<!--begin-->',
+      endMarker: '<!--end-->',
+      extraction: 'text' as const
+    }]
+    const serialized = dom.window.eval(`(${readDynamicDetailRenderState.toString()})`) as typeof readDynamicDetailRenderState
+    expect(serialized(dom.window.document, selectors)).toMatchObject({ matchCount: 1, populatedCount: 0 })
+    dom.window.document.querySelector('p')!.textContent = '延迟正文'
+    expect(serialized(dom.window.document, selectors)).toMatchObject({ matchCount: 1, populatedCount: 1 })
   })
 })

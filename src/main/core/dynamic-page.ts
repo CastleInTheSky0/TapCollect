@@ -1,7 +1,13 @@
 import type { PageExtractionConfig, SelectorConfig, TaskConfig } from '@shared/types'
 
 export type DynamicDetailLocator = Pick<PageExtractionConfig, 'selectorType' | 'selector'> &
-  Partial<Pick<PageExtractionConfig, 'startMarker' | 'endMarker'>>
+  Partial<Pick<PageExtractionConfig, 'startMarker' | 'endMarker' | 'extraction' | 'attribute' | 'matchMode'>>
+
+export interface DynamicDetailRenderState {
+  matchCount: number
+  populatedCount: number
+  signature: string
+}
 
 export interface DynamicPageSnapshot {
   html: string
@@ -40,10 +46,10 @@ export type DynamicDetailDomActionResult =
   | { kind: 'clicked' }
   | { kind: 'error'; reason: string }
 
-export const countDynamicSelectorMatches = (
+export const readDynamicDetailRenderState = (
   root: Document,
   selectors: DynamicDetailLocator[]
-): number => {
+): DynamicDetailRenderState => {
   // 本函数会被序列化到隔离页面执行，标记匹配逻辑必须保持在函数内部。
   const createLiteralMarkerPattern = (marker: string): RegExp => {
     const pattern = marker
@@ -53,13 +59,18 @@ export const countDynamicSelectorMatches = (
     return new RegExp(pattern, 'g')
   }
 
-  let count = 0
+  let matchCount = 0
+  const values: string[] = []
   for (const config of selectors) {
+    const matches: string[] = []
     if (config.selectorType === 'markers') {
       const source = root.documentElement?.outerHTML ?? ''
       const startMarker = config.startMarker ?? ''
       const endMarker = config.endMarker ?? ''
-      if (!startMarker.length || !endMarker.length) continue
+      if (!startMarker.length || !endMarker.length) {
+        values.push('')
+        continue
+      }
       const startPattern = createLiteralMarkerPattern(startMarker)
       const endPattern = createLiteralMarkerPattern(endMarker)
       let cursor = 0
@@ -71,20 +82,56 @@ export const countDynamicSelectorMatches = (
         endPattern.lastIndex = contentStart
         const end = endPattern.exec(source)
         if (!end) break
-        count += 1
+        matchCount += 1
+        const content = source.slice(contentStart, end.index)
+        if (config.extraction === 'text') {
+          // Template contents stay inert: readiness checks must not load resources.
+          const template = root.createElement('template')
+          template.innerHTML = content
+          template.content.querySelectorAll('script,noscript').forEach(child => child.remove())
+          matches.push((template.content.textContent ?? '').trim())
+        } else {
+          matches.push(content.trim())
+        }
         cursor = end.index + end[0].length
       }
-      continue
+    } else {
+      const expression = config.selector.trim()
+      const nodes: Node[] = []
+      if (expression && config.selectorType === 'css') {
+        nodes.push(...root.querySelectorAll(expression))
+      } else if (expression) {
+        const result = root.evaluate(expression, root, null, 7, null)
+        for (let index = 0; index < result.snapshotLength; index += 1) {
+          const node = result.snapshotItem(index)
+          if (node) nodes.push(node)
+        }
+      }
+      matchCount += nodes.length
+      for (const node of nodes) {
+        const element = node.nodeType === 1 ? node as Element : null
+        if (config.extraction === 'attribute') {
+          matches.push((element?.getAttribute(config.attribute ?? '') ?? '').trim())
+        } else {
+          const clone = node.cloneNode(true)
+          if (clone.nodeType === 1) {
+            const clonedElement = clone as Element
+            if (clonedElement.matches('script,noscript')) { matches.push(''); continue }
+            clonedElement.querySelectorAll('script,noscript').forEach(child => child.remove())
+          }
+          matches.push((config.extraction === 'html' && clone.nodeType === 1
+            ? (clone as Element).innerHTML
+            : clone.textContent ?? '').trim())
+        }
+      }
     }
-    const expression = config.selector.trim()
-    if (!expression) continue
-    if (config.selectorType === 'css') {
-      count += root.querySelectorAll(expression).length
-      continue
-    }
-    count += root.evaluate(expression, root, null, 7, null).snapshotLength
+    values.push(config.matchMode === 'all' ? matches.join('\n') : matches[0] ?? '')
   }
-  return count
+  return {
+    matchCount,
+    populatedCount: values.filter(value => value.trim()).length,
+    signature: JSON.stringify(values)
+  }
 }
 
 export const resolveDynamicDetailClick = (

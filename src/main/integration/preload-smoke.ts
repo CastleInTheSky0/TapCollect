@@ -18,6 +18,7 @@ import { AccessProfileService } from '@main/services/access-profile-service'
 import { verifyAccessProfiles, seedProfileRestartCheck, verifyProfileAfterRestart } from './access-profile-smoke'
 import { verifyTaskGroups } from './task-group-smoke'
 import { verifyManualVerification } from './manual-verification-smoke'
+import { verifyDynamicDetails } from './dynamic-detail-smoke'
 import type {
   PreviewEvaluateResult,
   PreviewNavigationState,
@@ -55,6 +56,7 @@ interface PreloadSmokeResult {
   previewNavigationWorks: boolean
   previewPickWorks: boolean
   dynamicPartialLoadWorks: boolean
+  dynamicDetailsWork: boolean
   consoleErrors: string[]
 }
 
@@ -1021,6 +1023,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       | 'previewNavigationWorks'
       | 'previewPickWorks'
       | 'dynamicPartialLoadWorks'
+      | 'dynamicDetailsWork'
       | 'usesUserDataTaskStore'
       | 'accessProfilesWork'
       | 'taskGroupsWork'
@@ -1039,6 +1042,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
       `${previewUrl}partial-load`
     )
     writeStage('dynamic-partial-load-verified')
+    const dynamicDetailsWork = await verifyDynamicDetails(window, profiles)
+    writeStage('dynamic-details-verified')
     const accessProfilesWork = await verifyAccessProfiles(window, store, profiles, access, runManager, preview)
     writeStage('access-profiles-verified')
     const manualVerificationWorks = await verifyManualVerification(window, store, profiles, access, runManager)
@@ -1055,6 +1060,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       previewNavigationWorks,
       previewPickWorks,
       dynamicPartialLoadWorks,
+      dynamicDetailsWork,
       usesUserDataTaskStore:
         taskDataDirectory.rootDirectory === join(app.getPath('userData'), 'collector-data'),
       consoleErrors
@@ -1116,6 +1122,7 @@ const main = async (): Promise<void> => {
       !result.previewNavigationWorks ||
       !result.previewPickWorks ||
       !result.dynamicPartialLoadWorks ||
+      !result.dynamicDetailsWork ||
       result.consoleErrors.some((message) =>
         /onRunProgress|Cannot read properties of undefined|Uncaught/i.test(message)
       )

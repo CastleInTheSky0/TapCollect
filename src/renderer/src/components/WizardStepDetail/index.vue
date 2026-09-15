@@ -47,7 +47,7 @@ const emit = defineEmits<{
     <div class="detail-navigation-picker">
       <div>
         <strong>进入详情方式</strong>
-        <span>有链接读取地址；没有链接时模拟点击列表元素</span>
+        <span>静态详情用“读取链接”；动态加载详情或需点击跳转时用“点击元素”</span>
       </div>
       <t-radio-group v-model="task.detail.navigationMode" variant="default-filled">
         <t-radio-button value="link">读取链接</t-radio-button>
