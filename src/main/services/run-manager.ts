@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { join, resolve } from 'node:path'
 import { net } from 'electron'
+import { setTimeout as wait } from 'node:timers/promises'
+import PQueue from 'p-queue'
 import {
   createEmptyCounters,
   createEmptyResourceCounters,
@@ -30,10 +32,12 @@ import type { DynamicPageProvider } from '@main/core/dynamic-page'
 import { HttpClient } from '@main/core/http-client'
 import { sanitizeFileName } from '@main/core/url-utils'
 import type { TaskStore } from './task-store'
-import type { AccessCoordinator } from './access-coordinator'
+import type { AccessCoordinator, AccessRequestTarget } from './access-coordinator'
 import { redactDiagnostic, type HostProtection } from '@shared/access-protection'
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
 import type { AccessProfileLease, AccessProfileService } from './access-profile-service'
+import { profileMatchesUrl } from '@shared/access-profile'
+import { ManualVerificationService, type ManualVerificationProvider, type VerificationRequest } from './manual-verification-service'
 
 const ACTIVE_STATUSES = new Set<RunSessionItem['status']>([
   'preparing',
@@ -61,6 +65,7 @@ interface CollectorEngineLike {
 }
 
 interface ManagedRun {
+  verification?: { request: VerificationRequest; controller?: AbortController | undefined; execution?: Promise<void> | undefined; disposing?: boolean } | undefined
   profile?: AccessProfileLease | undefined
   task: TaskConfig
   outputKey: string
@@ -101,15 +106,19 @@ export class RunManager extends EventEmitter {
   private pauseSequence = 0
   private shuttingDown = false
   private readonly protectionTimers = new Map<string, NodeJS.Timeout>()
+  private readonly verificationQueues = new Map<string, PQueue>()
+  private readonly verifier: ManualVerificationProvider | undefined
 
   constructor(
     private readonly store: TaskStore,
     dynamicPageProvider: DynamicPageProvider | null = null,
     engine: CollectorEngineLike | null = null,
     private readonly access?: AccessCoordinator,
-    private readonly profiles?: AccessProfileService
+    private readonly profiles?: AccessProfileService,
+    verifier?: ManualVerificationProvider
   ) {
     super()
+    this.verifier = verifier ?? (access ? new ManualVerificationService(access) : undefined)
     this.engine =
       engine ??
       new CollectorEngine(
@@ -117,7 +126,7 @@ export class RunManager extends EventEmitter {
         new HttpClient(net.fetch as typeof fetch, access),
         dynamicPageProvider
       )
-    access?.on('protected', (protection: HostProtection) => this.handleProtection(protection))
+    access?.on('protected', (protection: HostProtection, target?: AccessRequestTarget) => this.handleProtection(protection, target))
     access?.on('cleared', (hostname: string) => this.releaseProtection(hostname))
   }
 
@@ -283,6 +292,12 @@ export class RunManager extends EventEmitter {
   async pause(taskId: string): Promise<boolean> {
     const managed = this.runs.get(taskId)
     if (managed) managed.autoResumePending = false
+    if (managed?.verification?.controller) {
+      this.stopVerification(managed)
+      managed.item.message = '已停止验证后恢复，任务保持暂停'
+      this.emitSession()
+      return true
+    }
     if (managed && ['paused', 'pausing'].includes(managed.item.status) && managed.item.protection?.kind === 'cooling') {
       managed.item.protection = undefined
       managed.item.message = '已停止自动恢复，任务保持暂停'
@@ -310,18 +325,17 @@ export class RunManager extends EventEmitter {
 
   async resume(taskId: string): Promise<boolean> {
     const managed = this.runs.get(taskId)
-    if (managed?.item.status === 'queued' && managed.item.protection?.kind === 'action-required' && !this.shuttingDown) {
-      this.access?.clearManual(managed.item.protection.hostname)
-      this.schedule()
-      this.emitSession()
-      return true
-    }
+    if (managed?.verification) throw new Error('请在人工处理提示中点击“我已完成验证，尝试恢复”')
     if (!managed || managed.item.status !== 'paused' || this.shuttingDown) return false
     const protection = this.access?.taskProtection(taskId, this.taskHostname(managed.task))
     if (protection?.kind === 'cooling' && protection.until > Date.now()) {
       throw new Error(`站点仍在冷却，请等待 ${Math.ceil((protection.until - Date.now()) / 1000)} 秒`)
     }
-    if (protection?.kind === 'action-required') this.access?.clearManual(protection.hostname)
+    if (protection?.kind === 'action-required') {
+      this.requireVerification(managed, protection)
+      this.emitSession()
+      throw new Error('请先完成验证并确认后再尝试恢复')
+    }
     managed.item.protection = undefined
     managed.item.status = 'queued'
     managed.item.resume = true
@@ -347,6 +361,8 @@ export class RunManager extends EventEmitter {
     const managed = this.runs.get(taskId)
     if (!managed || !LOCKED_STATUSES.has(managed.item.status)) return false
     managed.autoResumePending = false
+    if (managed.item.status === 'queued') this.removeFromQueue(taskId)
+    await this.disposeVerification(managed)
     managed.item.protection = undefined
 
     if (managed.item.status === 'queued') {
@@ -376,7 +392,7 @@ export class RunManager extends EventEmitter {
 
   async pauseAll(): Promise<boolean> {
     const active = [...this.runs.values()]
-      .filter(({ item }) => ACTIVE_STATUSES.has(item.status) || (item.status === 'paused' && item.protection?.kind === 'cooling'))
+      .filter(managed => ACTIVE_STATUSES.has(managed.item.status) || Boolean(managed.verification?.controller) || (managed.item.status === 'paused' && managed.item.protection?.kind === 'cooling'))
       .sort((left, right) => left.item.startedAt.localeCompare(right.item.startedAt))
     const results = await Promise.all(active.map(({ item }) => this.pause(item.taskId)))
     return results.some(Boolean)
@@ -388,7 +404,9 @@ export class RunManager extends EventEmitter {
       .sort((left, right) => left.pauseOrder - right.pauseOrder)
     let resumed = false
     for (const managed of paused) {
+      if (managed.verification) continue
       const protection = this.access?.taskProtection(managed.item.taskId, this.taskHostname(managed.task))
+      if (protection?.kind === 'action-required') continue
       if (protection?.kind === 'cooling' && protection.until > Date.now()) continue
       resumed = (await this.resume(managed.item.taskId)) || resumed
     }
@@ -399,24 +417,23 @@ export class RunManager extends EventEmitter {
     const targets = [...this.runs.values()].filter(({ item }) => LOCKED_STATUSES.has(item.status))
     if (targets.length === 0) return false
     for (const managed of targets) {
-      managed.item.protection = undefined
       managed.autoResumePending = false
-    }
-
-    for (const taskId of [...this.queue]) {
-      const managed = this.runs.get(taskId)
-      if (!managed) continue
-      this.removeFromQueue(taskId)
-      managed.item.status = 'cancelled'
-      managed.item.queuePosition = 0
-      managed.item.queueReason = ''
-      managed.item.finishedAt = nowIso()
-      managed.item.message = '已从等待队列移除'
-      this.releaseOutputLock(managed)
-    }
-    for (const managed of targets) {
-      if (managed.item.status === 'paused') this.startPausedCancellation(managed)
+      if (managed.item.status === 'queued') this.removeFromQueue(managed.item.taskId)
       else if (ACTIVE_STATUSES.has(managed.item.status)) managed.control?.cancel()
+    }
+    // Revoke the whole batch before awaiting any active probe's cleanup.
+    await Promise.all(targets.map(managed => this.disposeVerification(managed)))
+
+    for (const managed of targets) {
+      managed.item.protection = undefined
+      if (managed.item.status === 'queued') {
+        managed.item.status = 'cancelled'
+        managed.item.queuePosition = 0
+        managed.item.queueReason = ''
+        managed.item.finishedAt = nowIso()
+        managed.item.message = '已从等待队列移除'
+        this.releaseOutputLock(managed)
+      } else if (managed.item.status === 'paused') this.startPausedCancellation(managed)
     }
     this.emitSession()
 
@@ -438,6 +455,10 @@ export class RunManager extends EventEmitter {
         }))
     }
     this.shuttingDown = true
+    for (const managed of this.runs.values()) {
+      if (managed.control && ACTIVE_STATUSES.has(managed.item.status) && managed.item.status !== 'pausing') managed.control.pause()
+    }
+    await Promise.all([...this.runs.values()].map(managed => this.disposeVerification(managed, false)))
     for (const timer of this.protectionTimers.values()) clearTimeout(timer)
     this.protectionTimers.clear()
     for (const taskId of [...this.queue]) {
@@ -554,9 +575,11 @@ export class RunManager extends EventEmitter {
         this.queue.splice(index, 1)
         continue
       }
+      if (managed.verification) { index += 1; continue }
       const protection = this.access?.taskProtection(managed.item.taskId, this.taskHostname(managed.task))
       if (protection) {
         managed.item.protection = protection
+        if (protection.kind === 'action-required') this.requireVerification(managed, protection)
         const sameHostActive = [...this.runs.values()].some(other =>
           other !== managed && ACTIVE_STATUSES.has(other.item.status) && this.usesHost(other, protection.hostname))
         if (protection.kind === 'action-required' || protection.until > Date.now() || sameHostActive) {
@@ -682,6 +705,10 @@ export class RunManager extends EventEmitter {
   private finishManagedRun(managed: ManagedRun, result: RunResult): void {
     result = { ...result, message: redactDiagnostic(result.message) }
     managed.item.protection = undefined
+    this.stopVerification(managed)
+    if (managed.verification) this.verifier?.close(managed.verification.request.id)
+    managed.verification = undefined
+    managed.item.verification = undefined
     managed.item.runId = result.runId
     managed.item.status = result.status
     managed.item.result = clone(result)
@@ -757,12 +784,13 @@ export class RunManager extends EventEmitter {
     return this.taskHostname(managed.task) === hostname || Boolean(this.access?.hasVisited(managed.item.taskId, hostname))
   }
 
-  private handleProtection(protection: HostProtection): void {
+  private handleProtection(protection: HostProtection, target?: AccessRequestTarget): void {
     for (const managed of this.runs.values()) {
       if (!this.usesHost(managed, protection.hostname) || !LOCKED_STATUSES.has(managed.item.status)) continue
       // 手动暂停的任务不加入自动恢复名单。
       if (managed.item.status === 'paused' && !managed.item.protection) continue
       managed.item.protection = protection
+      if (protection.kind === 'action-required') this.requireVerification(managed, protection, target)
       managed.item.message = protection.reason
       if (managed.control && ACTIVE_STATUSES.has(managed.item.status)) {
         managed.control.pause()
@@ -807,6 +835,8 @@ export class RunManager extends EventEmitter {
     this.protectionTimers.delete(hostname)
     for (const managed of this.runs.values()) {
       if (managed.item.protection?.hostname !== hostname) continue
+      // 共享 Cookie 不等于其他任务已经确认；各任务保留自己的验证入口。
+      if (managed.verification) continue
       const automatic = managed.item.protection.kind === 'cooling'
       managed.item.protection = undefined
       if (automatic && managed.item.status === 'pausing') managed.autoResumePending = true
@@ -819,5 +849,133 @@ export class RunManager extends EventEmitter {
     }
     this.schedule()
     this.emitSession()
+  }
+
+  openVerification(taskId: string, id: string): boolean {
+    const managed = this.verificationRun(taskId, id)
+    if (!managed || !this.verifier) return false
+    const state = managed.item.verification!
+    if (!state.canOpen) throw new Error(state.message)
+    this.verifier.open(managed.verification!.request, () => {
+      if (this.runs.get(taskId) !== managed || managed.item.verification?.id !== id) return
+      this.stopVerification(managed)
+      managed.item.verification.windowOpen = false
+      managed.item.verification.message = '验证页面已关闭；任务保持暂停，可重新打开后确认'
+      this.emitSession()
+    })
+    state.windowOpen = true
+    this.emitSession()
+    return true
+  }
+
+  confirmVerification(taskId: string, id: string): boolean {
+    const managed = this.verificationRun(taskId, id)
+    if (!managed || !this.verifier || !this.access) return false
+    const work = managed.verification!
+    if (work.controller) return true
+    if (work.execution) return false
+    const controller = new AbortController()
+    work.controller = controller
+    managed.item.verification!.status = 'waiting'
+    managed.item.verification!.message = '已确认，等待站点期限和探测名额；仅恢复本任务'
+    work.execution = this.performVerification(managed, controller)
+    this.emitSession()
+    return true
+  }
+
+  private verificationRun(taskId: string, id: string): ManagedRun | undefined {
+    const managed = this.runs.get(taskId)
+    if (this.shuttingDown || !managed || !['paused', 'queued'].includes(managed.item.status) || managed.execution ||
+      !managed.verification || managed.verification.disposing || managed.item.verification?.id !== id) return undefined
+    return managed
+  }
+
+  private requireVerification(managed: ManagedRun, protection: HostProtection, trigger?: AccessRequestTarget): void {
+    if (managed.verification) return
+    const own = trigger?.taskId === managed.item.taskId ? trigger : this.access?.taskTarget(managed.item.taskId, protection.hostname)
+    const url = own?.url ?? firstTaskListPageUrl(managed.task)
+    const id = randomUUID()
+    const canOpen = Boolean(managed.profile && profileMatchesUrl(managed.profile, url))
+    managed.verification = { request: { id, url, resource: own?.resource ?? false, task: managed.task, profile: managed.profile } }
+    managed.item.verification = {
+      id, hostname: protection.hostname, status: 'required', windowOpen: false, canOpen,
+      message: canOpen ? '在验证页面完成登录或验证后，返回这里确认；关闭窗口不会恢复任务' :
+        '网页登录需要绑定与触发地址来源一致的访问配置；请取消后调整。权限已在外部修复时可直接确认探测'
+    }
+  }
+
+  private async performVerification(managed: ManagedRun, controller: AbortController): Promise<void> {
+    const work = managed.verification!
+    const state = managed.item.verification!
+    const { signal } = controller
+    const queue = this.verificationQueues.get(state.hostname) ?? new PQueue({ concurrency: 1 })
+    this.verificationQueues.set(state.hostname, queue)
+    // 排队时可立即取消；启动后由探测自己的信号结束清理，不能提前释放队列名额。
+    const queuedCancellation = new AbortController()
+    const cancelQueued = (): void => queuedCancellation.abort()
+    signal.addEventListener('abort', cancelQueued, { once: true })
+    const valid = (): boolean => !signal.aborted && this.verificationRun(managed.item.taskId, state.id) === managed && work.controller === controller
+    try {
+      await queue.add(async () => {
+        signal.removeEventListener('abort', cancelQueued)
+        while (valid()) {
+          const until = this.access!.getProtection(state.hostname)?.until ?? 0
+          if (until <= Date.now()) break
+          await wait(Math.min(60000, until - Date.now()), undefined, { signal })
+        }
+        if (!valid()) return
+        state.status = 'probing'
+        state.message = '正在探测触发页面，成功后按原检查点继续'
+        this.emitSession()
+        await this.access!.withManualProbe(managed.item.taskId, state.hostname, signal,
+          () => this.verifier!.probe(work.request, signal), managed.profile)
+        if (!valid()) return
+        // 探测期间其他请求可能延长服务端期限，确认不能把它清掉。
+        if ((this.access!.getProtection(state.hostname)?.until ?? 0) > Date.now()) throw new Error('站点仍在冷却')
+        this.access!.clearManual(state.hostname)
+        this.verifier!.close(state.id)
+        managed.verification = undefined
+        managed.item.verification = undefined
+        const remaining = this.access!.taskProtection(managed.item.taskId, this.taskHostname(managed.task))
+        managed.item.protection = remaining
+        if (remaining?.kind === 'action-required') this.requireVerification(managed, remaining)
+        if (remaining?.kind === 'cooling') this.armCooldown(remaining)
+        if (managed.item.status === 'queued') this.schedule()
+        else if (!remaining) await this.resume(managed.item.taskId)
+      }, { signal: queuedCancellation.signal })
+    } catch {
+      if (valid()) {
+        state.status = 'failed'
+        state.message = '探测未通过，任务保持暂停；请检查验证页面和站点期限后再次确认'
+        managed.item.message = state.message
+      }
+    } finally {
+      signal.removeEventListener('abort', cancelQueued)
+      if (!queue.pending && !queue.size && this.verificationQueues.get(state.hostname) === queue) this.verificationQueues.delete(state.hostname)
+      if (work.controller === controller) work.controller = undefined
+      work.execution = undefined
+      this.emitSession()
+    }
+  }
+
+  private stopVerification(managed: ManagedRun): void {
+    managed.verification?.controller?.abort()
+    if (managed.verification) managed.verification.controller = undefined
+    if (managed.item.verification) {
+      managed.item.verification.status = 'required'
+      managed.item.verification.message = '已停止验证后恢复，任务保持暂停；继续前请重新确认'
+    }
+  }
+
+  private async disposeVerification(managed: ManagedRun, remove = true): Promise<void> {
+    const work = managed.verification
+    if (!work) return
+    work.disposing = true
+    this.stopVerification(managed)
+    this.verifier?.close(work.request.id)
+    if (managed.item.verification) managed.item.verification.windowOpen = false
+    await work.execution
+    if (remove && managed.verification === work) { managed.verification = undefined; managed.item.verification = undefined }
+    else work.disposing = false
   }
 }

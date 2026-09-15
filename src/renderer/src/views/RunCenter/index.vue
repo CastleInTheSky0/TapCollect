@@ -11,6 +11,8 @@ const {
   batchRunAction,
   pauseRun,
   resumeRun,
+  openVerification,
+  confirmVerification,
   cancelRun,
   pauseAllRuns,
   resumeAllRuns,
@@ -35,6 +37,8 @@ const selectRunTask = (taskId: string): void => {
     @select="selectRunTask"
     @pause="pauseRun"
     @resume="resumeRun"
+    @open-verification="openVerification"
+    @confirm-verification="confirmVerification"
     @cancel="cancelRun"
     @pause-all="pauseAllRuns"
     @resume-all="resumeAllRuns"

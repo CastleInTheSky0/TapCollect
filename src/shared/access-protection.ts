@@ -22,6 +22,15 @@ export interface HostProtection {
   until: number
 }
 
+export interface ManualVerificationState {
+  id: string
+  hostname: string
+  status: 'required' | 'waiting' | 'probing' | 'failed'
+  windowOpen: boolean
+  canOpen: boolean
+  message: string
+}
+
 export const DEFAULT_ACCESS_POLICY: AccessPolicySettings = {
   globalConcurrency: 8,
   hostConcurrency: 1,

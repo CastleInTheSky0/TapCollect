@@ -26,6 +26,8 @@ const emit = defineEmits<{
   dismiss: []
   pause: []
   resume: []
+  openVerification: []
+  confirmVerification: []
   cancel: []
   'open-output': []
   'open-error': []
@@ -118,7 +120,7 @@ const resizeRunLogWithKeyboard = (event: KeyboardEvent): void => {
         <CloseIcon />
       </t-button>
     </header>
-    <HostProtectionNotice v-if="item?.protection" class="drawer-protection" :item="item" @pause="emit('pause')" @resume="emit('resume')" />
+    <HostProtectionNotice v-if="item && (item.protection || item.verification)" class="drawer-protection" :item="item" @pause="emit('pause')" @open-verification="emit('openVerification')" @confirm-verification="emit('confirmVerification')" />
     <div class="run-body">
       <div class="run-metrics">
         <div><span>当前页</span><strong>{{ runProgress?.page ?? '—' }}</strong></div>

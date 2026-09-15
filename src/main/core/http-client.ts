@@ -172,7 +172,7 @@ const discardResponseBody = async (response: Response): Promise<void> => {
 
 export class HttpClient {
   get usesAccessPolicy(): boolean { return Boolean(this.access) }
-  inspectHtml(html: string, url: string): void { this.access?.inspectHtml(html, url) }
+  inspectHtml(html: string, url: string): void { this.access?.inspectHtml(html, url, true) }
   acknowledgeSuccess(url: string): void { this.access?.acknowledgeSuccess(url) }
   private readonly fetchImplementation: typeof fetch
 

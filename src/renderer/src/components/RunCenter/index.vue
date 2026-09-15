@@ -16,6 +16,8 @@ const emit = defineEmits<{
   select: [taskId: string]
   pause: [taskId: string]
   resume: [taskId: string]
+  openVerification: [taskId: string]
+  confirmVerification: [taskId: string]
   cancel: [taskId: string]
   pauseAll: []
   resumeAll: []
@@ -177,7 +179,7 @@ onBeforeUnmount(() => {
           theme="default"
           variant="outline"
           :loading="batchAction === 'pause'"
-          :disabled="!activeItems.some((item) => ['preparing', 'running'].includes(item.status) || item.protection?.kind === 'cooling')"
+          :disabled="!snapshot.items.some((item) => ['preparing', 'running'].includes(item.status) || item.protection?.kind === 'cooling' || (item.verification && ['waiting', 'probing'].includes(item.verification.status)))"
           @click="emit('pauseAll')"
         >
           全部暂停
@@ -207,9 +209,9 @@ onBeforeUnmount(() => {
 
     <div class="run-center-scroll">
       <HostProtectionNotice
-        v-if="selectedItem?.protection" :item="selectedItem"
+        v-if="selectedItem && (selectedItem.protection || selectedItem.verification)" :item="selectedItem"
         :affected="snapshot.items.filter(item => item.protection?.hostname === selectedItem?.protection?.hostname).length"
-        @pause="emit('pause', selectedItem.taskId)" @resume="emit('resume', selectedItem.taskId)"
+        @pause="emit('pause', selectedItem.taskId)" @open-verification="emit('openVerification', selectedItem.taskId)" @confirm-verification="emit('confirmVerification', selectedItem.taskId)"
       />
       <section class="run-section">
         <div class="run-section-heading">

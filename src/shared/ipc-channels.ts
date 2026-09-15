@@ -40,6 +40,8 @@ export const IPC_CHANNELS = {
   startRun: 'collector:start',
   pauseRun: 'collector:pause',
   resumeRun: 'collector:resume',
+  openVerification: 'collector:verification-open',
+  confirmVerification: 'collector:verification-confirm',
   cancelRun: 'collector:cancel',
   pauseAllRuns: 'collector:pause-all',
   resumeAllRuns: 'collector:resume-all',

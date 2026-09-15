@@ -196,6 +196,8 @@ const {
   launchRun,
   pauseRun,
   resumeRun,
+  openVerification,
+  confirmVerification,
   cancelRun,
   confirmCancelRun,
   confirmCancelAllRuns,
@@ -405,6 +407,7 @@ onBeforeUnmount(() => {
       :run-log-height="runLogHeight" :run-log-max-height="runLogMaxHeight" :surface-ref="setRunDrawerSurface"
       @resize-log="runLogHeight = $event"
       @dismiss="dismissRunDrawer" @pause="pauseRun()" @resume="resumeRun()" @cancel="cancelRun()"
+      @open-verification="openVerification()" @confirm-verification="confirmVerification()"
       @open-output="openOutput()" @open-error="openErrorLog()"
     />
 

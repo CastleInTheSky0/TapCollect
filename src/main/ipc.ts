@@ -272,6 +272,8 @@ export const registerIpcHandlers = (
   )
   ipcMain.handle(IPC_CHANNELS.pauseRun, (_event, taskId: string) => runManager.pause(taskId))
   ipcMain.handle(IPC_CHANNELS.resumeRun, (_event, taskId: string) => runManager.resume(taskId))
+  ipcMain.handle(IPC_CHANNELS.openVerification, (_event, taskId: string, id: string) => runManager.openVerification(taskId, id))
+  ipcMain.handle(IPC_CHANNELS.confirmVerification, (_event, taskId: string, id: string) => runManager.confirmVerification(taskId, id))
   ipcMain.handle(IPC_CHANNELS.cancelRun, (_event, taskId: string) => runManager.cancel(taskId))
   ipcMain.handle(IPC_CHANNELS.pauseAllRuns, () => runManager.pauseAll())
   ipcMain.handle(IPC_CHANNELS.resumeAllRuns, () => runManager.resumeAll())

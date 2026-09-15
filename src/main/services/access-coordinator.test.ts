@@ -15,6 +15,41 @@ const setup = () => {
 afterEach(() => vi.useRealTimers())
 
 describe('shared access coordinator', () => {
+  it('retains Retry-After in both orders with manual protection and permits only an explicit due probe', async () => {
+    vi.useFakeTimers()
+    const { access, config } = setup()
+    const fetcher = vi.fn(async () => new Response('<p>正文</p>'))
+    const client = new HttpClient(fetcher, access)
+    const signal = new AbortController().signal
+    access.protect('example.com', '需要验证')
+    const until = Date.now() + 10000
+    access.protect('example.com', 'Retry-After', until)
+    expect(access.getProtection('example.com')).toMatchObject({ kind: 'action-required', until })
+    access.clearManual('example.com')
+    await expect(access.withManualProbe('a', 'example.com', signal, () => client.fetchHtml('https://example.com/target', config))).rejects.toBeInstanceOf(AccessProtectionError)
+    expect(fetcher).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(10000)
+    await expect(access.withContext('b', undefined, () => client.fetchHtml('https://example.com/target', config))).rejects.toBeInstanceOf(AccessProtectionError)
+    await expect(access.withManualProbe('a', 'example.com', signal, () => client.fetchHtml('https://example.com/target', config))).resolves.toMatchObject({ kind: 'success' })
+    expect(access.getProtection('example.com')?.kind).toBe('action-required')
+    access.clearManual('example.com')
+    expect(access.getProtection('example.com')).toBeUndefined()
+    access.protect('example.com', 'Retry-After', Date.now() + 10000)
+    access.protect('example.com', '需要验证')
+    expect(access.getProtection('example.com')).toMatchObject({ kind: 'action-required', until: Date.now() + 10000 })
+  })
+
+  it('keeps the exact failing target only in the main-process event and respects 403 Retry-After', async () => {
+    const { access, config } = setup()
+    const protectedEvent = vi.fn()
+    access.on('protected', protectedEvent)
+    const client = new HttpClient(async () => new Response(null, { status: 403, headers: { 'retry-after': '60' } }), access)
+    const url = 'https://example.com/file?token=private-target'
+    await expect(access.withContext('a', undefined, () => client.fetchResource(url, config))).rejects.toBeInstanceOf(AccessProtectionError)
+    expect(protectedEvent).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'action-required' }), { taskId: 'a', url, resource: true })
+    expect(access.getProtection('example.com')!.until).toBeGreaterThan(Date.now() + 59000)
+    expect(JSON.stringify(access.getProtection('example.com'))).not.toContain('private-target')
+  })
   it.each([400, 404, 405, 410, 422])('does not retry a resource HTTP %i or cool down the host', async (status) => {
     const { access, config } = setup()
     access.configure({ ...access.settings, failureThreshold: 1 })

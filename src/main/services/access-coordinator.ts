@@ -9,7 +9,8 @@ import { AccessProtectionError, RequestInterruptedError, RetryableRequestError, 
 import { detectBlockedPage } from '@main/core/block-detector'
 
 export interface AccessRequestIdentity { userAgent: string; language: string; fetch: typeof fetch }
-interface RequestContext { taskId: string; signal: AbortSignal | undefined; identity: AccessRequestIdentity | undefined }
+interface RequestContext { taskId: string; signal: AbortSignal | undefined; identity: AccessRequestIdentity | undefined; probeHostname?: string }
+export interface AccessRequestTarget { taskId: string; url: string; resource: boolean }
 interface HostState {
   queue: PQueue
   starts: PQueue
@@ -17,6 +18,7 @@ interface HostState {
   lastStart: number
   touched: number
   taskIds: Set<string>
+  targets: Map<string, AccessRequestTarget>
   protection?: HostProtection | undefined
 }
 
@@ -48,6 +50,19 @@ export class AccessCoordinator extends EventEmitter {
 
   withContext<T>(taskId: string, signal: AbortSignal | undefined, operation: () => Promise<T>, identity?: AccessRequestIdentity): Promise<T> {
     return this.context.run({ taskId, signal, identity }, operation)
+  }
+
+  withManualProbe<T>(taskId: string, hostname: string, signal: AbortSignal, operation: () => Promise<T>, identity?: AccessRequestIdentity): Promise<T> {
+    return this.context.run({ taskId, signal, identity, probeHostname: hostname }, operation)
+  }
+
+  assertUrlAllowed(url: string): void {
+    const hostname = new URL(url).hostname.toLowerCase()
+    this.assertAllowed(this.host(hostname), this.signal, this.context.getStore()?.probeHostname === hostname)
+  }
+
+  taskTarget(taskId: string, hostname: string): AccessRequestTarget | undefined {
+    return this.hosts.get(hostname)?.targets.get(taskId)
   }
 
   get signal(): AbortSignal | undefined { return this.context.getStore()?.signal }
@@ -83,39 +98,40 @@ export class AccessCoordinator extends EventEmitter {
   }
 
   forgetTask(taskId: string): void {
-    for (const state of this.hosts.values()) state.taskIds.delete(taskId)
+    for (const state of this.hosts.values()) { state.taskIds.delete(taskId); state.targets.delete(taskId) }
   }
 
   clearManual(hostname: string): void {
     const state = this.hosts.get(hostname.toLowerCase())
     if (state?.protection?.kind !== 'action-required') return
+    if (state.protection.until > Date.now()) return
     state.protection = undefined
     state.breaker = this.createBreaker(hostname)
     state.queue.concurrency = this.settings.hostConcurrency
     this.emit('cleared', hostname)
   }
 
-  protect(hostname: string, reason: string, until = 0): AccessProtectionError {
+  protect(hostname: string, reason: string, until = 0, target?: AccessRequestTarget): AccessProtectionError {
     hostname = hostname.toLowerCase()
     const state = this.host(hostname)
     const existing = state.protection
     const protection: HostProtection = {
       hostname,
-      kind: until > 0 ? 'cooling' : 'action-required',
-      reason,
+      kind: existing?.kind === 'action-required' || until === 0 ? 'action-required' : 'cooling',
+      reason: existing?.kind === 'action-required' && until > 0 ? existing.reason : reason,
       until: Math.max(until, existing?.until ?? 0)
     }
-    if (existing?.kind === 'action-required') return new AccessProtectionError(existing)
+    if (target) { state.taskIds.add(target.taskId); state.targets.set(target.taskId, target) }
     state.protection = protection
     state.queue.concurrency = 1
-    this.emit('protected', protection)
+    this.emit('protected', protection, target)
     return new AccessProtectionError(protection)
   }
 
-  inspectHtml(html: string, url: string): void {
+  inspectHtml(html: string, url: string, resource = false): void {
     if (!this.settings.detectChallenges) return
     const reason = detectBlockedPage(html, url)
-    if (reason) throw this.protect(new URL(url).hostname, reason)
+    if (reason) throw this.protect(new URL(url).hostname, reason, 0, this.requestTarget(url, resource))
   }
 
   acknowledgeSuccess(url: string): void {
@@ -124,8 +140,13 @@ export class AccessCoordinator extends EventEmitter {
     if (state?.protection?.kind === 'cooling' && state.protection.until <= Date.now()) this.clearCooling(hostname, state)
   }
 
-  private assertAllowed(state: HostState, signal?: AbortSignal): void {
-    if (state.protection && (state.protection.kind === 'action-required' || state.protection.until > Date.now())) {
+  private requestTarget(url: string, resource: boolean): AccessRequestTarget | undefined {
+    const taskId = this.context.getStore()?.taskId
+    return taskId ? { taskId, url, resource } : undefined
+  }
+
+  private assertAllowed(state: HostState, signal?: AbortSignal, probe = false): void {
+    if (state.protection && ((state.protection.kind === 'action-required' && !probe) || state.protection.until > Date.now())) {
       throw new AccessProtectionError(state.protection)
     }
     if (signal?.aborted) throw new RequestInterruptedError()
@@ -139,18 +160,22 @@ export class AccessCoordinator extends EventEmitter {
     const state = this.host(hostname)
     const signal = this.signal
     const taskId = this.context.getStore()?.taskId
-    if (taskId) state.taskIds.add(taskId)
-    this.assertAllowed(state, signal)
+    const probe = this.context.getStore()?.probeHostname === hostname
+    if (taskId) { state.taskIds.add(taskId); state.targets.set(taskId, { taskId, url, resource }) }
+    this.assertAllowed(state, signal, probe)
     const execute = async (): Promise<T> => {
-      this.assertAllowed(state, signal)
+      this.assertAllowed(state, signal, probe)
       return await this.global.add(async () => {
         await state.starts.add(async () => {
-          this.assertAllowed(state, signal)
+          this.assertAllowed(state, signal, probe)
           const minimum = Math.max(this.settings.minIntervalMs, minimumDelay)
           const spacing = minimum + Math.round(minimum * this.settings.jitterPercent / 100 * Math.random())
-          const remaining = state.lastStart + spacing - Date.now()
-          if (remaining > 0) await wait(remaining, undefined, { signal })
-          this.assertAllowed(state, signal)
+          const deadline = state.lastStart + spacing
+          // Timers can wake slightly early; retain the configured minimum interval.
+          for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
+            await wait(remaining, undefined, { signal })
+          }
+          this.assertAllowed(state, signal, probe)
           state.lastStart = Date.now()
         }, { signal })
         return scopedOperation()
@@ -160,7 +185,7 @@ export class AccessCoordinator extends EventEmitter {
       return await state.queue.add(async () => resource
         ? await this.resources.add(execute, { signal }) as T : execute(), { signal }) as T
     } catch (error) {
-      if (state.protection) throw new AccessProtectionError(state.protection)
+      if (state.protection && !probe) throw new AccessProtectionError(state.protection)
       if (signal?.aborted) throw new RequestInterruptedError()
       throw error
     } finally { state.touched = Date.now() }
@@ -181,7 +206,9 @@ export class AccessCoordinator extends EventEmitter {
           }
           if (response.status === 401 || response.status === 403) {
             await response.body?.cancel()
-            throw this.protect(hostname, `服务器返回 ${response.status}，请人工检查访问权限后重试`)
+            const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
+            if (retryAfter > 0) this.protect(hostname, '按 Retry-After 等待', Date.now() + retryAfter)
+            throw this.protect(hostname, `服务器返回 ${response.status}，请人工检查访问权限后重试`, 0, this.requestTarget(url, resource))
           }
           if ([408, 425, 429].includes(response.status) || response.status >= 500) {
             const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
@@ -252,7 +279,7 @@ export class AccessCoordinator extends EventEmitter {
     state = {
       queue: new PQueue({ concurrency: this.settings.hostConcurrency }),
       starts: new PQueue({ concurrency: 1 }),
-      breaker: this.createBreaker(hostname), lastStart: 0, touched: Date.now(), taskIds: new Set()
+      breaker: this.createBreaker(hostname), lastStart: 0, touched: Date.now(), taskIds: new Set(), targets: new Map()
     }
     this.hosts.set(hostname, state)
     return state

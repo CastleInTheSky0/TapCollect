@@ -1,4 +1,4 @@
-import type { AccessPolicySettings, HostProtection } from './access-protection'
+import type { AccessPolicySettings, HostProtection, ManualVerificationState } from './access-protection'
 import type { AccessProfile, AccessProfileInput } from './access-profile'
 
 export type SelectorType = 'css' | 'xpath'
@@ -414,6 +414,7 @@ export type RunQueueReason = '' | 'capacity' | 'output-lock'
 
 export interface RunSessionItem {
   protection?: HostProtection | undefined
+  verification?: ManualVerificationState | undefined
   taskId: string
   taskName: string
   runId: string
@@ -634,6 +635,8 @@ export interface CollectorApi {
   startRun: (taskId: string, resume: boolean) => Promise<StartRunResult>
   pauseRun: (taskId: string) => Promise<boolean>
   resumeRun: (taskId: string) => Promise<boolean>
+  openVerification: (taskId: string, verificationId: string) => Promise<boolean>
+  confirmVerification: (taskId: string, verificationId: string) => Promise<boolean>
   cancelRun: (taskId: string) => Promise<boolean>
   pauseAllRuns: () => Promise<boolean>
   resumeAllRuns: () => Promise<boolean>

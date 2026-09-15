@@ -17,13 +17,19 @@ import { AccessCoordinator } from '@main/services/access-coordinator'
 import { AccessProfileService } from '@main/services/access-profile-service'
 import { verifyAccessProfiles, seedProfileRestartCheck, verifyProfileAfterRestart } from './access-profile-smoke'
 import { verifyTaskGroups } from './task-group-smoke'
+import { verifyManualVerification } from './manual-verification-smoke'
 import type {
   PreviewEvaluateResult,
   PreviewNavigationState,
   PreviewPickResult
 } from '@shared/types'
 
+// Keep native UI smoke frames advancing when Windows occludes the test window.
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
 interface PreloadSmokeResult {
+  manualVerificationWorks: boolean
   accessProfilesWork: boolean
   taskGroupsWork: boolean
   hasCollector: boolean
@@ -1018,6 +1024,7 @@ const run = async (): Promise<PreloadSmokeResult> => {
       | 'usesUserDataTaskStore'
       | 'accessProfilesWork'
       | 'taskGroupsWork'
+      | 'manualVerificationWorks'
     >
     writeStage('renderer-evaluated')
 
@@ -1034,12 +1041,15 @@ const run = async (): Promise<PreloadSmokeResult> => {
     writeStage('dynamic-partial-load-verified')
     const accessProfilesWork = await verifyAccessProfiles(window, store, profiles, access, runManager, preview)
     writeStage('access-profiles-verified')
+    const manualVerificationWorks = await verifyManualVerification(window, store, profiles, access, runManager)
+    writeStage('manual-verification-verified')
     await seedProfileRestartCheck(store, profiles)
     const restartGroups = await store.groups.create('分组重启验证')
     await store.moveTasksToGroup(['profile-restart'], restartGroups.groups[0]!.id)
 
     return {
       ...result,
+      manualVerificationWorks,
       taskGroupsWork,
       accessProfilesWork,
       previewNavigationWorks,
@@ -1082,6 +1092,7 @@ const main = async (): Promise<void> => {
     const result = await run()
     if (
       !result.hasCollector ||
+      !result.manualVerificationWorks ||
       !result.taskGroupsWork ||
       !result.accessProfilesWork ||
       !result.hasUpdateApi ||

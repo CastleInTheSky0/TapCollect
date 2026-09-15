@@ -197,6 +197,27 @@ export const useRunSession = (deps: RunSessionDeps) => {
     }
   }
 
+  const openVerification = async (taskId = selectedRunItem.value?.taskId ?? ''): Promise<void> => {
+    const state = runSession.value.items.find(item => item.taskId === taskId)?.verification
+    if (!state || runActionTaskId.value) return
+    runActionTaskId.value = taskId
+    try {
+      if (!(await api.openVerification(taskId, state.id))) deps.showWarning('当前验证入口已失效，请刷新任务状态')
+    } catch (error) { deps.showError(error) }
+    finally { runActionTaskId.value = '' }
+  }
+
+  const confirmVerification = async (taskId = selectedRunItem.value?.taskId ?? ''): Promise<void> => {
+    const state = runSession.value.items.find(item => item.taskId === taskId)?.verification
+    if (!state || runActionTaskId.value) return
+    runActionTaskId.value = taskId
+    try {
+      if (await api.confirmVerification(taskId, state.id)) deps.showNotice('已确认，将在站点允许访问后探测并尝试恢复本任务')
+      else deps.showWarning('当前正在保存进度或验证入口已失效，请稍后再试')
+    } catch (error) { deps.showError(error) }
+    finally { runActionTaskId.value = '' }
+  }
+
   const cancelRun = (taskId = selectedRunItem.value?.taskId ?? ''): void => {
     if (!taskId) return
     cancelPromptTaskId.value = taskId
@@ -352,6 +373,8 @@ export const useRunSession = (deps: RunSessionDeps) => {
     launchRun,
     pauseRun,
     resumeRun,
+    openVerification,
+    confirmVerification,
     cancelRun,
     confirmCancelRun,
     pauseAllRuns,

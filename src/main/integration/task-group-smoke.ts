@@ -56,10 +56,16 @@ export const verifyTaskGroups = async (
   const dialogButton = (label: string): Promise<void> => click('.task-group-dialog button', label)
   const groupMenu = (name: string): Promise<void> => click(`button[aria-label="${name}的分组菜单"]`)
   const taskMenu = async (id: string): Promise<void> => {
+    // Reopening during TDesign's leave animation can remove the newly opened popup.
+    await until(() => js(`!document.querySelector('.t-popup--animation-expand-leave-active .task-actions-dropdown')`), '上一次任务菜单关闭')
     await until(() => js(`Boolean(document.querySelector('[data-task-id="${id}"] .task-row-main:not(:disabled)'))`), '任务行就绪')
-    await click(`[data-task-id="${id}"] .task-actions button`)
-    await until(() => js(`Array.from(document.querySelectorAll('.task-actions-dropdown .t-dropdown__item')).some(element =>
-      element.getBoundingClientRect().height > 0 && getComputedStyle(element).visibility !== 'hidden')`), '任务操作菜单展开')
+    const isOpen = (): Promise<boolean> => js(`Boolean(document.querySelector('[data-task-id="${id}"].task-menu-open')) &&
+      Array.from(document.querySelectorAll('.task-actions-dropdown .t-dropdown__item')).some(element =>
+        element.getBoundingClientRect().height > 0 && getComputedStyle(element).visibility !== 'hidden')`)
+    // Starting a task can disable its menu item before the dropdown closes.
+    // Ensure the menu is open rather than toggling an already visible menu shut.
+    if (!await isOpen()) await click(`[data-task-id="${id}"] .task-actions button`)
+    await until(isOpen, '任务操作菜单展开')
   }
   const menuAction = (label: string): Promise<void> => click('.t-dropdown__item', label)
   const breadcrumb = (): Promise<string> => js(`document.querySelector('.workspace-breadcrumb')?.textContent.replace(/\\s/g, '')`)

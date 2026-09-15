@@ -25,6 +25,7 @@ import { RunManager } from './run-manager'
 import { TaskStore } from './task-store'
 import { AccessCoordinator } from './access-coordinator'
 import type { AccessProfileService, AccessProfileLease } from './access-profile-service'
+import type { ManualVerificationProvider } from './manual-verification-service'
 
 const temporaryDirectories: string[] = []
 
@@ -134,7 +135,8 @@ it('shows resource-host protection on its originating task and removes it when c
   const store = new TaskStore(root)
   const engine = new FakeCollectorEngine(store)
   const access = new AccessCoordinator('runtime')
-  const manager = new RunManager(store, null, engine, access)
+  const verifier: ManualVerificationProvider = { open: vi.fn(), close: vi.fn(), probe: vi.fn(async () => {}) }
+  const manager = new RunManager(store, null, engine, access, undefined, verifier)
   await manager.initialize()
   await store.saveTask(runnableTask('a', root))
   await manager.start('a', false)
@@ -144,7 +146,8 @@ it('shows resource-host protection on its originating task and removes it when c
   expect(manager.getSessionSnapshot().items[0]?.protection?.hostname).toBe('cdn.example.com')
   await engine.settlePause('a')
   await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
-  await manager.resume('a')
+  await expect(manager.resume('a')).rejects.toThrow('我已完成验证')
+  manager.confirmVerification('a', manager.getSessionSnapshot().items[0]!.verification!.id)
   await vi.waitFor(() => expect(engine.started).toHaveLength(2))
   engine.complete('a')
   await flushTasks()
@@ -153,6 +156,160 @@ it('shows resource-host protection on its originating task and removes it when c
   await manager.cancelAll()
   expect(manager.getSessionSnapshot().items[0]?.status).toBe('cancelled')
   expect(manager.getSessionSnapshot().items[0]?.protection).toBeUndefined()
+  await manager.prepareForShutdown()
+})
+
+it('requires per-task confirmation, probes the private trigger and keeps failed or closed verification paused', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-verification-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  let closed = (): void => {}
+  let allowed = false
+  const probe = vi.fn(async () => { if (!allowed) throw new Error('still blocked: token=secret') })
+  const verifier: ManualVerificationProvider = { open: (_request, callback) => { closed = callback }, close: vi.fn(), probe }
+  const profiles = { acquire: async () => ({ id: 'profile', origin: 'https://example.com', release: vi.fn() }) } as unknown as AccessProfileService
+  const manager = new RunManager(store, null, engine, access, profiles, verifier)
+  await manager.initialize()
+  for (const id of ['a', 'b']) { await store.saveTask(runnableTask(id, root)); await manager.start(id, false) }
+  await vi.waitFor(() => expect(engine.started).toHaveLength(2))
+  const target = 'https://example.com/detail?token=private-trigger'
+  access.protect('example.com', '需要验证', 0, { taskId: 'a', url: target, resource: false })
+  await engine.settlePause('a')
+  await engine.settlePause('b')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
+  const state = manager.getSessionSnapshot().items[0]!.verification!
+  expect(JSON.stringify(manager.getSessionSnapshot())).not.toContain('private-trigger')
+  expect(await manager.resumeAll()).toBe(false)
+  expect(manager.openVerification('a', state.id)).toBe(true)
+  closed()
+  expect(engine.started).toHaveLength(2)
+  expect(manager.confirmVerification('a', 'stale')).toBe(false)
+  expect(manager.confirmVerification('a', state.id)).toBe(true)
+  expect(manager.confirmVerification('a', state.id)).toBe(true)
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().items[0]!.verification?.status).toBe('failed'))
+  expect(probe).toHaveBeenCalledOnce()
+  expect(probe).toHaveBeenCalledWith(expect.objectContaining({ url: target }), expect.any(AbortSignal))
+  expect(JSON.stringify(manager.getSessionSnapshot())).not.toContain('secret')
+  allowed = true
+  manager.confirmVerification('a', state.id)
+  await vi.waitFor(() => expect(engine.started).toEqual(['a', 'b', 'a']))
+  expect(manager.getSessionSnapshot().items[1]!.verification?.status).toBe('required')
+  expect(manager.getSessionSnapshot().items[1]!.status).toBe('paused')
+  expect(manager.confirmVerification('a', state.id)).toBe(false)
+  engine.complete('a')
+  await manager.cancel('b')
+  await flushTasks()
+  await manager.prepareForShutdown()
+})
+
+it('waits out Retry-After and gives pause, window close and cancellation priority over pending probes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-verification-cancel-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  let closed = (): void => {}
+  let finishProbe = (): void => {}
+  const probe = vi.fn(() => new Promise<void>(resolve => { finishProbe = resolve }))
+  const verifier: ManualVerificationProvider = { open: (_request, callback) => { closed = callback }, close: vi.fn(), probe }
+  const release = vi.fn()
+  const profiles = { acquire: async () => ({ id: 'profile', origin: 'https://example.com', release }) } as unknown as AccessProfileService
+  const manager = new RunManager(store, null, engine, access, profiles, verifier)
+  await manager.initialize()
+  await store.saveTask(runnableTask('a', root))
+  await manager.start('a', false)
+  await vi.waitFor(() => expect(engine.started).toHaveLength(1))
+  access.protect('example.com', '需要验证')
+  access.protect('example.com', 'Retry-After', Date.now() + 300)
+  await engine.settlePause('a')
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().activeCount).toBe(0))
+  const id = manager.getSessionSnapshot().items[0]!.verification!.id
+  manager.openVerification('a', id)
+  manager.confirmVerification('a', id)
+  await new Promise(resolve => setTimeout(resolve, 60))
+  expect(probe).not.toHaveBeenCalled()
+  await manager.pauseAll()
+  await new Promise(resolve => setTimeout(resolve, 350))
+  expect(probe).not.toHaveBeenCalled()
+  manager.confirmVerification('a', id)
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce())
+  closed()
+  finishProbe()
+  await flushTasks()
+  expect(engine.started).toHaveLength(1)
+  manager.confirmVerification('a', id)
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2))
+  const cancellation = manager.cancel('a')
+  await flushTasks()
+  expect(manager.confirmVerification('a', id)).toBe(false)
+  expect(manager.openVerification('a', id)).toBe(false)
+  expect(release).not.toHaveBeenCalled()
+  expect(manager.getSessionSnapshot().items[0]!.status).toBe('paused')
+  finishProbe()
+  await cancellation
+  await vi.waitFor(() => expect(manager.getSessionSnapshot().items[0]!.status).toBe('cancelled'))
+  const starts = engine.started.length
+  closed()
+  expect(manager.confirmVerification('a', id)).toBe(false)
+  expect(engine.started).toHaveLength(starts)
+  await manager.prepareForShutdown()
+})
+
+it('revokes all queued verification confirmations before awaiting an active probe cancellation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-verification-cancel-all-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  let finishProbe = (): void => {}
+  const probe = vi.fn(async (request: { task: TaskConfig }) => {
+    if (request.task.id !== 'a') throw new Error('Cancelled queued probe must never start')
+    await new Promise<void>(resolve => { finishProbe = resolve })
+  })
+  const verifier: ManualVerificationProvider = { open: vi.fn(), close: vi.fn(), probe }
+  const manager = new RunManager(store, null, engine, access, undefined, verifier)
+  await manager.initialize()
+  access.protect('example.com', '需要验证')
+  for (const id of ['a', 'b']) { await store.saveTask(runnableTask(id, root)); await manager.start(id, false) }
+  const states = manager.getSessionSnapshot().items.map(item => ({ taskId: item.taskId, id: item.verification!.id }))
+  for (const state of states) manager.confirmVerification(state.taskId, state.id)
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce())
+  const cancellation = manager.cancelAll()
+  const acceptedWhileCancelling = manager.confirmVerification('b', states[1]!.id)
+  finishProbe()
+  await cancellation
+  expect(acceptedWhileCancelling).toBe(false)
+  expect(probe).toHaveBeenCalledOnce()
+  expect(engine.started).toHaveLength(0)
+  expect(manager.getSessionSnapshot().items.every(item => item.status === 'cancelled')).toBe(true)
+  await manager.prepareForShutdown()
+})
+
+it('starts an unstarted protected queue from scratch after a successful probe and ignores stale generations', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-verification-queue-'))
+  temporaryDirectories.push(root)
+  const store = new TaskStore(root)
+  const engine = new FakeCollectorEngine(store)
+  const access = new AccessCoordinator('runtime')
+  const verifier: ManualVerificationProvider = { open: vi.fn(), close: vi.fn(), probe: vi.fn(async () => {}) }
+  const manager = new RunManager(store, null, engine, access, undefined, verifier)
+  await manager.initialize()
+  await store.saveTask(runnableTask('a', root))
+  access.protect('example.com', '需要验证')
+  await manager.start('a', false)
+  const id = manager.getSessionSnapshot().items[0]!.verification!.id
+  expect(engine.started).toHaveLength(0)
+  manager.confirmVerification('a', id)
+  await vi.waitFor(() => expect(engine.started).toHaveLength(1))
+  engine.complete('a')
+  await flushTasks()
+  await manager.start('a', false)
+  expect(manager.confirmVerification('a', id)).toBe(false)
+  await vi.waitFor(() => expect(engine.started).toHaveLength(2))
+  engine.complete('a')
+  await flushTasks()
   await manager.prepareForShutdown()
 })
 

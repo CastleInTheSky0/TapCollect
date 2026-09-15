@@ -457,7 +457,12 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
         if (!this.access) return
         if (details.resourceType !== 'mainFrame') return
         const status = details.statusCode
-        if (status === 401 || status === 403) this.access?.protect(allowedHostname, `服务器返回 ${status}，请人工检查访问权限后重试`)
+        if (status === 401 || status === 403) {
+          const header = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1]?.[0] ?? null
+          const duration = parseRetryAfter(header)
+          if (duration > 0) this.access.protect(allowedHostname, '按 Retry-After 等待', Date.now() + duration)
+          this.access.protect(allowedHostname, `服务器返回 ${status}，请人工检查访问权限后重试`, 0, { taskId: task.id, url: details.url, resource: false })
+        }
         else if ([408, 425, 429].includes(status) || status >= 500) {
           const header = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1]?.[0] ?? null
           const duration = Math.max(parseRetryAfter(header), this.access?.settings.cooldownSeconds ? this.access.settings.cooldownSeconds * 1000 : 60000)
