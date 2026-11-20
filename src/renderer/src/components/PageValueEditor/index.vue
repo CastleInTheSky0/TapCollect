@@ -6,6 +6,7 @@ import {
   normalizeContentFilterSelectors,
   splitContentFilterInput
 } from '@shared/content-filter'
+import { DEFAULT_TEXT_CHARACTER_LIMIT, normalizeTextCharacterLimit } from '@shared/field-mapping'
 import type { PageExtractionConfig } from '@shared/types'
 
 type PageEditorModel = PageExtractionConfig & { required?: boolean }
@@ -24,6 +25,16 @@ defineEmits<{
 
 const addReplacement = (): void => {
   model.value.replacements.push({ id: crypto.randomUUID(), from: '', to: '' })
+}
+
+const setTextCharacterLimit = (value: unknown): void => {
+  model.value.textCharacterLimit = typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined
+}
+
+const commitTextCharacterLimit = (): void => {
+  model.value.textCharacterLimit = normalizeTextCharacterLimit(model.value.textCharacterLimit)
 }
 
 const changeLocatorType = (value: unknown): void => {
@@ -197,6 +208,23 @@ const setContentFilterSelectors = (value: unknown): void => {
       <t-input v-model="model.textPrefix" clearable placeholder="例如：发布时间" />
       <small>只填写标签文字，无需输入中文或英文冒号；同一节点有多个“标签：值”时会按标签区分，其他连接符暂不支持</small>
     </div>
+    <div v-if="model.extraction === 'text' && !model.convertToTimestamp" class="text-limit full">
+      <t-checkbox v-model="model.limitTextCharacters">限制字符数</t-checkbox>
+      <label v-if="model.limitTextCharacters" class="field">
+        <span>最多字符数</span>
+        <t-input-number
+          theme="normal"
+          :value="model.textCharacterLimit"
+          :placeholder="String(DEFAULT_TEXT_CHARACTER_LIMIT)"
+          :min="1"
+          :max="Number.MAX_SAFE_INTEGER"
+          :decimal-places="0"
+          :allow-input-over-limit="false"
+          @change="setTextCharacterLimit"
+          @blur="commitTextCharacterLimit"
+        />
+      </label>
+    </div>
     <div
       v-if="model.extraction !== 'attribute'"
       class="field content-filter-field full"
@@ -342,6 +370,17 @@ const setContentFilterSelectors = (value: unknown): void => {
   color: var(--td-error-color, #c64747);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.text-limit {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.text-limit .field {
+  width: 160px;
 }
 
 .check-line {

@@ -8,6 +8,7 @@ import type { TaskConfig } from '@shared/types'
 import { taskListPageRuleLines } from '@shared/list-page-rules'
 import { allowedCustomRequestHeaders } from '@main/core/http-client'
 import type { AccessCoordinator, AccessRequestIdentity } from './access-coordinator'
+import { ElectronSessionFetch } from './electron-session-fetch'
 import { atomicWrite } from './task-store'
 
 interface ViewIdentity {
@@ -20,11 +21,8 @@ interface ProfileSession {
   session: Session
   views: Map<number, ViewIdentity>
   restoring: boolean
-  pending: Map<string, ManualRequest>
-  requests: Map<number, ManualRequest>
+  transport: ElectronSessionFetch
 }
-interface ManualRequest { requestId?: number; redirect?: { status: number; headers: Headers } }
-const REQUEST_MARKER = 'x-tapcollect-session-request'
 
 export interface AccessProfileLease extends AccessRequestIdentity {
   id: string
@@ -153,7 +151,7 @@ export class AccessProfileService {
           const matches = profileMatchesUrl(profile, url)
           const requestHeaders = new Headers(init?.headers)
           if (!matches) for (const entry of headers) requestHeaders.delete(entry.key)
-          return this.fetchWithSession(state, url, { ...init, headers: requestHeaders, credentials: matches ? 'include' : 'omit' })
+          return state.transport.fetch(url, { ...init, headers: requestHeaders, credentials: matches ? 'include' : 'omit' })
         },
         attach: (contents, response) => {
           contents.setUserAgent(userAgent)
@@ -202,7 +200,7 @@ export class AccessProfileService {
     const existing = this.sessions.get(profile.id)
     if (existing) return existing
     const ses = session.fromPartition(`${this.partitionPrefix}-${profile.id}`)
-    const state: ProfileSession = { session: ses, views: new Map(), restoring: true, pending: new Map(), requests: new Map() }
+    const state: ProfileSession = { session: ses, views: new Map(), restoring: true, transport: new ElectronSessionFetch(ses) }
     ses.setPermissionCheckHandler(() => false)
     ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
@@ -210,12 +208,7 @@ export class AccessProfileService {
     })
     ses.webRequest.onBeforeSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
       const headers = { ...details.requestHeaders }
-      for (const key of Object.keys(headers)) {
-        if (key.toLowerCase() !== REQUEST_MARKER) continue
-        const pending = state.pending.get(headers[key]!)
-        if (pending) { pending.requestId = details.id; state.requests.set(details.id, pending) }
-        delete headers[key]
-      }
+      state.transport.identifyRequest(details.id, headers)
       const identity = state.views.get(details.webContentsId ?? -1)
       if (identity) {
         for (const key of Object.keys(headers)) if (['user-agent', 'accept-language'].includes(key.toLowerCase())) delete headers[key]
@@ -230,12 +223,7 @@ export class AccessProfileService {
     })
     ses.webRequest.onHeadersReceived((details, callback) => {
       const headers = { ...details.responseHeaders }
-      const pending = state.requests.get(details.id)
-      if (pending && details.statusCode >= 300 && details.statusCode < 400) {
-        const responseHeaders = new Headers()
-        for (const [key, values] of Object.entries(headers)) for (const value of values) responseHeaders.append(key, value)
-        pending.redirect = { status: details.statusCode, headers: responseHeaders }
-      }
+      state.transport.captureRedirect(details)
       if (!profileMatchesUrl(profile, details.url)) for (const key of Object.keys(headers)) if (key.toLowerCase() === 'set-cookie') delete headers[key]
       callback({ responseHeaders: headers })
       state.views.get(details.webContentsId ?? -1)?.response?.(details)
@@ -266,26 +254,6 @@ export class AccessProfileService {
     })
     this.sessions.set(profile.id, state)
     return state
-  }
-
-  private async fetchWithSession(state: ProfileSession, url: string, init: RequestInit): Promise<Response> {
-    if (init.redirect !== 'manual') return state.session.fetch(url, init)
-    // Electron 43 cancels manual redirects instead of returning the 3xx Response.
-    // Correlate its native response to this fetch; the marker is removed before send.
-    // HttpClient still schedules every subsequent hop and owns the only retry loop.
-    const marker = randomUUID()
-    const pending: ManualRequest = {}
-    const headers = new Headers(init.headers)
-    headers.set(REQUEST_MARKER, marker)
-    state.pending.set(marker, pending)
-    try { return await state.session.fetch(url, { ...init, headers }) }
-    catch (error) {
-      if (pending.redirect && !init.signal?.aborted) return new Response(null, pending.redirect)
-      throw error
-    } finally {
-      state.pending.delete(marker)
-      if (pending.requestId !== undefined) state.requests.delete(pending.requestId)
-    }
   }
 
   private async restoreCookies(profile: AccessProfileInput, state: ProfileSession, cookies: Electron.Cookie[]): Promise<void> {

@@ -1,6 +1,7 @@
 import chardet from 'chardet'
 import iconv from 'iconv-lite'
 import type { RequestConfig, ResourceKind } from '@shared/types'
+import { allowedDetailHostname, type DetailHostScope } from '@shared/detail-hosts'
 import { detailResponseAttachmentKind } from './detail-attachment'
 import { CREDENTIAL_REQUEST_HEADERS } from '@shared/access-profile'
 import { DEFAULT_ACCESS_POLICY } from '@shared/access-protection'
@@ -10,6 +11,7 @@ import { RetryableRequestError, RequestInterruptedError, isAccessInterruption } 
 
 const MAX_RETRIES = 3
 const MAX_REDIRECTS = 10
+const HTML_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 const RETRYABLE_STATUS = new Set([408, 425, 429])
 const FORBIDDEN_CUSTOM_HEADERS = new Set([
   'host',
@@ -176,7 +178,11 @@ export class HttpClient {
   acknowledgeSuccess(url: string): void { this.access?.acknowledgeSuccess(url) }
   private readonly fetchImplementation: typeof fetch
 
-  constructor(fetchImplementation: typeof fetch = fetch, private readonly access?: AccessCoordinator) {
+  constructor(
+    fetchImplementation: typeof fetch = fetch,
+    private readonly access?: AccessCoordinator,
+    private readonly detailFetch: typeof fetch = fetchImplementation
+  ) {
     this.fetchImplementation = fetchImplementation
   }
 
@@ -189,7 +195,7 @@ export class HttpClient {
       requestedUrl,
       config,
       allowedHostname,
-      'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      HTML_ACCEPT
     )
     if (result.kind !== 'success') return result
     return this.readHtml(result, config)
@@ -198,13 +204,12 @@ export class HttpClient {
   async fetchDetail(
     requestedUrl: string,
     config: RequestConfig,
-    allowedHostname = new URL(requestedUrl).hostname
+    scope: string | DetailHostScope = new URL(requestedUrl).hostname,
+    detectAttachments = true
   ): Promise<FetchDetailResult> {
-    const result = await this.fetchResponse(
-      requestedUrl, config, allowedHostname,
-      'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    )
+    const result = await this.fetchResponse(requestedUrl, config, scope, HTML_ACCEPT)
     if (result.kind !== 'success') return result
+    if (!detectAttachments && !this.isForeignDetail(scope, result.finalUrl)) return this.readHtml(result, config)
     const resourceKind = detailResponseAttachmentKind(result.finalUrl, result.response.headers)
     if (!resourceKind) return this.readHtml(result, config)
     // 只识别响应头，取消正文以释放网络名额；正式资源阶段统一流式下载。
@@ -259,9 +264,12 @@ export class HttpClient {
   private async fetchResponse(
     requestedUrl: string,
     config: RequestConfig,
-    allowedHostname: string,
+    scope: string | DetailHostScope,
     accept: string
   ): Promise<RawFetchResult> {
+    if (typeof scope !== 'string' && !allowedDetailHostname(scope, requestedUrl)) {
+      throw new HttpRequestError('详情地址不在允许的站点内', requestedUrl)
+    }
     const settings = this.access?.settings
     const maxRetries = accept === '*/*'
       ? settings?.resourceMaxRetries ?? DEFAULT_ACCESS_POLICY.resourceMaxRetries
@@ -278,7 +286,7 @@ export class HttpClient {
     try {
       return await policy.execute(({ attempt }) => {
         attempts = attempt
-        return this.fetchAttempt(requestedUrl, config, allowedHostname, attempt, accept)
+        return this.fetchAttempt(requestedUrl, config, scope, attempt, accept)
       }, this.access?.signal)
     } catch (error) {
       if (isAccessInterruption(error) || error instanceof HttpRequestError) throw error
@@ -288,15 +296,22 @@ export class HttpClient {
     }
   }
 
+  private isForeignDetail(scope: string | DetailHostScope, url: string): boolean {
+    return typeof scope !== 'string' && new URL(url).hostname !== scope.listHostname
+  }
+
   private async fetchAttempt(
     requestedUrl: string,
     config: RequestConfig,
-    allowedHostname: string,
+    scope: string | DetailHostScope,
     retries: number,
     accept: string
   ): Promise<RawFetchResult> {
     let currentUrl = requestedUrl
     const visited = new Set<string>()
+    const fallback = typeof scope !== 'string' && scope.externalHostnames.size
+      ? this.detailFetch
+      : this.fetchImplementation
 
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
       if (visited.has(currentUrl)) {
@@ -306,20 +321,24 @@ export class HttpClient {
 
       let response: Response
       try {
-        const effective = this.access?.requestConfig(config) ?? config
+        const anonymous = this.isForeignDetail(scope, currentUrl)
+        const effective = anonymous
+          ? { ...config, headers: [], userAgent: this.access?.userAgent ?? config.userAgent }
+          : this.access?.requestConfig(config) ?? config
         const headers = buildHeaders(effective, accept)
-        if (this.access) headers.set('accept-language', this.access.language)
+        if (this.access) headers.set('accept-language', anonymous ? this.access.settings.language : this.access.language)
         const signal = this.access?.signal
         const init: RequestInit = {
           method: 'GET',
           redirect: 'manual',
+          ...(anonymous ? { credentials: 'omit' } : {}),
           headers,
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(config.timeoutSeconds * 1000)])
             : AbortSignal.timeout(config.timeoutSeconds * 1000)
         }
-        const fetchResponse = (): Promise<Response> => this.access
-          ? this.access.transport(currentUrl, init, this.fetchImplementation)
-          : this.fetchImplementation(currentUrl, init)
+        const fetchResponse = (): Promise<Response> => this.access && !anonymous
+          ? this.access.transport(currentUrl, init, fallback)
+          : fallback(currentUrl, init)
         response = this.access
           ? await this.access.fetch(currentUrl, config, fetchResponse, accept === '*/*')
           : await fetchResponse()
@@ -336,7 +355,10 @@ export class HttpClient {
           throw new HttpRequestError('重定向响应缺少 Location', currentUrl, response.status, retries)
         }
         const target = new URL(location, currentUrl).toString()
-        if (new URL(target).hostname.toLowerCase() !== allowedHostname.toLowerCase()) {
+        const permitted = typeof scope === 'string'
+          ? new URL(target).hostname.toLowerCase() === scope.toLowerCase()
+          : Boolean(allowedDetailHostname(scope, target))
+        if (!permitted) {
           await discardResponseBody(response)
           return {
             kind: 'external-redirect',

@@ -8,7 +8,7 @@ import {
   createTask
 } from '@shared/defaults'
 import { configureXmlRecord } from './xml-template'
-import type { FetchHtmlResult, HttpClient } from './http-client'
+import { HttpClient, type FetchHtmlResult } from './http-client'
 import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
 import {
   CollectorEngine,
@@ -98,6 +98,44 @@ const createResourceTask = (id: string, root: string): TaskConfig => {
   return task
 }
 
+it('previews and collects allowlisted HTML without fetching other links or downloading foreign resources', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'collector-cross-host-'))
+  temporaryDirectories.push(root)
+  const task = createResourceTask('cross-host', root)
+  task.detail.enabled = true
+  task.detail.link.selector = 'a'
+  const text = task.xml!.mappings.find((mapping) => mapping.fieldPath === 'text')!
+  text.pageSource = 'detail'
+  text.required = true
+  const detailUrl = 'https://news.example.com/story'
+  const outsideUrl = 'https://other.example.com/story'
+  const attachmentUrl = 'https://news.example.com/file.pdf'
+  const list = [detailUrl, outsideUrl, attachmentUrl].map((url) =>
+    `<div class="item"><a class="title" href="${url}">${url}</a></div>`).join('')
+  const fetcher = vi.fn<typeof fetch>(async (url) => new Response(
+    url === task.listUrl ? list : '<div class="body">Policy body<img src="/image.png"></div>',
+    { headers: { 'content-type': 'text/html; charset=utf-8' } }
+  ))
+  const store = new TaskStore(root)
+  const engine = new CollectorEngine(store, new HttpClient(fetcher))
+  expect(await engine.getDetailSamples(task)).toEqual([])
+  task.detail.allowedExternalHosts = 'NEWS.example.com'
+  expect(await engine.getDetailSamples(task)).toEqual([detailUrl])
+  const tested = await engine.testTask(task)
+  expect(tested.records).toEqual([
+    expect.objectContaining({ detailUrl, externalUrl: '', resources: [] }),
+    expect.objectContaining({ detailUrl: '', externalUrl: outsideUrl }),
+    expect.objectContaining({ detailUrl: '', externalUrl: attachmentUrl })
+  ])
+  expect(tested.rows[0]?.text).toContain('Policy body')
+  const result = await engine.run(task, null, new CollectorRunControl(), { progress: vi.fn(), log: vi.fn() })
+  expect(result.counters.succeeded).toBe(3)
+  expect(await readOutputXml(result.outputFiles[0]!, 'utf-8')).toContain('Policy body')
+  expect(new Set(fetcher.mock.calls.map(([url]) => url))).toEqual(new Set([task.listUrl, detailUrl]))
+  expect((await store.saveTask(task)).detail.allowedExternalHosts).toBe('NEWS.example.com')
+  expect((await store.loadTask(task.id))?.detail.allowedExternalHosts).toBe('NEWS.example.com')
+})
+
 const createDynamicProvider = (
   snapshots: DynamicPageSnapshot[],
   endReason = '页面中找不到下一页按钮'
@@ -135,6 +173,57 @@ afterEach(async () => {
 })
 
 describe('CollectorEngine', () => {
+  it('uses the same default summary limit in test collection and output without shortening the body', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-summary-'))
+    temporaryDirectories.push(root)
+    const task = createTask('summary')
+    task.listUrl = 'https://www.example.com/list'
+    task.listPageRules = [task.listUrl]
+    task.listItem.selector = '.item'
+    task.detail.link.selector = 'a'
+    task.output.rootDirectory = join(root, 'exports')
+    task.xml = configureXmlRecord(
+      '<book><article><summary/><body/></article></book>',
+      'template.xml',
+      '/book/article'
+    )
+    for (const mapping of task.xml.mappings) {
+      mapping.mode = 'page'
+      mapping.pageSource = 'detail'
+      mapping.selector = '#body'
+    }
+    const summary = task.xml.mappings.find((mapping) => mapping.fieldPath === 'summary')!
+    summary.limitTextCharacters = true
+    delete summary.textCharacterLimit
+
+    const prefix = '政策正文'.repeat(50)
+    const fullText = `${prefix}补充条款`
+    const fetchHtml = vi.fn(async (url: string): Promise<FetchHtmlResult> => ({
+      kind: 'success',
+      requestedUrl: url,
+      finalUrl: url,
+      status: 200,
+      html: url === task.listUrl
+        ? '<div class="item"><a href="/detail">政策</a></div>'
+        : `<article id="body"><b>${prefix}</b>补充条款</article>`,
+      encoding: 'utf-8',
+      retries: 0
+    }))
+    const engine = new CollectorEngine(new TaskStore(join(root, 'data')), { fetchHtml } as unknown as HttpClient)
+
+    const tested = await engine.testTask(task)
+    expect(tested.rows).toEqual([{ summary: prefix, body: fullText }])
+
+    const result = await engine.run(task, null, new CollectorRunControl(), {
+      progress: vi.fn(),
+      log: vi.fn()
+    })
+    expect(result.status).toBe('completed')
+    const output = await readOutputXml(result.outputFiles[0]!, 'utf-8')
+    expect(output).toContain(`<summary>${prefix}</summary>`)
+    expect(output).toContain(`<body>${fullText}</body>`)
+  })
+
   it('returns detail samples when the link is the list item itself or its wrapper', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collector-detail-samples-'))
     temporaryDirectories.push(root)

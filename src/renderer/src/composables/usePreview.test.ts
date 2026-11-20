@@ -167,6 +167,7 @@ describe('usePreview navigation history', () => {
 
     const detailUrl = 'https://example.com/detail/1'
     const task = createTask('detail-loading-test')
+    task.detail.allowedExternalHosts = 'example.com'
     const previewVisible = ref(true)
     const { app, store } = mountPreview({
       showError: vi.fn(),
@@ -192,6 +193,9 @@ describe('usePreview navigation history', () => {
 
     resolveDetailSamples([detailUrl])
     await opening
+    expect(previewOpen).toHaveBeenCalledWith(detailUrl, expect.any(Object), expect.objectContaining({
+      detail: expect.objectContaining({ allowedExternalHosts: 'example.com' })
+    }), true)
 
     expect(calls).toEqual([
       'opening:true',

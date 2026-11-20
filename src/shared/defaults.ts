@@ -20,6 +20,7 @@ import {
 } from './resource-config'
 import { taskOutputFields, taskOutputMappings, taskOutputTemplate } from './output-template'
 import { detailAttachmentConfigurationIssues } from './detail-attachment'
+import { detailHostConfigurationIssues } from './detail-hosts'
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -61,6 +62,7 @@ export const createTask = (id: string, now = new Date().toISOString()): TaskConf
     selector: ''
   },
   detail: {
+    allowedExternalHosts: '',
     enabled: true,
     navigationMode: 'link',
     link: {
@@ -148,6 +150,8 @@ export const normalizeTaskConfig = (task: TaskConfig): TaskConfig => {
       selector: task.detail?.link?.selector ?? ''
     },
     linkAttribute: task.detail?.linkAttribute ?? 'href',
+    allowedExternalHosts: typeof task.detail?.allowedExternalHosts === 'string'
+      ? task.detail.allowedExternalHosts.trim() : '',
     attachment: {
       enabled: task.detail?.attachment?.enabled === true,
       fieldPath: typeof task.detail?.attachment?.fieldPath === 'string'
@@ -273,6 +277,7 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
   }
   issues.push(...disabledDetailPageMappingIssues(task))
   issues.push(...detailAttachmentConfigurationIssues(task))
+  issues.push(...detailHostConfigurationIssues(task.detail))
 
   const outputTemplate = taskOutputTemplate(task)
   if (task.output.format === 'xml' && !task.xml) {

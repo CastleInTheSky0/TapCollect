@@ -17,6 +17,13 @@ const MERGE_VALUE_MODES = new Set<MergeValueMode>([
 
 const PAGE_LOCATOR_TYPES = new Set<PageLocatorType>(['css', 'xpath', 'markers'])
 
+export const DEFAULT_TEXT_CHARACTER_LIMIT = 200
+
+export const normalizeTextCharacterLimit = (value: unknown): number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_TEXT_CHARACTER_LIMIT
+
 const normalizePageLocatorType = (value: unknown): PageLocatorType =>
   PAGE_LOCATOR_TYPES.has(value as PageLocatorType) ? (value as PageLocatorType) : 'css'
 
@@ -40,6 +47,8 @@ export const createPageExtractionConfig = (): PageExtractionConfig => ({
   separator: ',',
   trim: true,
   collapseWhitespace: false,
+  limitTextCharacters: false,
+  textCharacterLimit: DEFAULT_TEXT_CHARACTER_LIMIT,
   contentFilterSelectors: [],
   replacements: [],
   convertToTimestamp: false
@@ -73,6 +82,8 @@ export const normalizeMergeValueConfig = (
     endMarker: typeof value.endMarker === 'string' ? value.endMarker : '',
     includeMarkers: Boolean(value.includeMarkers),
     textPrefix: normalizeTextPrefix(value.textPrefix),
+    limitTextCharacters: value.limitTextCharacters === true,
+    textCharacterLimit: normalizeTextCharacterLimit(value.textCharacterLimit),
     contentFilterSelectors: normalizeContentFilterSelectors(value.contentFilterSelectors),
     replacements: Array.isArray(value.replacements) ? value.replacements : [],
     convertToTimestamp: Boolean(value.convertToTimestamp)
@@ -92,6 +103,8 @@ export const normalizeFieldMappingConfig = (mapping: FieldMapping): FieldMapping
     endMarker: typeof mapping.endMarker === 'string' ? mapping.endMarker : '',
     includeMarkers: Boolean(mapping.includeMarkers),
     textPrefix: normalizeTextPrefix(mapping.textPrefix),
+    limitTextCharacters: mapping.limitTextCharacters === true,
+    textCharacterLimit: normalizeTextCharacterLimit(mapping.textCharacterLimit),
     contentFilterSelectors: normalizeContentFilterSelectors(mapping.contentFilterSelectors),
     replacements: Array.isArray(mapping.replacements) ? mapping.replacements : [],
     convertToTimestamp: Boolean(mapping.convertToTimestamp),

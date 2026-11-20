@@ -37,6 +37,7 @@ import { redactDiagnostic, type HostProtection } from '@shared/access-protection
 import { firstTaskListPageUrl } from '@shared/list-page-rules'
 import type { AccessProfileLease, AccessProfileService } from './access-profile-service'
 import { profileMatchesUrl } from '@shared/access-profile'
+import { fetchInAnonymousDetailSession } from './electron-session-fetch'
 import { ManualVerificationService, type ManualVerificationProvider, type VerificationRequest } from './manual-verification-service'
 
 const ACTIVE_STATUSES = new Set<RunSessionItem['status']>([
@@ -123,7 +124,7 @@ export class RunManager extends EventEmitter {
       engine ??
       new CollectorEngine(
         store,
-        new HttpClient(net.fetch as typeof fetch, access),
+        new HttpClient(net.fetch as typeof fetch, access, fetchInAnonymousDetailSession),
         dynamicPageProvider
       )
     access?.on('protected', (protection: HostProtection, target?: AccessRequestTarget) => this.handleProtection(protection, target))

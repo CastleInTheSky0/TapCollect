@@ -18,6 +18,7 @@ import {
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
 import { taskOutputTemplate } from '@shared/output-template'
 import { detailAttachmentConfigurationIssues, isDetailAttachmentEnabled } from '@shared/detail-attachment'
+import { detailHostConfigurationIssues, detailHostScope } from '@shared/detail-hosts'
 import {
   createDetailAttachmentRecord, detailAttachmentKind, immediateMissingListFields
 } from './detail-attachment'
@@ -33,7 +34,7 @@ import {
 import { HttpClient, HttpRequestError } from './http-client'
 import { AccessProtectionError, RequestInterruptedError, isAccessInterruption } from './access-errors'
 import type { DynamicPageProvider, DynamicPageSession, DynamicPageSnapshot } from './dynamic-page'
-import { buildPageUrl, formatRunStamp, normalizeUrl } from './url-utils'
+import { buildPageUrl, formatRunStamp, hasSameHostname, normalizeUrl } from './url-utils'
 import {
   missingRequiredMergeFields,
   resolveFieldValue,
@@ -234,6 +235,8 @@ export class CollectorEngine {
 
   async getDetailSamples(task: TaskConfig, limit = 20): Promise<string[]> {
     if (!task.detail.enabled || !task.detail.link.selector.trim()) return []
+    const hostIssues = detailHostConfigurationIssues(task.detail)
+    if (hostIssues.length) throw new Error(hostIssues.join('；'))
     if (task.detail.navigationMode === 'click') {
       if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
       const session = await this.dynamicPageProvider.create(task)
@@ -265,14 +268,15 @@ export class CollectorEngine {
         page.candidates
           .map((candidate) => candidate.detailRequestUrl)
           .filter((url): url is string => Boolean(url) &&
-            (!isDetailAttachmentEnabled(task) || !detailAttachmentKind(url)))
+            ((!isDetailAttachmentEnabled(task) && hasSameHostname(response.finalUrl, url)) ||
+              !detailAttachmentKind(url)))
       )
     ].slice(0, Math.max(1, limit))
   }
 
   async testTask(task: TaskConfig): Promise<TestCollectionResult> {
-    const attachmentIssues = detailAttachmentConfigurationIssues(task)
-    if (attachmentIssues.length) throw new Error(attachmentIssues.join('；'))
+    const detailIssues = [...detailAttachmentConfigurationIssues(task), ...detailHostConfigurationIssues(task.detail)]
+    if (detailIssues.length) throw new Error(detailIssues.join('；'))
     const outputTemplate = taskOutputTemplate(task)
     if (!outputTemplate) throw new Error('请先导入并配置输出模板')
     let clickSession: DynamicPageSession | null = null
@@ -1046,27 +1050,29 @@ export class CollectorEngine {
     }
     try {
       const attachmentsEnabled = isDetailAttachmentEnabled(task)
-      const directKind = attachmentsEnabled ? detailAttachmentKind(candidate.detailRequestUrl) : null
+      const scope = detailHostScope(task.detail, candidate.listUrl)
+      const asExternal = (externalUrl: string): CandidateOutcome => {
+        const external = { ...candidate, detailRequestUrl: '', detailUrl: '', externalUrl }
+        return this.finalizeRecord(task, external, candidateToRecord(external), {})
+      }
+      const foreign = !hasSameHostname(candidate.listUrl, candidate.detailRequestUrl)
+      const directKind = attachmentsEnabled || foreign ? detailAttachmentKind(candidate.detailRequestUrl) : null
       if (directKind) {
+        if (foreign) return asExternal(candidate.detailRequestUrl)
         return this.finalizeRecord(task, candidate,
           createDetailAttachmentRecord(task, candidate, candidate.detailRequestUrl, directKind), {})
       }
-      const response = attachmentsEnabled
-        ? await this.httpClient.fetchDetail(candidate.detailRequestUrl, task.request, new URL(candidate.listUrl).hostname)
-        : await this.httpClient.fetchHtml(candidate.detailRequestUrl, task.request, new URL(candidate.listUrl).hostname)
+      const response = attachmentsEnabled || scope.externalHostnames.size
+        ? await this.httpClient.fetchDetail(candidate.detailRequestUrl, task.request, scope, attachmentsEnabled)
+        : await this.httpClient.fetchHtml(candidate.detailRequestUrl, task.request, scope.listHostname)
       if (response.kind === 'attachment') {
+        if (!attachmentsEnabled || !hasSameHostname(candidate.listUrl, response.finalUrl)) {
+          return asExternal(response.finalUrl)
+        }
         return this.finalizeRecord(task, candidate,
           createDetailAttachmentRecord(task, candidate, response.finalUrl, response.resourceKind), {})
       }
-      if (response.kind === 'external-redirect') {
-        const external = {
-          ...candidate,
-          detailRequestUrl: '',
-          detailUrl: '',
-          externalUrl: response.finalUrl
-        }
-        return this.finalizeRecord(task, candidate, candidateToRecord(external), {})
-      }
+      if (response.kind === 'external-redirect') return asExternal(response.finalUrl)
       if (response.kind === 'not-found') {
         return {
           record: null,

@@ -172,6 +172,42 @@ describe('page extraction', () => {
     expect(detail.record.values.text).not.toContain('javascript:')
   })
 
+  it.each(['css', 'xpath'] as const)('truncates the cleaned and joined %s text at whole characters', (selectorType) => {
+    const task = createTask('text-limit')
+    task.listUrl = 'https://www.example.com/list'
+    task.listItem.selector = '.item'
+    task.detail.enabled = false
+    task.xml = template()
+    const mapping = task.xml.mappings[0]!
+    mapping.selectorType = selectorType
+    mapping.selector = selectorType === 'css' ? '.title' : './/*[@class="title"]'
+    mapping.limitTextCharacters = true
+    mapping.textCharacterLimit = 5
+    mapping.matchMode = 'all'
+    mapping.separator = '|'
+    mapping.contentFilterSelectors = ['.ignore']
+    mapping.replacements = [{ id: 'replace', from: '双字', to: '新' }]
+    const emoji = '\u{1F469}\u200D\u{1F4BB}'
+    const accent = 'e\u0301'
+    const html = '<div class="item">' +
+      `<span class="title" title="raw attribute"><b class="ignore">滤掉</b> 双字 \n 新</span>` +
+      `<span class="title">${emoji}${accent}其余</span></div>`
+    const extract = () => extractListPage(task, html, task.listUrl, 1, 0).candidates[0]?.values.title
+
+    expect(extract()).toBe(`新 新|${emoji}`)
+    mapping.textCharacterLimit = 6
+    expect(extract()).toBe(`新 新|${emoji}${accent}`)
+    mapping.textCharacterLimit = 20
+    expect(extract()).toBe(`新 新|${emoji}${accent}其余`)
+    mapping.extraction = 'html'
+    mapping.textCharacterLimit = 1
+    expect(extract()).toContain(`${emoji}${accent}其余`)
+    mapping.extraction = 'attribute'
+    mapping.attribute = 'title'
+    mapping.matchMode = 'first'
+    expect(extract()).toBe('raw attribute')
+  })
+
   it('extracts detail content between literal multiline markers and optionally keeps them', () => {
     const task = createTask('detail-marker-task')
     task.listUrl = 'https://www.example.com/list'
@@ -545,6 +581,8 @@ describe('page extraction', () => {
     detailValue.endMarker = '<!--正文结束-->'
     detailValue.extraction = 'html'
     detailValue.contentFilterSelectors = ['.share']
+    detailValue.limitTextCharacters = true
+    detailValue.textCharacterLimit = 2
     mapping.mode = 'merge'
     mapping.mergeSeparator = ' / '
     mapping.mergeValues = [listValue, fixedValue, detailValue]
@@ -568,6 +606,14 @@ describe('page extraction', () => {
     )
     expect(list.matchCounts['summary / 合并项 1']).toEqual([1])
     expect(detail.matchCounts['summary / 合并项 3']).toBe(1)
+    detailValue.extraction = 'text'
+    const excerpt = extractDetailPage(
+      task,
+      list.candidates[0]!,
+      '<!--正文开始--><p>详情正文</p><div class="share">分享内容</div><!--正文结束-->',
+      'https://www.example.com/detail/1'
+    )
+    expect(resolveFieldValue(mapping, field, excerpt.record)).toBe('列表标题 / 固定内容 / 详情')
   })
 
   it('converts only explicitly enabled page fields and merge children', () => {
@@ -586,6 +632,8 @@ describe('page extraction', () => {
     published.pageSource = 'list'
     published.selector = '.published'
     published.convertToTimestamp = true
+    published.limitTextCharacters = true
+    published.textCharacterLimit = 2
 
     const text = task.xml.mappings.find((mapping) => mapping.fieldPath === 'text')!
     text.mode = 'page'
@@ -596,6 +644,8 @@ describe('page extraction', () => {
     const datePart = createMergeValue('date-part')
     datePart.selector = '.published'
     datePart.convertToTimestamp = true
+    datePart.limitTextCharacters = true
+    datePart.textCharacterLimit = 2
     const suffix = createMergeValue('suffix')
     suffix.mode = 'fixed'
     suffix.fixedValue = '已发布'
@@ -812,5 +862,11 @@ describe('page extraction', () => {
       '/resources/%E9%99%84%E4%BB%B6/%E4%BC%9A%E8%AE%AE%E6%9D%90%E6%96%99.xls'
     )
     expect(encoded.candidates[0]?.resources).toHaveLength(1)
+
+    fileMapping.limitTextCharacters = true
+    fileMapping.textCharacterLimit = 10
+    const truncated = extractListPage(task, html, task.listUrl, 1, 0)
+    expect(truncated.candidates[0]?.values.file).toBe('/resources')
+    expect(truncated.candidates[0]?.resources).toEqual([])
   })
 })

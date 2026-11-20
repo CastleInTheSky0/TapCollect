@@ -71,7 +71,7 @@ const api: CollectorApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openOutputDirectory, taskId),
   openErrorLog: (taskId, path) =>
     ipcRenderer.invoke(IPC_CHANNELS.openErrorLog, taskId, path),
-  previewOpen: (url, bounds, task) => ipcRenderer.invoke(IPC_CHANNELS.previewOpen, url, bounds, task),
+  previewOpen: (url, bounds, task, detailSample) => ipcRenderer.invoke(IPC_CHANNELS.previewOpen, url, bounds, task, detailSample),
   previewNavigate: (url) => ipcRenderer.invoke(IPC_CHANNELS.previewNavigate, url),
   previewGoBack: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoBack),
   previewGoForward: () => ipcRenderer.invoke(IPC_CHANNELS.previewGoForward),

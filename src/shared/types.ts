@@ -72,6 +72,7 @@ export interface DetailConfig {
   navigationMode: DetailNavigationMode
   link: SelectorConfig
   linkAttribute: string
+  allowedExternalHosts?: string
   attachment: {
     enabled: boolean
     fieldPath: string
@@ -154,6 +155,8 @@ export interface PageExtractionConfig {
   separator: string
   trim: boolean
   collapseWhitespace: boolean
+  limitTextCharacters?: boolean
+  textCharacterLimit?: number | undefined
   contentFilterSelectors: string[]
   replacements: FieldReplacementRule[]
   convertToTimestamp: boolean
@@ -643,7 +646,7 @@ export interface CollectorApi {
   cancelAllRuns: () => Promise<boolean>
   openOutputDirectory: (taskId: string) => Promise<boolean>
   openErrorLog: (taskId: string, path: string) => Promise<boolean>
-  previewOpen: (url: string, bounds: PreviewBounds, task?: TaskConfig) => Promise<boolean>
+  previewOpen: (url: string, bounds: PreviewBounds, task?: TaskConfig, detailSample?: boolean) => Promise<boolean>
   previewNavigate: (url: string) => Promise<boolean>
   previewGoBack: () => Promise<boolean>
   previewGoForward: () => Promise<boolean>

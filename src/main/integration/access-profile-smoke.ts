@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { app, net, type BrowserWindow } from 'electron'
 import { createTask } from '@shared/defaults'
 import type { AccessProfileInput } from '@shared/access-profile'
+import { detailHostScope } from '@shared/detail-hosts'
 import { createTaskConfigBundle } from '@shared/task-config-bundle'
 import { HttpClient } from '@main/core/http-client'
 import { configureXmlRecord } from '@main/core/xml-template'
@@ -15,19 +16,36 @@ import type { PreviewService } from '@main/services/preview-service'
 import type { RunManager } from '@main/services/run-manager'
 import { TaskStore } from '@main/services/task-store'
 import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
+import { fetchInAnonymousDetailSession } from '@main/services/electron-session-fetch'
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 const listen = (server: Server): Promise<string> => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
 
 /** Uses real Chromium cookies, session transport and renderer IPC; no remote site. */
 export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskStore, profiles: AccessProfileService, access: AccessCoordinator, manager: RunManager, preview: PreviewService): Promise<boolean> => {
-  const seen: Array<{ origin: string; path: string; cookie: string; ua: string; language: string }> = []
+  const seen: Array<{ origin: string; path: string; cookie: string; ua: string; language: string; listToken: string }> = []
   let otherOrigin = ''
   const site = (foreign: boolean) => createServer((request, response) => {
-    seen.push({ origin: foreign ? 'foreign' : 'primary', path: request.url ?? '', cookie: request.headers.cookie ?? '', ua: request.headers['user-agent'] ?? '', language: request.headers['accept-language'] ?? '' })
+    assert.equal(request.headers['x-tapcollect-session-request'], undefined)
+    seen.push({ origin: foreign ? 'foreign' : 'primary', path: request.url ?? '', cookie: request.headers.cookie ?? '', ua: request.headers['user-agent'] ?? '', language: request.headers['accept-language'] ?? '', listToken: String(request.headers['x-list-token'] ?? '') })
     response.setHeader('content-type', 'text/html; charset=utf-8')
     if (request.url === '/login') response.setHeader('set-cookie', 'session=profile-secret; Path=/; HttpOnly; SameSite=Lax')
     if (request.url === '/redirect') { response.writeHead(302, { location: `${otherOrigin}/echo` }); response.end(); return }
+    if (request.url === '/cross-host-start') {
+      response.writeHead(302, { location: `${otherOrigin.replace('127.0.0.1', 'localhost')}/cross-host-next` })
+      response.end()
+      return
+    }
+    if (request.url === '/cross-host-next') {
+      response.writeHead(302, { location: '/cross-host-article' })
+      response.end()
+      return
+    }
+    if (request.url === '/cross-host-blocked') {
+      response.writeHead(302, { location: `${otherOrigin.replace('127.0.0.1', '127.0.0.2')}/not-allowed` })
+      response.end()
+      return
+    }
     const identity = request.headers.cookie?.includes('session=profile-secret') ? 'authorized' : 'anonymous'
     if (request.url === '/resource') { response.setHeader('content-type', 'image/svg+xml'); response.end('<svg xmlns="http://www.w3.org/2000/svg"/>'); return }
     response.end(`<!doctype html><html><body><ul><li class="item"><span>${identity}</span><img src="/resource"><img src="${otherOrigin}/resource"></li></ul><button id="next" disabled>Next</button></body></html>`)
@@ -72,7 +90,7 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
     assert(lease)
     const storedCookies = await lease.session.cookies.get({ url: origin })
     assert(storedCookies.some(cookie => cookie.name === 'session' && cookie.httpOnly))
-    const client = new HttpClient(net.fetch as typeof fetch, access)
+    const client = new HttpClient(net.fetch as typeof fetch, access, fetchInAnonymousDetailSession)
     const get = (url: string) => access.withContext(task.id, undefined, () => client.fetchHtml(url, task.request), lease)
     const html = await get(task.listUrl)
     assert(html.kind === 'success' && html.html.includes('authorized'))
@@ -86,6 +104,37 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
     await assert.rejects(profiles.save({ ...first, name: 'busy' }), /使用/)
     await assert.rejects(profiles.clearSession(first.id), /使用/)
     lease.release()
+    stage = 'allowlisted foreign detail'
+    const crossHostTask = {
+      ...task,
+      detail: { ...task.detail, enabled: true, allowedExternalHosts: 'localhost' },
+      request: { ...task.request, headers: [{ id: 'list', key: 'X-List-Token', value: 'list-secret' }] }
+    }
+    const foreignDetail = `${otherOrigin.replace('127.0.0.1', 'localhost')}/cross-host-article`
+    const crossScope = detailHostScope(crossHostTask.detail, crossHostTask.listUrl)
+    const crossLease = await profiles.acquire(crossHostTask)
+    assert(crossLease)
+    try {
+      const response = await access.withContext(task.id, undefined, () =>
+        client.fetchDetail(`${origin}/cross-host-start`, crossHostTask.request, crossScope, false), crossLease)
+      assert(response.kind === 'success' && response.finalUrl === foreignDetail && response.html.includes('anonymous'))
+    } finally {
+      crossLease.release()
+    }
+    const unbound = await client.fetchDetail(`${origin}/cross-host-start`, crossHostTask.request, crossScope, false)
+    assert(unbound.kind === 'success' && unbound.finalUrl === foreignDetail && unbound.html.includes('anonymous'))
+    const blocked = await client.fetchDetail(`${otherOrigin.replace('127.0.0.1', 'localhost')}/cross-host-blocked`, crossHostTask.request, crossScope, false)
+    assert(blocked.kind === 'external-redirect' && new URL(blocked.finalUrl).hostname === '127.0.0.2')
+    const openSample = (url: string) => window.webContents.executeJavaScript(
+      `window.collector.previewOpen(${JSON.stringify(url)}, ${JSON.stringify(bounds)}, ${JSON.stringify(crossHostTask)}, true)`
+    )
+    assert(await openSample(`${origin}/cross-host-start`))
+    assert.equal((await preview.evaluate({ selectorType: 'css', selector: 'span', scopeSelector: '', ancestorAttribute: '' })).sample, 'anonymous')
+    await assert.rejects(openSample(`${otherOrigin.replace('127.0.0.1', 'localhost')}/cross-host-blocked`))
+    assert(seen.some(entry => entry.path === '/cross-host-start' && entry.listToken === 'list-secret' && entry.cookie))
+    assert(seen.filter(entry => ['/cross-host-next', '/cross-host-article'].includes(entry.path))
+      .every(entry => !entry.cookie && !entry.listToken && entry.ua !== first.userAgent))
+    preview.close()
     stage = 'dynamic and test collection'
     const dynamic = new ElectronDynamicPageProvider(window, access, profiles)
     const dynamicTask = { ...task, pagination: { ...task.pagination, mode: 'click' as const, nextButton: { selectorType: 'css' as const, selector: '#next' } } }
@@ -170,11 +219,13 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
 
     // Verify real renderer management UI and supported viewport sizes.
     const captureRoot = process.env.TAPCOLLECT_PROFILE_SCREENSHOTS
+    const detailCaptureRoot = process.env.TAPCOLLECT_HOST_SCREENSHOTS
     const wasVisible = window.isVisible()
-    if (captureRoot) {
-      await mkdir(captureRoot, { recursive: true })
+    if (captureRoot || detailCaptureRoot) {
+      for (const root of [captureRoot, detailCaptureRoot]) if (root) await mkdir(root, { recursive: true })
       window.showInactive()
     }
+    await store.saveTask({ ...crossHostTask, detail: { ...crossHostTask.detail, link: { ...task.detail.link, selector: 'a' } } })
     await window.webContents.reload()
     await wait(900)
     await window.webContents.executeJavaScript(`location.hash = '/tasks/access-profile-smoke'`)
@@ -188,6 +239,42 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
       await wait(400)
       await writeFile(join(captureRoot, 'task-profile-binding.png'), (await window.webContents.capturePage()).toPNG())
     }
+    stage = 'external detail settings UI'
+    const hostInput = 'textarea[placeholder="例如 news.example.com"]'
+    await window.webContents.executeJavaScript(`([...document.querySelectorAll('.wizard-nav .t-steps-item__title')].find(item => item.textContent.trim() === '详情页')).click()`)
+    await wait(450)
+    const selector = JSON.stringify(hostInput)
+    const setHost = (value: string) => window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector(${selector})
+      input.value = ${JSON.stringify(value)}
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    assert.equal(await window.webContents.executeJavaScript(`document.querySelector(${selector})?.value`), 'localhost')
+    await setHost('https://news.example.com')
+    assert(await window.webContents.executeJavaScript(`document.body.innerText.includes('第 1 行无效')`))
+    await setHost('news.example.com')
+    assert(await window.webContents.executeJavaScript(`!document.body.innerText.includes('第 1 行无效')`))
+    for (const [width, height] of [[1500, 920], [1180, 720]]) {
+      window.setContentSize(width!, height!)
+      await wait(200)
+      const rect = await window.webContents.executeJavaScript(`(() => {
+        const panel = document.querySelector('.step-scroll').getBoundingClientRect()
+        const field = document.querySelector(${selector}).getBoundingClientRect()
+        return {
+          x: Math.ceil(panel.left), y: Math.ceil(panel.top),
+          width: Math.floor(panel.width) - 2, height: Math.floor(panel.height) - 2,
+          fits: panel.left <= field.left && panel.right >= field.right && field.width > 0 &&
+            document.documentElement.scrollWidth <= innerWidth
+        }
+      })()`) as { x: number; y: number; width: number; height: number; fits: boolean }
+      assert(rect.fits)
+      if (detailCaptureRoot) {
+        const { x, y, width: imageWidth, height: imageHeight } = rect
+        await writeFile(join(detailCaptureRoot, `detail-hosts-${width}.png`),
+          (await window.webContents.capturePage({ x, y, width: imageWidth, height: imageHeight })).toPNG())
+      }
+    }
+    stage = 'profile settings UI'
     await window.webContents.executeJavaScript(`location.hash = '/settings/profiles'`)
     await wait(600)
     assert(await window.webContents.executeJavaScript(`document.body.innerText.includes('访问配置 A（已编辑）')`))
@@ -219,7 +306,7 @@ export const verifyAccessProfiles = async (window: BrowserWindow, store: TaskSto
     const uiProfile = (await profiles.list()).find(item => item.name === '界面创建配置')
     assert(uiProfile)
     ids.push(uiProfile.id)
-    if (captureRoot && !wasVisible) window.hide()
+    if ((captureRoot || detailCaptureRoot) && !wasVisible) window.hide()
     return true
   } catch (error) {
     failed = true

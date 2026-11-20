@@ -10,6 +10,7 @@ import { validateXmlOutput } from '@main/core/xml-template'
 import { readSpreadsheetCell } from '@main/core/spreadsheet-template'
 import { TaskStore } from '@main/services/task-store'
 import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
+import { fetchInAnonymousDetailSession } from '@main/services/electron-session-fetch'
 
 const taskConfigPath = (): string => {
   const configuredPath = process.argv[2] || process.env.TAPCOLLECT_SMOKE_TASK
@@ -65,7 +66,7 @@ const run = async (): Promise<void> => {
     }
     const engine = new CollectorEngine(
       store,
-      new HttpClient(net.fetch as typeof fetch),
+      new HttpClient(net.fetch as typeof fetch, undefined, fetchInAnonymousDetailSession),
       hostWindow ? new ElectronDynamicPageProvider(hostWindow) : null
     )
     const tested = await engine.testTask(task)

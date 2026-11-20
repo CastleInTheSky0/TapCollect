@@ -97,6 +97,7 @@ const validateTaskConfigShape = (value: unknown): JsonRecord => {
   }
   validateSelector(detail.link, '任务配置.detail.link')
   requireString(detail, 'linkAttribute', '任务配置.detail')
+  if (detail.allowedExternalHosts !== undefined) requireString(detail, 'allowedExternalHosts', '任务配置.detail')
   if (detail.attachment !== undefined) {
     const attachment = requireRecord(detail, 'attachment', '任务配置.detail')
     requireBoolean(attachment, 'enabled', '任务配置.detail.attachment')

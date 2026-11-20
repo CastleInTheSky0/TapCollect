@@ -1,11 +1,13 @@
+import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { app, BrowserWindow, dialog, WebContentsView } from 'electron'
 import { registerIpcHandlers } from '@main/ipc'
+import { configureXmlRecord } from '@main/core/xml-template'
 import { prepareDataDirectory } from '@main/services/data-directory'
 import { ElectronDynamicPageProvider } from '@main/services/dynamic-page-service'
 import { PreviewService } from '@main/services/preview-service'
@@ -395,6 +397,109 @@ const verifyPreviewNavigation = async (
         return window.collector.previewClose();
       })()
     `)
+  }
+}
+
+const verifyTextCharacterLimit = async (
+  window: BrowserWindow,
+  store: TaskStore,
+  previewUrl: string
+): Promise<void> => {
+  const task = createTask('character-limit-smoke')
+  task.name = '政策摘要示例'
+  task.listUrl = previewUrl
+  task.listPageRules = [previewUrl]
+  task.xml = configureXmlRecord('<root><item><summary/></item></root>', 'summary.xml', '/root/item')
+  Object.assign(task.xml.mappings[0]!, { mode: 'page', selector: 'article' })
+  await store.saveTask(task)
+
+  const js = <T = unknown>(source: string): Promise<T> =>
+    window.webContents.executeJavaScript(source, true) as Promise<T>
+  const until = async (evalSource: string): Promise<void> => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (await js(evalSource)) return
+      await delay(50)
+    }
+    const values = await js(`Array.from(document.querySelectorAll('.text-limit input'),
+      (element) => ({ value: element.value, checked: element.checked }))`)
+    throw new Error(`文字字符数界面等待超时：${evalSource} ${JSON.stringify(values)}`)
+  }
+  const input = 'document.querySelector(".text-limit input.t-input__inner")'
+  const setLimit = async (value: string): Promise<void> => {
+    await js(`(() => {
+      const input = ${input};
+      input.focus();
+      input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`)
+    await js(`${input}.dispatchEvent(new FocusEvent('blur'))`)
+  }
+  const openMapping = async (): Promise<void> => {
+    await window.loadFile(join(__dirname, '../renderer/index.html'))
+    const taskRow = `document.querySelector('[data-task-id="${task.id}"] .task-row-main')`
+    await until(`Boolean(${taskRow})`)
+    await js(`${taskRow}.click()`)
+    const step = `[...document.querySelectorAll('.wizard-nav .t-steps-item__inner')].find(
+      (element) => element.textContent.includes('模板映射'))`
+    await until(`Boolean(${step})`)
+    await js(`${step}.click()`)
+    const field = `document.querySelector('.mapping-row .t-collapse-panel__header')`
+    await until(`Boolean(${field})`)
+    await js(`${field}.click()`)
+    await until(`Boolean(document.querySelector('.text-limit input[type="checkbox"]'))`)
+  }
+
+  try {
+    await openMapping()
+    assert.equal(await js(`Boolean(${input})`), false)
+    await js(`document.querySelector('.text-limit input[type="checkbox"]').click()`)
+    await until(`${input}?.value === '200'`)
+    assert.equal(await js(`${input}.labels[0]?.textContent.trim()`), '最多字符数')
+    await setLimit('')
+    await until(`${input}?.value === '200'`)
+    await setLimit('80')
+    await until(`${input}?.value === '80'`)
+
+    const timestamp = `document.querySelector('.mapping-row .timestamp-control .t-switch')`
+    await js(`${timestamp}.click()`)
+    await until(`!document.querySelector('.text-limit')`)
+    await js(`${timestamp}.click()`)
+    await until(`${input}?.value === '80'`)
+
+    const captureRoot = process.env.TAPCOLLECT_SMOKE_ARTIFACTS
+    if (captureRoot) await mkdir(captureRoot, { recursive: true })
+    const previousSize = window.getContentSize()
+    try {
+      for (const [width, height] of [[1500, 920], [1180, 720]] as const) {
+        window.setContentSize(width, height)
+        await js(`document.querySelector('.text-limit').scrollIntoView({ block: 'center' })`)
+        await until(`(() => {
+          const input = ${input}.getBoundingClientRect();
+          const panel = document.querySelector('.step-scroll').getBoundingClientRect();
+          return input.left >= panel.left && input.right <= panel.right && input.height > 0;
+        })()`)
+        if (captureRoot) {
+          const image = await window.webContents.capturePage()
+          await writeFile(join(captureRoot, `summary-character-limit-${width}.png`), image.toPNG())
+        }
+      }
+    } finally {
+      window.setContentSize(previousSize[0]!, previousSize[1]!)
+    }
+
+    await js(`[...document.querySelectorAll('.workspace-header button')].find(
+      (button) => button.textContent.includes('保存草稿')).click()`)
+    let saved = await store.loadTask(task.id)
+    for (let attempt = 0; attempt < 50 && saved?.xml?.mappings[0]?.textCharacterLimit !== 80; attempt += 1) {
+      await delay(50)
+      saved = await store.loadTask(task.id)
+    }
+    assert.equal(saved?.xml?.mappings[0]?.limitTextCharacters, true)
+    assert.equal(saved?.xml?.mappings[0]?.textCharacterLimit, 80)
+    await openMapping()
+    await until(`${input}?.value === '80'`)
+  } finally {
+    await store.deleteTask(task.id)
   }
 }
 
@@ -1031,6 +1136,8 @@ const run = async (): Promise<PreloadSmokeResult> => {
     >
     writeStage('renderer-evaluated')
 
+    await verifyTextCharacterLimit(window, store, previewUrl)
+    writeStage('text-character-limit-verified')
     const taskGroupsWork = await verifyTaskGroups(window, store, runManager, previewUrl, dataRoot)
     writeStage('task-groups-verified')
     const previewNavigationWorks = await verifyPreviewNavigation(window, previewUrl)

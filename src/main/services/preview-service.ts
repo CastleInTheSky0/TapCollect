@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import type { AccessCoordinator } from './access-coordinator'
 import type { AccessProfileLease, AccessProfileService } from './access-profile-service'
 import { profileMatchesUrl } from '@shared/access-profile'
+import { allowedDetailHostname, detailHostConfigurationIssues, detailHostScope, type DetailHostScope } from '@shared/detail-hosts'
+import { firstTaskListPageUrl } from '@shared/list-page-rules'
 import { BrowserWindow, WebContentsView } from 'electron'
 import type {
   PreviewBounds,
@@ -94,19 +97,39 @@ export class PreviewService extends EventEmitter {
   private profile: AccessProfileLease | undefined
   private identityKey = ''
   private openSequence = 0
+  private sampleScope: DetailHostScope | undefined
+  private anonymousDetail = false
 
   constructor(private readonly window: BrowserWindow, private readonly access?: AccessCoordinator, private readonly profiles?: AccessProfileService) {
     super()
   }
 
-  async open(url: string, bounds: PreviewBounds, task?: TaskConfig): Promise<boolean> {
+  async open(url: string, bounds: PreviewBounds, task?: TaskConfig, detailSample = false): Promise<boolean> {
     const target = validatePreviewUrl(url)
-    const key = JSON.stringify([task?.accessProfileId ?? '', task?.request ?? null])
+    let scope: DetailHostScope | undefined
+    if (detailSample && task?.detail.enabled && task.detail.navigationMode === 'link') {
+      const issues = detailHostConfigurationIssues(task.detail)
+      if (issues.length) throw new Error(issues.join('；'))
+      const listUrl = firstTaskListPageUrl(task)
+      if (listUrl) {
+        scope = detailHostScope(task.detail, listUrl)
+      }
+    }
+    if (scope && !allowedDetailHostname(scope, target)) throw new Error('详情地址不在允许的站点内')
+    return this.openTarget(target, bounds, task, scope, Boolean(scope && new URL(target).hostname !== scope.listHostname))
+  }
+
+  private async openTarget(
+    target: string, bounds: PreviewBounds, task: TaskConfig | undefined,
+    scope: DetailHostScope | undefined, anonymous: boolean
+  ): Promise<boolean> {
+    const key = JSON.stringify([task?.accessProfileId ?? '', task?.request ?? null,
+      anonymous && scope ? [task?.id, scope.listHostname, [...scope.externalHostnames]] : null])
     // 更换身份是同一次打开操作的一部分；不要发送“预览已关闭”状态，
     // 否则渲染器会丢失可见标记，后续弹窗无法调度原生视图边界。
     if (key !== this.identityKey) this.releaseView(true)
     const sequence = ++this.openSequence
-    if (!this.view && task?.accessProfileId) {
+    if (!this.view && task?.accessProfileId && !anonymous) {
       if (!this.profiles) throw new Error('访问配置服务不可用')
       const profile = await this.profiles.acquire(task)
       if (sequence !== this.openSequence) { profile?.release(); return false }
@@ -117,30 +140,57 @@ export class PreviewService extends EventEmitter {
       throw new Error('预览地址与访问配置来源不匹配')
     }
     this.identityKey = key
+    this.sampleScope = scope
+    this.anonymousDetail = anonymous
     if (!this.view) this.createView()
-    this.view?.setBounds(normalizeBounds(bounds))
-    await this.view?.webContents.loadURL(target)
+    const view = this.view!
+    view.setBounds(normalizeBounds(bounds))
+    let foreignRedirect = ''
+    const captureForeignRedirect = (event: Electron.Event<Electron.WebContentsWillRedirectEventParams>): void => {
+      const hostname = scope && event.isMainFrame && allowedDetailHostname(scope, event.url)
+      if (hostname && hostname !== scope?.listHostname) foreignRedirect = event.url
+    }
+    if (scope?.externalHostnames.size && !anonymous) view.webContents.on('will-redirect', captureForeignRedirect)
+    try {
+      await view.webContents.loadURL(target)
+    } catch (error) {
+      if (sequence === this.openSequence && foreignRedirect) {
+        return this.openTarget(foreignRedirect, bounds, task, scope, true)
+      }
+      throw error
+    } finally {
+      if (!view.webContents.isDestroyed()) view.webContents.removeListener('will-redirect', captureForeignRedirect)
+    }
     return true
   }
 
   async navigate(url: string): Promise<boolean> {
     if (!this.view) throw new Error('网页预览尚未打开')
     if (this.profile && !profileMatchesUrl(this.profile, url)) throw new Error('绑定访问配置的预览只能访问该配置来源')
+    if (!this.permitsSampleNavigation(url)) throw new Error('详情地址不在允许的站点内')
     await this.view.webContents.loadURL(validatePreviewUrl(url))
     return true
   }
 
   goBack(): boolean {
-    const webContents = this.activeWebContents()
-    if (!webContents?.navigationHistory.canGoBack()) return false
-    webContents.navigationHistory.goBack()
-    return true
+    return this.goToHistoryOffset(-1)
   }
 
   goForward(): boolean {
+    return this.goToHistoryOffset(1)
+  }
+
+  private canGoToHistoryOffset(webContents: Electron.WebContents, offset: -1 | 1): boolean {
+    const history = webContents.navigationHistory
+    if (offset === -1 ? !history.canGoBack() : !history.canGoForward()) return false
+    const entry = history.getEntryAtIndex(history.getActiveIndex() + offset)
+    return entry != null && this.permitsSampleNavigation(entry.url)
+  }
+
+  private goToHistoryOffset(offset: -1 | 1): boolean {
     const webContents = this.activeWebContents()
-    if (!webContents?.navigationHistory.canGoForward()) return false
-    webContents.navigationHistory.goForward()
+    if (!webContents || !this.canGoToHistoryOffset(webContents, offset)) return false
+    webContents.navigationHistory.goToOffset(offset)
     return true
   }
 
@@ -168,6 +218,8 @@ export class PreviewService extends EventEmitter {
     this.profile?.release()
     this.profile = undefined
     this.identityKey = ''
+    this.sampleScope = undefined
+    this.anonymousDetail = false
     if (!view) {
       if (!preserveOpening) this.emitNavigationState()
       return false
@@ -177,6 +229,13 @@ export class PreviewService extends EventEmitter {
     view.webContents.close()
     if (!preserveOpening) this.emitNavigationState()
     return true
+  }
+
+  private permitsSampleNavigation(url: string): boolean {
+    const scope = this.sampleScope
+    if (!scope) return true
+    const hostname = allowedDetailHostname(scope, url)
+    return Boolean(hostname && (this.anonymousDetail || hostname === scope.listHostname))
   }
 
   closeForProfile(id: string): void { if (this.profile?.id === id) this.close() }
@@ -469,7 +528,9 @@ export class PreviewService extends EventEmitter {
         contextIsolation: true,
         sandbox: true,
         javascript: true,
-        ...(this.profile ? { session: this.profile.session } : { partition: 'web-info-collector-preview' })
+        ...(this.profile ? { session: this.profile.session } : {
+          partition: this.anonymousDetail ? `web-info-collector-detail-${randomUUID()}` : 'web-info-collector-preview'
+        })
       }
     })
     this.view = view
@@ -480,6 +541,9 @@ export class PreviewService extends EventEmitter {
         callback({ requestHeaders: { ...details.requestHeaders, 'Accept-Language': this.access!.settings.language } })
       })
     }
+    if (this.anonymousDetail) {
+      view.webContents.session.on('will-download', (event) => event.preventDefault())
+    }
     view.setBackgroundColor('#ffffff')
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     view.webContents.session.setPermissionCheckHandler(() => false)
@@ -489,7 +553,8 @@ export class PreviewService extends EventEmitter {
     const guardNavigation = (event: Electron.Event, url: string): void => {
       try {
         validatePreviewUrl(url)
-        if (this.profile && !profileMatchesUrl(this.profile, url)) event.preventDefault()
+        if (!this.permitsSampleNavigation(url) ||
+          (this.profile && !profileMatchesUrl(this.profile, url))) event.preventDefault()
       } catch {
         event.preventDefault()
       }
@@ -534,8 +599,8 @@ export class PreviewService extends EventEmitter {
     const state: PreviewNavigationState = webContents
       ? {
           url: webContents.getURL(),
-          canGoBack: webContents.navigationHistory.canGoBack(),
-          canGoForward: webContents.navigationHistory.canGoForward(),
+          canGoBack: this.canGoToHistoryOffset(webContents, -1),
+          canGoForward: this.canGoToHistoryOffset(webContents, 1),
           isLoading: this.opening || webContents.isLoading()
         }
       : { url: '', canGoBack: false, canGoForward: false, isLoading: this.opening }

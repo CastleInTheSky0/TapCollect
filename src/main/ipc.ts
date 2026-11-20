@@ -300,8 +300,8 @@ export const registerIpcHandlers = (
       return error === ''
     }
   )
-  ipcMain.handle(IPC_CHANNELS.previewOpen, (_event, url: string, bounds: PreviewBounds, task?: TaskConfig) =>
-    preview.open(url, bounds, task)
+  ipcMain.handle(IPC_CHANNELS.previewOpen, (_event, url: string, bounds: PreviewBounds, task?: TaskConfig, detailSample?: boolean) =>
+    preview.open(url, bounds, task, detailSample === true)
   )
   ipcMain.handle(IPC_CHANNELS.previewNavigate, (_event, url: string) => preview.navigate(url))
   ipcMain.handle(IPC_CHANNELS.previewGoBack, () => preview.goBack())

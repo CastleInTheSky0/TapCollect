@@ -1,9 +1,44 @@
 import iconv from 'iconv-lite'
 import { describe, expect, it, vi } from 'vitest'
 import { createTask } from '@shared/defaults'
+import { detailHostScope } from '@shared/detail-hosts'
+import { AccessCoordinator } from '@main/services/access-coordinator'
 import { HttpClient, decodeHtml } from './http-client'
 
 describe('HTTP client', () => {
+  it('checks every detail hop and never uses the list identity or custom headers for a foreign host', async () => {
+    const task = createTask('cross-host-http')
+    const source = 'https://list.example/start'
+    const allowed = 'https://news.example/story'
+    const blocked = 'https://news.example.unlisted.test/story'
+    task.detail.allowedExternalHosts = 'news.example'
+    task.request.delayMs = 0
+    task.request.headers.push({ id: 'source', key: 'X-List-Token', value: 'source-only' })
+    const scope = detailHostScope(task.detail, source)
+    const sourceFetch = vi.fn<typeof fetch>(async () =>
+      new Response(null, { status: 302, headers: { location: allowed } }))
+    const foreignFetch = vi.fn<typeof fetch>(async () =>
+      new Response(null, { status: 302, headers: { location: blocked } }))
+    const access = new AccessCoordinator('Default UA')
+    access.configure({ ...access.settings, minIntervalMs: 0, jitterPercent: 0 })
+    const client = new HttpClient(foreignFetch, access)
+    await expect(access.withContext(task.id, undefined, () =>
+      client.fetchDetail(source, task.request, scope, false),
+    { fetch: sourceFetch, userAgent: 'Source UA', language: 'en' })).resolves.toMatchObject({
+      kind: 'external-redirect', finalUrl: blocked
+    })
+    expect(sourceFetch).toHaveBeenCalledOnce()
+    expect(new Headers(sourceFetch.mock.calls[0]?.[1]?.headers).get('x-list-token')).toBe('source-only')
+    expect(foreignFetch.mock.calls.map(([url]) => url)).toEqual([allowed])
+    const request = foreignFetch.mock.calls[0]?.[1]
+    expect(request?.credentials).toBe('omit')
+    expect(new Headers(request?.headers).has('x-list-token')).toBe(false)
+    expect(new Headers(request?.headers).get('user-agent')).toBe('Default UA')
+    expect(access.hasVisited(task.id, 'news.example')).toBe(true)
+    await expect(client.fetchDetail(blocked, task.request, scope)).rejects.toThrow('详情地址不在允许的站点内')
+    expect(foreignFetch).toHaveBeenCalledOnce()
+  })
+
   it.each([
     { 'content-type': 'application/pdf' },
     { 'content-type': 'application/octet-stream' },

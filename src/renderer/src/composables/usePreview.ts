@@ -121,6 +121,7 @@ export const usePreview = (deps: PreviewDeps) => {
     detailSamples.value = []
     detailSampleIndex.value = -1
   }
+  watch(() => deps.getActiveTask()?.detail.allowedExternalHosts, resetDetailSamples)
 
   const runPreviewOpenAction = async (
     action: PreviewOpenAction,
@@ -144,7 +145,7 @@ export const usePreview = (deps: PreviewDeps) => {
     })
   }
 
-  const loadPreviewUrl = async (value: string): Promise<void> => {
+  const loadPreviewUrl = async (value: string, detailSample = false, task = deps.getActiveTask()): Promise<void> => {
     try {
       await deps.layout.expandPreviewPane()
       deps.previewVisible.value = true
@@ -152,8 +153,7 @@ export const usePreview = (deps: PreviewDeps) => {
       const bounds = deps.layout.previewBounds()
       if (!bounds) throw new Error('无法确定网页预览区域，请调整窗口后重试')
       previewUrl.value = value
-      const task = deps.getActiveTask()
-      await api.previewOpen(value, bounds, task ? snapshotTaskForIpc(task) : undefined)
+      await api.previewOpen(value, bounds, task ? snapshotTaskForIpc(task) : undefined, detailSample)
     } catch (error) {
       deps.previewVisible.value = false
       throw error
@@ -334,8 +334,8 @@ export const usePreview = (deps: PreviewDeps) => {
             detailSampleIndex.value = -1
           }
           if (!detailSamples.value.length) {
-            previewStatus.value = '当前列表页没有找到可访问的站内详情样例'
-            deps.showNotice('当前列表页没有找到可访问的站内详情样例')
+            previewStatus.value = '当前列表页没有找到可访问的详情样例'
+            deps.showNotice(previewStatus.value)
             return
           }
           detailSampleIndex.value = next
@@ -344,7 +344,7 @@ export const usePreview = (deps: PreviewDeps) => {
           const value =
             detailSamples.value[detailSampleIndex.value] ?? detailSamples.value[0] ?? ''
           previewUrl.value = value
-          await loadPreviewUrl(value)
+          await loadPreviewUrl(value, true, task)
           previewStatus.value = `详情样例 ${detailSampleIndex.value + 1} / ${detailSamples.value.length}`
         }
       )

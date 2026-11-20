@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, watch } from 'vue'
+import { detailHostConfigurationIssues } from '@shared/detail-hosts'
 import { taskOutputMappings } from '@shared/output-template'
 import { ChevronRightIcon, CursorIcon, InternetIcon, LinkIcon, SearchIcon } from 'tdesign-icons-vue-next'
 import type { OutputFieldDefinition, TaskConfig } from '@shared/types'
@@ -7,6 +8,7 @@ import type { PreviewOpenAction } from '@renderer/utils/preview-open-guard'
 
 // 任务草稿通过 v-model 传入；子组件直接编辑嵌套字段（与 FieldMappingEditor 的约定一致）
 const task = defineModel<TaskConfig>({ required: true })
+const hostIssue = computed(() => detailHostConfigurationIssues(task.value.detail)[0])
 
 watch(() => task.value.detail.attachment.fieldPath, (path) => {
   const mapping = taskOutputMappings(task.value).find((item) => item.fieldPath === path)
@@ -37,7 +39,6 @@ const emit = defineEmits<{
   <div class="step-heading">
     <span>03 / 05</span>
     <h1>详情链接与详情字段</h1>
-    <p>站内链接会请求详情；不同完整 hostname 的链接保留为外链，不访问目标页面。</p>
   </div>
   <div class="switch-line">
     <span><strong>启用详情页采集</strong><small>关闭后只采列表字段，并选择一个输出字段作为去重键。</small></span>
@@ -116,6 +117,19 @@ const emit = defineEmits<{
       <strong>只比较完整 hostname</strong>
       <t-tag theme="primary" variant="light">{{ listHostname }}</t-tag>
     </div>
+    <label v-if="!isClickDetail" class="field">
+      <span>允许的外站详情主机名</span>
+      <t-textarea
+        v-model="task.detail.allowedExternalHosts"
+        class="code-input"
+        aria-label="允许的外站详情主机名"
+        placeholder="例如 news.example.com"
+        :status="hostIssue ? 'error' : 'default'"
+        :tips="hostIssue"
+        :autosize="{ minRows: 2, maxRows: 4 }"
+      />
+      <small>每行一个完整主机名；留空仅采集站内详情。</small>
+    </label>
     <div class="sample-actions">
       <t-button
         size="small"
@@ -178,8 +192,8 @@ const emit = defineEmits<{
       <t-alert theme="info" message="请在第 5 步“资源处理”开启“下载资源”。附件保存位置和回填地址统一使用“资源存放根目录”及“输出内容中的资源访问前缀”。" />
     </div>
   </div>
-  <div v-if="task.detail.navigationMode === 'link'" class="scope-note">
-    <strong>外链记录仍会输出</strong>
+  <div v-if="task.detail.enabled && !isClickDetail" class="scope-note">
+    <strong>未采集的外链记录仍会输出</strong>
     <span>详情页字段为空；可把“外链 URL”来源映射到模板中的任意一个字段。</span>
   </div>
 </template>

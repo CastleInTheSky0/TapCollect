@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createFieldMapping, createTask } from './defaults'
+import { createMergeValue } from './field-mapping'
 import {
   createTaskConfigBundle,
   parseTaskConfigBundle,
@@ -8,6 +9,19 @@ import {
 } from './task-config-bundle'
 
 describe('task config bundle', () => {
+  it('preserves the detail hostname draft and defaults older tasks to same-host only', () => {
+    const task = createTask('hostname-draft')
+    task.detail.allowedExternalHosts = 'news.example.com\nfiles.example.org'
+    const bundle = createTaskConfigBundle([task])
+    const imported = prepareImportedTaskConfig(parseTaskConfigBundle(bundle)[0]!, 'copy')
+    expect(imported.detail.allowedExternalHosts).toBe(task.detail.allowedExternalHosts)
+    const entry = bundle.tasks[0]!
+    delete entry.detail.allowedExternalHosts
+    expect(prepareImportedTaskConfig(parseTaskConfigBundle(bundle)[0]!, 'old').detail.allowedExternalHosts).toBe('')
+    const invalid = { ...bundle, tasks: [{ ...entry, detail: { ...entry.detail, allowedExternalHosts: ['*'] } }] }
+    expect(() => prepareImportedTaskConfig(parseTaskConfigBundle(invalid)[0]!, 'bad')).toThrow('allowedExternalHosts')
+  })
+
   it('round-trips attachment settings and rejects malformed optional settings', () => {
     const task = createTask('attachments')
     task.detail.attachment = { enabled: true, fieldPath: 'file' }
@@ -98,6 +112,9 @@ describe('task config bundle', () => {
     mapping.textPrefix = '自定义发布日期'
     mapping.contentFilterSelectors = ['h1', '.share']
     mapping.convertToTimestamp = true
+    mapping.limitTextCharacters = true
+    mapping.textCharacterLimit = 150
+    mapping.mergeValues = [{ ...createMergeValue('excerpt'), limitTextCharacters: true, textCharacterLimit: 80 }]
     source.xml = {
       fileName: 'template.xml',
       content: '<root><item><published/></item></root>',
@@ -109,7 +126,7 @@ describe('task config bundle', () => {
     }
 
     const imported = prepareImportedTaskConfig(
-      source,
+      parseTaskConfigBundle(JSON.parse(JSON.stringify(createTaskConfigBundle([source]))))[0]!,
       'new-id',
       '2026-08-09T02:00:00.000Z'
     )
@@ -130,7 +147,10 @@ describe('task config bundle', () => {
       selectorType: 'markers',
       startMarker: '<time>',
       endMarker: '</time>',
-      includeMarkers: true
+      includeMarkers: true,
+      limitTextCharacters: true,
+      textCharacterLimit: 150,
+      mergeValues: [{ id: 'excerpt', limitTextCharacters: true, textCharacterLimit: 80 }]
     })
   })
 

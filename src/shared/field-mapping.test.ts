@@ -3,7 +3,8 @@ import { createFieldMapping } from './defaults'
 import {
   createMergeValue,
   isFieldMappingConfigured,
-  normalizeFieldMappingConfig
+  normalizeFieldMappingConfig,
+  normalizeTextCharacterLimit
 } from './field-mapping'
 
 const mapping = () =>
@@ -61,6 +62,8 @@ describe('field mapping configuration', () => {
     delete raw.startMarker
     delete raw.endMarker
     delete raw.includeMarkers
+    delete raw.limitTextCharacters
+    delete raw.textCharacterLimit
     const rawMergeValue = (raw.mergeValues as Array<Record<string, unknown>>)[0]!
     delete rawMergeValue.convertToTimestamp
     delete rawMergeValue.contentFilterSelectors
@@ -68,6 +71,8 @@ describe('field mapping configuration', () => {
     delete rawMergeValue.startMarker
     delete rawMergeValue.endMarker
     delete rawMergeValue.includeMarkers
+    delete rawMergeValue.limitTextCharacters
+    delete rawMergeValue.textCharacterLimit
 
     expect(normalizeFieldMappingConfig(raw as unknown as typeof legacy)).toMatchObject({
       mergeSeparator: '',
@@ -77,6 +82,8 @@ describe('field mapping configuration', () => {
       startMarker: '',
       endMarker: '',
       includeMarkers: false,
+      limitTextCharacters: false,
+      textCharacterLimit: 200,
       mergeValues: [
         {
           id: 'legacy-page',
@@ -85,9 +92,29 @@ describe('field mapping configuration', () => {
           textPrefix: '',
           startMarker: '',
           endMarker: '',
-          includeMarkers: false
+          includeMarkers: false,
+          limitTextCharacters: false,
+          textCharacterLimit: 200
         }
       ]
+    })
+  })
+
+  it.each([undefined, 0, -1, 12.5, Number.MAX_SAFE_INTEGER + 1, '80'])(
+    'defaults invalid character limit %s to 200',
+    (limit) => expect(normalizeTextCharacterLimit(limit)).toBe(200)
+  )
+
+  it('normalizes character limits independently for a field and merge child', () => {
+    const value = { ...mapping(), limitTextCharacters: true, textCharacterLimit: 80 }
+    const child = createMergeValue('excerpt')
+    Object.assign(child, { limitTextCharacters: 'true', textCharacterLimit: 12 })
+    value.mergeValues = [child]
+
+    expect(normalizeFieldMappingConfig(value)).toMatchObject({
+      limitTextCharacters: true,
+      textCharacterLimit: 80,
+      mergeValues: [{ id: 'excerpt', limitTextCharacters: false, textCharacterLimit: 12 }]
     })
   })
 

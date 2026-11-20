@@ -252,7 +252,7 @@ const moveMergeValue = (mapping: FieldMapping, index: number, offset: number): v
 
         <t-alert
           v-else-if="mapping.mode === 'external-url'" class="mapping-note full" theme="info"
-          message="站外链接不请求详情；补全后的绝对地址写入此字段。站内记录输出为空。"
+          message="未采集的站外链接输出补全后的绝对地址；已采集的详情请使用“当前详情 URL”。"
         />
         <t-alert
           v-else-if="mapping.mode === 'preserve'" class="mapping-note full" theme="info"

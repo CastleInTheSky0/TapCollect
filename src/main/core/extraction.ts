@@ -21,6 +21,8 @@ import {
   selectNodes
 } from './selector-engine'
 import { hasSameHostname, resolveHttpUrl } from './url-utils'
+import { allowedDetailHostname, detailHostScope } from '@shared/detail-hosts'
+import { normalizeTextCharacterLimit } from '@shared/field-mapping'
 import { pageValueEntries } from './field-values'
 import { taskOutputFields, taskOutputMappings } from '@shared/output-template'
 import {
@@ -106,12 +108,32 @@ const extractMarkerValue = (
   }
 }
 
-const applyTimestampConversion = (
+const textSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+const truncateText = (value: string, limit: number): string => {
+  if (value.length <= limit) return value
+  let count = 0
+  for (const { index } of textSegmenter.segment(value)) {
+    if (count === limit) return value.slice(0, index)
+    count += 1
+  }
+  return value
+}
+
+const finalizeMappingValue = (
   processed: ProcessedResourceValue,
   mapping: PageExtractionConfig,
   matchCount: number
 ): ExtractedMappingValue => {
-  if (!mapping.convertToTimestamp) return { ...processed, conversionError: '', matchCount }
+  if (!mapping.convertToTimestamp) {
+    const value = mapping.extraction === 'text' && mapping.limitTextCharacters === true
+      ? truncateText(processed.value, normalizeTextCharacterLimit(mapping.textCharacterLimit))
+      : processed.value
+    const resources = value === processed.value
+      ? processed.resources
+      : processed.resources.filter((plan) => value.includes(plan.xmlUrl))
+    return { value, resources, conversionError: '', matchCount }
+  }
   const converted = convertDateToTimestamp(processed.value)
   if (converted.ok) {
     return { ...processed, value: converted.value, conversionError: '', matchCount }
@@ -153,7 +175,7 @@ const extractMappingValue = (
     throw error
   }
   if (mapping.selectorType === 'markers') {
-    return applyTimestampConversion(
+    return finalizeMappingValue(
       { value: applyFieldCleanup(raw, mapping), resources: [] },
       mapping,
       matchCount
@@ -162,7 +184,7 @@ const extractMappingValue = (
   if (mapping.extraction === 'html') {
     const processed = processHtmlWithResources(raw, baseUrl, pageUrl, task)
     const value = applyFieldCleanup(processed.value, mapping)
-    return applyTimestampConversion(
+    return finalizeMappingValue(
       {
         value,
         resources: processed.resources.filter((plan) => value.includes(plan.xmlUrl))
@@ -200,7 +222,7 @@ const extractMappingValue = (
       processedValues.map((processed) => processed.value).join(mapping.separator),
       mapping
     )
-    return applyTimestampConversion(
+    return finalizeMappingValue(
       {
         value,
         resources: processedValues
@@ -217,7 +239,7 @@ const extractMappingValue = (
     pageUrl,
     task
   )
-  return applyTimestampConversion(
+  return finalizeMappingValue(
     {
       value: processed.value,
       resources: processed.resources.filter((plan) => processed.value.includes(plan.xmlUrl))
@@ -277,6 +299,7 @@ export const extractListPage = (
     (node): node is Element => node.nodeType === node.ELEMENT_NODE
   )
   const requiredMappings = requiredPageMappings(task, 'list')
+  const scope = detailHostScope(task.detail, pageUrl)
   const matchCounts: Record<string, number[]> = Object.fromEntries(
     entries.map((entry) => [entry.matchKey, []])
   )
@@ -314,7 +337,7 @@ export const extractListPage = (
       const href = extractDetailHref(item, task)
       const resolved = resolveHttpUrl(href, baseUrl)
       if (resolved) {
-        if (hasSameHostname(pageUrl, resolved)) {
+        if (allowedDetailHostname(scope, resolved)) {
           detailRequestUrl = resolved
           detailUrl = resolved
         } else {
@@ -366,6 +389,11 @@ export const extractDetailPage = (
   const resources = [...candidate.resources]
   const matchCounts: Record<string, number> = {}
   const conversionWarnings: Array<{ fieldPath: string; reason: string }> = []
+  // 外站正文不扩大任务的资源下载范围。
+  const detailTask = hasSameHostname(candidate.listUrl, pageUrl) ? task : {
+    ...task,
+    resources: { ...task.resources, download: { ...task.resources.download, enabled: false } }
+  }
   for (const entry of entries) {
     const processed = extractMappingValue(
       document,
@@ -373,7 +401,7 @@ export const extractDetailPage = (
       entry.mapping,
       baseUrl,
       pageUrl,
-      task,
+      detailTask,
       entry.matchKey
     )
     matchCounts[entry.matchKey] = processed.matchCount
