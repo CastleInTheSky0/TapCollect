@@ -54,7 +54,7 @@ const profileOptions = computed(() => [
           v-model="listPageRulesText"
           :autosize="{ minRows: 3, maxRows: 8 }"
           :spell-check="false"
-          :placeholder="isClickPagination ? '只填写一个动态列表初始 URL' : '固定地址或包含 {page} 的模板，每行一条'"
+          :placeholder="isClickPagination ? '填一条初始 URL 或包含 {page} 的模板' : '固定地址或包含 {page} 的模板，每行一条'"
         />
         <t-button
           theme="default"
@@ -73,7 +73,9 @@ const profileOptions = computed(() => [
         <t-tag variant="light">
           {{ isClickPagination ? '动态初始地址' : '固定地址' }} {{ fixedListPageCount }} 条
         </t-tag>
-        <t-tag v-if="isClickPagination" theme="warning" variant="light">点击下一页</t-tag>
+        <t-tag v-if="isClickPagination" theme="warning" variant="light">
+          {{ hasPaginationTemplate ? '按 URL 翻页（动态渲染）' : '点击下一页' }}
+        </t-tag>
         <t-tag v-if="hasPaginationTemplate" theme="primary" variant="light">分页模板 1 条</t-tag>
         <span v-if="listPageRuleAnalysis?.hostname">
           hostname：{{ listPageRuleAnalysis.hostname }}
@@ -86,7 +88,7 @@ const profileOptions = computed(() => [
       />
       <small>
         {{ isClickPagination
-          ? '动态模式只接受一个初始 URL，正式采集会执行页面脚本并读取最终渲染的列表。'
+          ? '动态渲染只接受一条地址；填写 {page} 模板时按 URL 翻页，否则点击下一页。'
           : '按行顺序采集；固定 URL 各请求一次，最多一行可包含 {page}。' }}
       </small>
     </div>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { WebContentsView, type BrowserWindow } from 'electron'
 import type { TaskConfig } from '@shared/types'
+import { analyzeTaskListPageRules } from '@shared/list-page-rules'
 import { taskOutputMappings } from '@shared/output-template'
 import {
   readDynamicDetailRenderState,
@@ -16,7 +17,7 @@ import {
   type DynamicPageSession,
   type DynamicPageSnapshot
 } from '@main/core/dynamic-page'
-import { allowedCustomRequestHeaders } from '@main/core/http-client'
+import { allowedCustomRequestHeaders, HttpRequestError } from '@main/core/http-client'
 import { AccessProtectionError, RequestInterruptedError, isAccessInterruption, parseRetryAfter } from '@main/core/access-errors'
 import type { AccessCoordinator } from './access-coordinator'
 import type { AccessProfileService } from './access-profile-service'
@@ -56,6 +57,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, message: s
 
 class ElectronDynamicPageSession implements DynamicPageSession {
   private latestSnapshot: DynamicPageSnapshot | null = null
+  private initialListError: HttpRequestError | null = null
   private blockedNavigation = ''
   private closed = false
   private closing: Promise<void> | null = null
@@ -125,6 +127,10 @@ class ElectronDynamicPageSession implements DynamicPageSession {
     }
   }
 
+  markInitialListNotFound(url: string, status: number): void {
+    this.initialListError = new HttpRequestError(`列表页返回 ${status}`, url, status)
+  }
+
   async initialize(): Promise<void> {
     const timeoutMs = this.task.request.timeoutSeconds * 1_000
     const navigationDeadline = Date.now() + timeoutMs
@@ -154,6 +160,7 @@ class ElectronDynamicPageSession implements DynamicPageSession {
 
       for (;;) {
         this.assertAlive()
+        if (this.initialListError) throw this.initialListError
         if (domReady || navigation.state === 'loaded') {
           try {
             const snapshot = await this.readSnapshot()
@@ -463,10 +470,9 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
   constructor(private readonly hostWindow: BrowserWindow, private readonly access?: AccessCoordinator, private readonly profiles?: AccessProfileService) {}
 
   async create(task: TaskConfig, requestedStartUrl?: string): Promise<DynamicPageSession> {
-    const startUrl =
-      requestedStartUrl?.trim() ||
-      task.listPageRules.map((value) => value.trim()).find(Boolean) ||
-      task.listUrl
+    const listPages = analyzeTaskListPageRules(task)
+    const startUrl = requestedStartUrl?.trim() || listPages.firstUrl
+    const usesRenderedTemplate = listPages.mode === 'click' && Boolean(listPages.templateRule)
     const parsed = validateHttpUrl(startUrl)
     const allowedHostname = parsed.hostname.toLowerCase()
     if (task.accessProfileId && !this.profiles) throw new Error('访问配置服务不可用')
@@ -536,9 +542,12 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
       permitsUrl
     )
     const onResponse = (details: Electron.OnHeadersReceivedListenerDetails): void => {
-        if (!this.access) return
         if (details.resourceType !== 'mainFrame') return
         const status = details.statusCode
+        if (usesRenderedTemplate && details.webContentsId === view.webContents.id && (status === 404 || status === 410)) {
+          session.markInitialListNotFound(details.url, status)
+        }
+        if (!this.access) return
         if (status === 401 || status === 403) {
           const header = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1]?.[0] ?? null
           const duration = parseRetryAfter(header)
@@ -551,7 +560,9 @@ export class ElectronDynamicPageProvider implements DynamicPageProvider {
           this.access?.protect(allowedHostname, `动态页面返回 ${status}，站点进入冷却`, Date.now() + duration)
         }
     }
-    if (!profile && this.access) view.webContents.session.webRequest.onHeadersReceived((details, callback) => { callback({}); onResponse(details) })
+    if (!profile && (this.access || usesRenderedTemplate)) {
+      view.webContents.session.webRequest.onHeadersReceived((details, callback) => { callback({}); onResponse(details) })
+    }
     const guardNavigation = (event: Electron.Event, url: string): void => {
       if (permitsUrl(url)) return
       event.preventDefault()

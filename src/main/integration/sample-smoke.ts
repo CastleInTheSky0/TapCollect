@@ -24,14 +24,15 @@ const taskConfigPath = (): string => {
 
 const loadSmokeTask = async (path: string, temporaryRoot: string): Promise<TaskConfig> => {
   const task = JSON.parse(await readFile(path, 'utf8')) as TaskConfig
-  const firstUrl = analyzeTaskListPageRules(task).firstUrl
+  const { firstUrl, templateRule } = analyzeTaskListPageRules(task)
   if (!firstUrl) throw new Error('本地任务没有可用于冒烟验证的列表页地址')
 
   task.id = 'live-smoke'
   task.name = `冒烟验证-${task.name || '未命名任务'}`
   task.listUrl = firstUrl
-  task.listPageRules = [firstUrl]
-  task.pagination.urlTemplate = ''
+  const renderedTemplate = task.pagination.mode === 'click' ? templateRule?.template ?? '' : ''
+  task.listPageRules = [renderedTemplate || firstUrl]
+  task.pagination.urlTemplate = renderedTemplate
   if (task.pagination.mode === 'click') {
     task.pagination.maxPages = 2
   } else {

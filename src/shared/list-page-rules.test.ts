@@ -81,17 +81,28 @@ describe('list page rules', () => {
     expect(template.errors).toEqual([])
   })
 
-  it('rejects templates, multiple URLs, and an invalid limit in click pagination', () => {
+  it('resolves a single rendered template with the configured start page', () => {
+    const template = 'https://example.com/list?category=1&page={page}'
+    const analysis = analyzeListPageRules([template], {
+      mode: 'click', startPage: 3, step: -1, maxPages: 2
+    })
+
+    expect(analysis.errors).toEqual([])
+    expect(analysis.firstUrl).toBe('https://example.com/list?category=1&page=3')
+    expect(analysis.templateRule?.template).toBe(template)
+  })
+
+  it('rejects multiple URLs and invalid template values in rendered pagination', () => {
     const analysis = analyzeListPageRules(
       ['https://example.com/dynamic', 'https://example.com/page_{page}.html'],
-      { mode: 'click', startPage: 1, step: 1, maxPages: 0 }
+      { mode: 'click', startPage: 1, step: 0, maxPages: 0 }
     )
 
     expect(analysis.errors).toEqual(
       expect.arrayContaining([
-        '第 2 行在动态分页模式下不能包含 {page}',
-        '点击下一页模式只能配置一条固定列表 URL',
-        '动态分页最大采集页数必须是正整数'
+        '动态渲染模式只能配置一条固定列表 URL 或 {page} 模板',
+        '分页步长必须是非零整数',
+        '分页模板最大采集页数必须是正整数'
       ])
     )
   })

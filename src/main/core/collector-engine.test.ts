@@ -8,7 +8,7 @@ import {
   createTask
 } from '@shared/defaults'
 import { configureXmlRecord } from './xml-template'
-import { HttpClient, type FetchHtmlResult } from './http-client'
+import { HttpClient, HttpRequestError, type FetchHtmlResult } from './http-client'
 import type { DynamicPageProvider, DynamicPageSnapshot } from './dynamic-page'
 import {
   CollectorEngine,
@@ -829,6 +829,71 @@ describe('CollectorEngine', () => {
       'https://example.com/list_98.htm',
       'https://example.com/after.htm'
     ])
+  })
+
+  it('previews and resumes a rendered template by URL without clicking next', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collector-rendered-template-'))
+    temporaryDirectories.push(root)
+    const task = createListOnlyTask('rendered-template', root)
+    task.listPageRules = ['https://example.com/list?category=1&page={page}']
+    task.pagination.mode = 'click'
+    task.pagination.startPage = 2
+    task.pagination.maxPages = 3
+    const url2 = 'https://example.com/list?category=1&page=2'
+    const url3 = 'https://example.com/list?category=1&page=3'
+    const url4 = 'https://example.com/list?category=1&page=4'
+    const advance = vi.fn(async () => ({ kind: 'end' as const, reason: 'not used' }))
+    const close = vi.fn(async () => undefined)
+    let interrupted = true
+    const create = vi.fn<DynamicPageProvider['create']>(async (_task, url) => {
+      if (url === url3 && interrupted) {
+        throw new AccessProtectionError({
+          hostname: 'example.com', kind: 'action-required', reason: '需人工确认', until: 0
+        })
+      }
+      if (url === url4) throw new HttpRequestError('列表页返回 410', url, 410)
+      const page = url === url2 ? 2 : 3
+      const snapshot = {
+        ...dynamicSnapshot(page, `渲染记录${page}`),
+        url: url!,
+        html: `<div class="item"><a class="title" href="/detail/${page}">渲染记录${page}</a></div>`
+      }
+      return {
+        current: async () => snapshot,
+        openDetail: async () => snapshot,
+        returnToList: async () => snapshot,
+        advance,
+        close
+      }
+    })
+    const fetchHtml = vi.fn()
+    const store = new TaskStore(join(root, 'data'))
+    const saved = await store.saveTask(task)
+    expect(saved.listUrl).toBe(url2)
+    expect(await store.loadTask(task.id)).toMatchObject({
+      listUrl: url2,
+      listPageRules: task.listPageRules,
+      pagination: { mode: 'click', startPage: 2, maxPages: 3 }
+    })
+    const engine = new CollectorEngine(store, { fetchHtml } as unknown as HttpClient, { create })
+    expect((await engine.testTask(saved)).rows).toEqual([{ title: '渲染记录2' }])
+    const withDetails = { ...saved, detail: { ...saved.detail, enabled: true, link: { selectorType: 'css' as const, selector: 'a' } } }
+    expect(await engine.getDetailSamples(withDetails)).toEqual(['https://example.com/detail/2'])
+
+    const events = { progress: vi.fn(), log: vi.fn() }
+    expect((await engine.run(saved, null, new CollectorRunControl(), events)).status).toBe('paused')
+    const checkpoint = await store.getCheckpoint(task.id)
+    expect(checkpoint).toMatchObject({ nextPage: 3, templatePagesVisited: 1, seenPageUrls: [url2] })
+    interrupted = false
+    const resumed = await engine.run(saved, checkpoint, new CollectorRunControl(), events)
+    expect(resumed).toMatchObject({ status: 'completed', pagesVisited: 2, counters: { succeeded: 2 } })
+    expect(resumed.message).toContain('410')
+    const output = await readOutputXml(resumed.outputFiles[0]!, 'utf-8')
+    expect(output).toMatch(/渲染记录2[\s\S]*渲染记录3/)
+    expect(create.mock.calls.map(([, url]) => url)).toEqual([url2, url2, url2, url3, url3, url4])
+    expect(close).toHaveBeenCalledTimes(4)
+    expect(advance).not.toHaveBeenCalled()
+    expect(fetchHtml).not.toHaveBeenCalled()
   })
 
   it('collects rendered DOM pages until the dynamic next action ends', async () => {

@@ -64,10 +64,6 @@ export const analyzeListPageRules = (
   normalizedLines.forEach((line, index) => {
     const lineNumber = index + 1
     const markers = markerCount(line)
-    if (mode === 'click' && markers > 0) {
-      errors.push(`第 ${lineNumber} 行在动态分页模式下不能包含 {page}`)
-      return
-    }
     if (markers > 1) {
       errors.push(`第 ${lineNumber} 行只能包含一个 {page}`)
       return
@@ -105,13 +101,9 @@ export const analyzeListPageRules = (
 
   if (normalizedLines.length === 0) errors.push('请至少填写一个列表页面 URL')
   if (mode === 'click' && normalizedLines.length > 1) {
-    errors.push('点击下一页模式只能配置一条固定列表 URL')
+    errors.push('动态渲染模式只能配置一条固定列表 URL 或 {page} 模板')
   }
-  if (mode === 'click') {
-    if (!isPositiveSafeInteger(pagination.maxPages)) {
-      errors.push('动态分页最大采集页数必须是正整数')
-    }
-  } else if (templateRule) {
+  if (templateRule) {
     if (!Number.isInteger(pagination.startPage)) errors.push('分页起始值必须是整数')
     if (!Number.isInteger(pagination.step) || pagination.step === 0) {
       errors.push('分页步长必须是非零整数')
@@ -119,6 +111,8 @@ export const analyzeListPageRules = (
     if (!isPositiveSafeInteger(pagination.maxPages)) {
       errors.push('分页模板最大采集页数必须是正整数')
     }
+  } else if (mode === 'click' && !isPositiveSafeInteger(pagination.maxPages)) {
+    errors.push('动态分页最大采集页数必须是正整数')
   }
 
   const firstRule = rules[0]

@@ -33,12 +33,17 @@ const emit = defineEmits<{
   </div>
   <div class="section-line">
     <div class="section-title">
-      <strong>分页方式</strong><span>静态地址规则或动态点击下一页</span>
+      <strong>分页方式</strong><span>静态请求或动态渲染</span>
     </div>
     <t-select v-model="task.pagination.mode" @change="emit('change-pagination-mode')">
       <t-option value="url" label="固定 URL / 数字页码模板" />
       <t-option value="click" label="点击下一页（动态渲染）" />
     </t-select>
+    <small v-if="isClickPagination" class="inline-note">
+      {{ hasPaginationTemplate
+        ? '按模板打开每个 URL，等待列表渲染后采集，无需配置下一页按钮。'
+        : '如果页码可通过 URL 指定，可在上一步填写包含 {page} 的模板。' }}
+    </small>
   </div>
   <div class="section-line">
     <div class="section-title"><strong>列表项容器</strong><span>重复出现的一整条记录</span></div>
@@ -75,17 +80,17 @@ const emit = defineEmits<{
       </t-tooltip>
     </div>
   </div>
-  <div v-if="!isClickPagination" class="section-line">
+  <div v-if="!isClickPagination || hasPaginationTemplate" class="section-line">
     <div class="section-title">
       <strong>数字页码规则</strong><span>支持路径、文件名或查询参数中的 {page}</span>
     </div>
-    <t-button size="small" theme="default" variant="outline" @click="emit('detect-pagination')">
+    <t-button v-if="!isClickPagination" size="small" theme="default" variant="outline" @click="emit('detect-pagination')">
       <template #icon>
         <SearchIcon />
       </template>
       扫描 URL 数值参数
     </t-button>
-    <div v-if="paginationSuggestions.length" class="suggestion-list">
+    <div v-if="!isClickPagination && paginationSuggestions.length" class="suggestion-list">
       <t-button
         v-for="suggestion in paginationSuggestions"
         :key="suggestion.name"
@@ -136,14 +141,16 @@ const emit = defineEmits<{
           :step="1"
           :decimal-places="0"
         />
-        <small>只限制模板生成页数，不限制固定 URL。</small>
+        <small>{{ isClickPagination ? '包含起始页。' : '只限制模板生成页数，不限制固定 URL。' }}</small>
       </div>
     </div>
     <p v-else class="inline-note">
       当前只配置了固定 URL，不需要填写起始值、步长和模板最大页数。
     </p>
     <p class="inline-note">
-      模板遇到无列表项、URL 重复、404/410 或整页记录重复时会结束，并继续后面的固定 URL。
+      {{ isClickPagination
+        ? '模板遇到无列表项、URL 重复、404/410 或整页记录重复时会结束。'
+        : '模板遇到无列表项、URL 重复、404/410 或整页记录重复时会结束，并继续后面的固定 URL。' }}
     </p>
   </div>
   <div v-else class="section-line">

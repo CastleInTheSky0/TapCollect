@@ -257,7 +257,7 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
     issues.push('请至少填写一个列表页面 URL')
   }
   if (!task.listItem.selector.trim()) issues.push('请配置列表项范围选择器')
-  if (task.pagination.mode === 'click' && !task.pagination.nextButton.selector.trim()) {
+  if (listPages.mode === 'click' && !listPages.templateRule && !task.pagination.nextButton.selector.trim()) {
     issues.push('请配置动态分页的“下一页按钮”选择器')
   }
   if (task.detail.enabled && !task.detail.link.selector.trim()) {

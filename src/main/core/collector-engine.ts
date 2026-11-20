@@ -75,6 +75,9 @@ interface LoadedListPage {
   finalUrl: string
 }
 
+const isListPageNotFound = (error: unknown): error is HttpRequestError =>
+  error instanceof HttpRequestError && (error.status === 404 || error.status === 410)
+
 const delay = async (milliseconds: number): Promise<void> => {
   if (milliseconds <= 0) return
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
@@ -281,24 +284,27 @@ export class CollectorEngine {
     const outputTemplate = taskOutputTemplate(task)
     if (!outputTemplate) throw new Error('请先导入并配置输出模板')
     let clickSession: DynamicPageSession | null = null
-    let response: LoadedListPage | null = null
-    if (task.detail.navigationMode === 'click') {
-      if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
-      clickSession = await this.dynamicPageProvider.create(task)
-      const snapshot = await clickSession.current()
-      response = { html: snapshot.html, finalUrl: snapshot.url }
-    } else {
-      response = await this.loadInitialListPage(task)
-    }
-    if (!response) throw new Error('测试列表页未返回可采集的 HTML')
-    const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
+    let listItemCount: number
+    let matchCounts: Record<string, number[]>
     const failures: RecordFailure[] = []
     const records: ExtractedRecord[] = []
-    const matchCounts: Record<string, number[]> = Object.fromEntries(
-      Object.entries(page.matchCounts).map(([path, counts]) => [path, counts.slice(0, 3)])
-    )
 
     try {
+      let response: LoadedListPage | null
+      if (task.detail.navigationMode === 'click') {
+        if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
+        clickSession = await this.dynamicPageProvider.create(task)
+        const snapshot = await clickSession.current()
+        response = { html: snapshot.html, finalUrl: snapshot.url }
+      } else {
+        response = await this.loadInitialListPage(task)
+      }
+      if (!response) throw new Error('测试列表页未返回可采集的 HTML')
+      const page = extractListPage(task, response.html, response.finalUrl, 1, 0)
+      listItemCount = page.itemCount
+      matchCounts = Object.fromEntries(
+        Object.entries(page.matchCounts).map(([path, counts]) => [path, counts.slice(0, 3)])
+      )
       for (const candidate of page.candidates.slice(0, 3)) {
         failures.push(...candidate.warnings)
         const missingListFields = immediateMissingListFields(task, candidate)
@@ -347,14 +353,14 @@ export class CollectorEngine {
       rows,
       matchCounts,
       failures,
-      listItemCount: page.itemCount,
+      listItemCount,
       xmlPreview:
         task.output.format === 'xml' && task.xml && records.length > 0
           ? renderXmlBatch(task.xml, records)
           : '',
       resourcePlans,
       messages: [
-        `列表项匹配 ${page.itemCount} 条`,
+        `列表项匹配 ${listItemCount} 条`,
         `测试生成 ${records.length} 条记录`,
         ...(task.resources.download.enabled
           ? [`预计下载 ${resourcePlans.length} 个站内资源（测试不会写入文件）`]
@@ -374,6 +380,7 @@ export class CollectorEngine {
       throw new Error('任务配置尚未完成，不能运行')
     }
     const listPages = analyzeTaskListPageRules(task)
+    const usesClickPagination = listPages.mode === 'click' && !listPages.templateRule
     const pageRules = listPages.rules
 
     const now = new Date()
@@ -702,7 +709,7 @@ export class CollectorEngine {
       'info',
       freshRun
         ? '开始采集'
-        : task.pagination.mode === 'click'
+        : usesClickPagination
           ? `从动态列表第 ${checkpoint.pagesVisited + 1} 页继续采集`
           : `从第 ${checkpoint.nextRuleIndex + 1} 条列表地址规则继续采集`
     )
@@ -714,7 +721,7 @@ export class CollectorEngine {
         emitProgress('cancelled', 'cancelled', '任务已取消，当前有效记录已写出')
         return this.buildResult(checkpoint, 'cancelled', '任务已取消，已保留采集结果')
       }
-      if (task.pagination.mode === 'click') {
+      if (usesClickPagination) {
         if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持动态分页')
         currentUrl = listPages.firstUrl
         if (checkpoint.pagesVisited >= task.pagination.maxPages) {
@@ -820,10 +827,11 @@ export class CollectorEngine {
           }
         }
       } else {
-      let clickDetailSession: DynamicPageSession | null = null
+      let renderedListSession: DynamicPageSession | null = null
       const usesClickDetail = task.detail.enabled && task.detail.navigationMode === 'click'
-      if (usesClickDetail) {
-        if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持点击元素进入详情')
+      const rendersList = listPages.mode === 'click'
+      if ((rendersList || usesClickDetail) && !this.dynamicPageProvider) {
+        throw new Error(rendersList ? '当前运行环境不支持动态分页' : '当前运行环境不支持点击元素进入详情')
       }
       try {
       while (checkpoint.nextRuleIndex < pageRules.length) {
@@ -860,20 +868,19 @@ export class CollectorEngine {
             ? `第 ${currentPageOrdinal} 个列表页（分页值 ${pageValue}）`
             : `第 ${currentPageOrdinal} 个列表页`
         emitProgress('running', 'list', `正在采集${pageDescription}`)
-        emitLog('info', `请求列表页：${currentUrl}`)
+        emitLog('info', `${rendersList ? '读取动态列表页' : '请求列表页'}：${currentUrl}`)
         if (checkpoint.pagesVisited > 0) await delay(this.httpClient.usesAccessPolicy ? 0 : task.request.delayMs)
         let listResponse
-        if (usesClickDetail) {
-          await clickDetailSession?.close()
-          clickDetailSession = await this.dynamicPageProvider!.create(task, currentUrl)
-          const snapshot = await clickDetailSession.current()
-          listResponse = {
-            kind: 'success' as const,
-            requestedUrl: currentUrl,
-            finalUrl: snapshot.url,
-            status: 200,
-            html: snapshot.html,
-            encoding: 'utf-8'
+        if (rendersList || usesClickDetail) {
+          await renderedListSession?.close()
+          renderedListSession = null
+          try {
+            renderedListSession = await this.dynamicPageProvider!.create(task, currentUrl)
+            const snapshot = await renderedListSession.current()
+            listResponse = { kind: 'success' as const, finalUrl: snapshot.url, html: snapshot.html }
+          } catch (error) {
+            if (!rendersList || !isListPageNotFound(error)) throw error
+            listResponse = { kind: 'not-found' as const, status: error.status }
           }
         } else {
           listResponse = await this.httpClient.fetchHtml(
@@ -921,7 +928,7 @@ export class CollectorEngine {
         const pageWasDuplicate = await processExtractedPage(
           extracted,
           pageDescription,
-          clickDetailSession
+          usesClickDetail ? renderedListSession : null
         )
 
         checkpoint.seenPageUrls.push(normalizedPageUrl)
@@ -951,7 +958,7 @@ export class CollectorEngine {
         }
       }
       } finally {
-        await clickDetailSession?.close()
+        await renderedListSession?.close()
       }
       }
 
@@ -1011,12 +1018,16 @@ export class CollectorEngine {
     if (!listUrl) return null
     if (task.pagination.mode === 'click') {
       if (!this.dynamicPageProvider) throw new Error('当前运行环境不支持动态分页')
-      const session = await this.dynamicPageProvider.create(task)
+      let session: DynamicPageSession | null = null
       try {
+        session = await this.dynamicPageProvider.create(task, listUrl)
         const snapshot = await session.current()
         return { html: snapshot.html, finalUrl: snapshot.url }
+      } catch (error) {
+        if (isListPageNotFound(error)) return null
+        throw error
       } finally {
-        await session.close()
+        await session?.close()
       }
     }
 
