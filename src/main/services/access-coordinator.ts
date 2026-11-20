@@ -166,7 +166,7 @@ export class AccessCoordinator extends EventEmitter {
     const execute = async (): Promise<T> => {
       this.assertAllowed(state, signal, probe)
       return await this.global.add(async () => {
-        await state.starts.add(async () => {
+        const { pending } = await state.starts.add(async () => {
           this.assertAllowed(state, signal, probe)
           const minimum = Math.max(this.settings.minIntervalMs, minimumDelay)
           const spacing = minimum + Math.round(minimum * this.settings.jitterPercent / 100 * Math.random())
@@ -176,9 +176,17 @@ export class AccessCoordinator extends EventEmitter {
             await wait(remaining, undefined, { signal })
           }
           this.assertAllowed(state, signal, probe)
-          state.lastStart = Date.now()
+          try {
+            const pending = scopedOperation()
+            // The start queue serializes dispatch, not the lifetime of a response.
+            // If an abort drops this queue result, the rejection still has an observer.
+            void pending.catch(() => undefined)
+            return { pending }
+          } finally {
+            state.lastStart = Date.now()
+          }
         }, { signal })
-        return scopedOperation()
+        return pending
       }, { signal }) as T
     }
     try {

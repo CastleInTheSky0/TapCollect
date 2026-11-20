@@ -163,6 +163,22 @@ describe('shared access coordinator', () => {
     expect(starts[2]! - starts[1]!).toBeGreaterThanOrEqual(50)
   })
 
+  it('does not hold the start queue until a dispatched request completes', async () => {
+    const { access } = setup()
+    access.configure({ ...access.settings, hostConcurrency: 2 })
+    let finishFirst!: () => void
+    const firstResponse = new Promise<void>((resolve) => { finishFirst = resolve })
+    const secondStart = vi.fn(async () => undefined)
+    const first = access.run('https://example.com/first', 0, () => firstResponse)
+    const second = access.run('https://example.com/second', 0, secondStart)
+    try {
+      await vi.waitFor(() => expect(secondStart).toHaveBeenCalledOnce())
+    } finally {
+      finishFirst()
+      await Promise.all([first, second])
+    }
+  })
+
   it('holds concurrency until streaming bodies finish while other hosts proceed', async () => {
     const { access, config } = setup()
     let finish!: () => void
