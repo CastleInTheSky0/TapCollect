@@ -74,6 +74,7 @@ describe('detail attachment collection', () => {
 
   it('downloads direct files once, preserves output order and leaves external targets unrequested', async () => {
     const { task, engine, fetcher } = await setup(item(pdf) + item('/article') + item('/files/a.zip') + item(pdf) + item('https://other.example/a.pdf'))
+    task.xml!.mappings.find((m) => m.fieldPath === 'body')!.required = false
     const result = await engine.run(task, null, new CollectorRunControl(), { progress: vi.fn(), log: vi.fn() })
     expect(result.status).toBe('completed')
     expect(result.counters).toMatchObject({ succeeded: 4, duplicated: 1, skipped: 0 })
@@ -129,6 +130,7 @@ describe('detail attachment collection', () => {
 
   it('recognizes extensionless and redirected file responses and preserves external redirect handling', async () => {
     const { task, engine, fetcher } = await setup(item('/download?id=1') + item('/redirect') + item('/external'))
+    task.xml!.mappings.find((m) => m.fieldPath === 'body')!.required = false
     const result = await engine.testTask(task)
     expect(result.failures).toEqual([])
     expect(result.resourcePlans).toHaveLength(2)
@@ -136,6 +138,51 @@ describe('detail attachment collection', () => {
     expect(result.rows[1]?.file).toBe(`${prefix}/files/report.PDF`)
     expect(result.records[2]?.externalUrl).toBe('https://other.example/report.pdf')
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('other.example'))).toBe(false)
+  })
+
+  it.each(['xml', 'spreadsheet'] as const)('omits the entire row with missing required detail in %s', async (format) => {
+    const { task, engine, fetcher } = await setup(
+      item('/article', '第一条') + item('/external', '第二条') +
+      item('/article?id=3', '第三条') + item('/empty', '第四条')
+    )
+    task.output.format = format
+    let mappings = task.xml!.mappings
+    if (format === 'spreadsheet') {
+      const book = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+        ['标题', '日期', '正文', '附件'], ['', '', '', '示例值']
+      ]), '数据')
+      task.spreadsheet = importSpreadsheetTemplate(XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }), 'template.xlsx')
+      mappings = task.spreadsheet.mappings
+      task.detail.attachment.fieldPath = 'D'
+    }
+    const [title, date, body, file] = mappings
+    Object.assign(title!, { mode: 'page', pageSource: 'list', selector: 'a' })
+    Object.assign(date!, { mode: 'system', systemValue: 'collected-at' })
+    Object.assign(body!, { mode: 'page', pageSource: 'detail', selector: '.body', required: true })
+    Object.assign(file!, { mode: 'fixed', fixedValue: '固定值' })
+
+    const preview = await engine.testTask(task)
+    expect(preview.rows.map((row) => row[title!.fieldPath])).toEqual(['第一条', '第三条'])
+    expect(preview.failures).toEqual([expect.objectContaining({
+      itemIndex: 2, stage: 'detail-field', fieldPath: body!.fieldPath,
+      detailUrl: 'https://other.example/report.pdf'
+    })])
+    const result = await engine.run(task, null, new CollectorRunControl(), { progress: vi.fn(), log: vi.fn() })
+    expect(result.counters).toMatchObject({ succeeded: 2, skipped: 2, failed: 0 })
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes('other.example'))).toBe(false)
+    expect(await readFile(result.errorLogPath, 'utf8')).toContain('https://other.example/report.pdf')
+    const output = await readFile(result.outputFiles[0]!)
+    if (format === 'xml') {
+      const xml = output.toString('utf8')
+      expect(xml.match(/<item>/g)).toHaveLength(2)
+      expect(xml).not.toContain('第二条')
+      expect(xml).not.toContain('第四条')
+    } else {
+      expect(readSpreadsheetCell(output, '数据', 'A2')?.v).toBe('第一条')
+      expect(readSpreadsheetCell(output, '数据', 'A3')?.v).toBe('第三条')
+      expect(readSpreadsheetCell(output, '数据', 'A4')).toBeUndefined()
+    }
   })
 
   it('logs failed downloads and retains the planned URL without losing records', async () => {

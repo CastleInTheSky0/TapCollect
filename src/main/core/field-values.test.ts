@@ -80,7 +80,7 @@ describe('merged field values', () => {
     expect(missingRequiredMergeFields(task, record())).toEqual([])
   })
 
-  it('does not reject an external record when a required merge contains only detail values', () => {
+  it('rejects an empty required detail-only merge for external links but not downloadable attachments', () => {
     const task = createTask('external-merge')
     task.xml = templateWithMapping()
     const detailValue = createMergeValue('detail-value')
@@ -92,6 +92,12 @@ describe('merged field values', () => {
         ...record(),
         detailUrl: '',
         externalUrl: 'https://outside.example/article'
+      })
+    ).toEqual(['text'])
+    expect(
+      missingRequiredMergeFields(task, {
+        ...record(),
+        detailAttachment: { fieldPath: 'file', url: '/files/report.pdf' }
       })
     ).toEqual([])
   })

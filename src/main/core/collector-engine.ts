@@ -28,6 +28,7 @@ import {
   createRecordFailure,
   extractDetailPage,
   extractListPage,
+  missingRequiredDetailFields,
   type ExtractListPageResult,
   type ListCandidate
 } from './extraction'
@@ -1205,6 +1206,18 @@ export class CollectorEngine {
       return { record: null, failures: missingFailures(candidate, 'list-field', missingListFields),
         counter: 'skipped', matchCounts }
     }
+    const failureContext = { ...candidate, detailUrl: record.detailUrl || record.externalUrl }
+    const missingDetailFields = record.externalUrl
+      ? missingRequiredDetailFields(task, record.values)
+      : []
+    if (missingDetailFields.length > 0) {
+      return {
+        record: null,
+        failures: [...warnings, ...missingFailures(failureContext, 'detail-field', missingDetailFields)],
+        counter: 'skipped',
+        matchCounts
+      }
+    }
     const outputTemplate = taskOutputTemplate(task)
     const valueWarnings = outputTemplate
       ? outputTemplate.fields.flatMap((field) => {
@@ -1214,7 +1227,7 @@ export class CollectorEngine {
           if (!mapping || mapping.mode === 'unconfigured') return []
           return resolveFieldValueResult(mapping, field, record).warnings.map((warning) =>
             createRecordFailure(
-              { ...candidate, detailUrl: record.detailUrl },
+              failureContext,
               'date-conversion',
               warning.reason,
               warning.fieldPath
@@ -1229,7 +1242,7 @@ export class CollectorEngine {
         record: null,
         failures: [
           ...allWarnings,
-          ...missingFailures(candidate, 'merged-field', missingFields)
+          ...missingFailures(failureContext, 'merged-field', missingFields)
         ],
         counter: 'skipped',
         matchCounts

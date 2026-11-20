@@ -147,11 +147,11 @@ export const resolveFieldValue = (
   record: ExtractedRecord
 ): string => resolveFieldValueResult(mapping, definition, record).value
 
-const ignoresUnavailableDetailRequirement = (
+const isDetailOnlyAttachmentMerge = (
   mapping: FieldMapping,
   record: ExtractedRecord
 ): boolean =>
-  Boolean(record.externalUrl || record.detailAttachment) &&
+  Boolean(record.detailAttachment) &&
   mapping.mergeValues.length > 0 &&
   mapping.mergeValues.every((value) => value.mode === 'page' && value.pageSource === 'detail')
 
@@ -163,7 +163,7 @@ export const missingRequiredMergeFields = (
   if (!template) return []
   return template.mappings
     .filter((mapping) => mapping.mode === 'merge' && mapping.required)
-    .filter((mapping) => !ignoresUnavailableDetailRequirement(mapping, record))
+    .filter((mapping) => !isDetailOnlyAttachmentMerge(mapping, record))
     .filter((mapping) => {
       const definition = template.fields.find((field) => field.path === mapping.fieldPath)
       return !definition || !resolveFieldValue(mapping, definition, record).trim()

@@ -281,6 +281,11 @@ const missingRequiredFields = (
     .filter((mapping) => mapping.required && !(values[mapping.fieldPath] ?? '').trim())
     .map((mapping) => mapping.fieldPath)
 
+export const missingRequiredDetailFields = (
+  task: TaskConfig,
+  values: Record<string, string>
+): string[] => missingRequiredFields(requiredPageMappings(task, 'detail'), values)
+
 export const extractListPage = (
   task: TaskConfig,
   html: string,
@@ -384,7 +389,6 @@ export const extractDetailPage = (
   const { document } = dom.window
   const baseUrl = document.baseURI || pageUrl
   const entries = pageValueEntries(task, 'detail')
-  const requiredMappings = requiredPageMappings(task, 'detail')
   const values = { ...candidate.values }
   const resources = [...candidate.resources]
   const matchCounts: Record<string, number> = {}
@@ -424,7 +428,7 @@ export const extractDetailPage = (
       values,
       resources
     },
-    missingFields: missingRequiredFields(requiredMappings, values),
+    missingFields: missingRequiredDetailFields(task, values),
     matchCounts,
     warnings: conversionWarnings.map((warning) =>
       createRecordFailure(warningContext, 'date-conversion', warning.reason, warning.fieldPath)

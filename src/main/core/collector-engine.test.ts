@@ -106,7 +106,6 @@ it('previews and collects allowlisted HTML without fetching other links or downl
   task.detail.link.selector = 'a'
   const text = task.xml!.mappings.find((mapping) => mapping.fieldPath === 'text')!
   text.pageSource = 'detail'
-  text.required = true
   const detailUrl = 'https://news.example.com/story'
   const outsideUrl = 'https://other.example.com/story'
   const attachmentUrl = 'https://news.example.com/file.pdf'
@@ -128,8 +127,17 @@ it('previews and collects allowlisted HTML without fetching other links or downl
     expect.objectContaining({ detailUrl: '', externalUrl: attachmentUrl })
   ])
   expect(tested.rows[0]?.text).toContain('Policy body')
+  expect(tested.failures).toEqual([])
+
+  text.required = true
+  const required = await engine.testTask(task)
+  expect(required.records).toEqual([expect.objectContaining({ detailUrl })])
+  expect(required.failures).toEqual([
+    expect.objectContaining({ stage: 'detail-field', fieldPath: 'text', detailUrl: outsideUrl, itemIndex: 2 }),
+    expect.objectContaining({ stage: 'detail-field', fieldPath: 'text', detailUrl: attachmentUrl, itemIndex: 3 })
+  ])
   const result = await engine.run(task, null, new CollectorRunControl(), { progress: vi.fn(), log: vi.fn() })
-  expect(result.counters.succeeded).toBe(3)
+  expect(result.counters).toMatchObject({ succeeded: 1, skipped: 2 })
   expect(await readOutputXml(result.outputFiles[0]!, 'utf-8')).toContain('Policy body')
   expect(new Set(fetcher.mock.calls.map(([url]) => url))).toEqual(new Set([task.listUrl, detailUrl]))
   expect((await store.saveTask(task)).detail.allowedExternalHosts).toBe('NEWS.example.com')
