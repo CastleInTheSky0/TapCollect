@@ -98,6 +98,16 @@ const createResourceTask = (id: string, root: string): TaskConfig => {
   return task
 }
 
+it('rejects a saved XML root selection in test collection before fetching the list', async () => {
+  const task = createListOnlyTask('root-record', 'unused')
+  task.xml!.recordPath = '/book'
+  const fetcher = vi.fn<typeof fetch>()
+  const engine = new CollectorEngine(new TaskStore('unused'), new HttpClient(fetcher))
+
+  await expect(engine.testTask(task)).rejects.toThrow('XML 根节点不能作为记录节点')
+  expect(fetcher).not.toHaveBeenCalled()
+})
+
 it('previews and collects allowlisted HTML without fetching other links or downloading foreign resources', async () => {
   const root = await mkdtemp(join(tmpdir(), 'collector-cross-host-'))
   temporaryDirectories.push(root)

@@ -18,7 +18,12 @@ import {
   normalizeResourceAddressMode,
   normalizeResourceUrlPrefix
 } from './resource-config'
-import { taskOutputFields, taskOutputMappings, taskOutputTemplate } from './output-template'
+import {
+  taskOutputFields,
+  taskOutputMappings,
+  taskOutputTemplate,
+  xmlRecordPathIssue
+} from './output-template'
 import { detailAttachmentConfigurationIssues } from './detail-attachment'
 import { detailHostConfigurationIssues } from './detail-hosts'
 
@@ -285,8 +290,9 @@ export const taskConfigurationIssues = (task: TaskConfig): string[] => {
   } else if (task.output.format === 'spreadsheet' && !task.spreadsheet) {
     issues.push('请导入 XLSX 或 XLS 表格模板')
   } else if (outputTemplate) {
-    if (task.output.format === 'xml' && !task.xml?.recordPath.trim()) {
-      issues.push('请在 XML 模板中选择记录节点')
+    if (task.output.format === 'xml' && task.xml) {
+      const recordIssue = xmlRecordPathIssue(task.xml.recordPath)
+      if (recordIssue) issues.push(recordIssue)
     }
     if (task.output.format === 'spreadsheet' && outputTemplate.fields.length === 0) {
       issues.push('表格模板第一行没有可映射列，请重新导入')

@@ -15,6 +15,7 @@ import type {
   XmlTreeNode
 } from '@shared/types'
 import { createFieldMapping } from '@shared/defaults'
+import { xmlRecordPathIssue } from '@shared/output-template'
 import { resolveFieldValue } from './field-values'
 
 const rejectDoctype = (content: string): void => {
@@ -197,6 +198,8 @@ export const configureXmlRecord = (
   recordPath: string,
   importedAt = new Date().toISOString()
 ): XmlTemplateConfig => {
+  const recordIssue = xmlRecordPathIssue(recordPath)
+  if (recordIssue) throw new Error(recordIssue)
   const document = parseXml(content)
   const record = findElementByAbsolutePath(document, recordPath)
   if (!record) throw new Error('未找到指定的 XML 记录节点')
@@ -308,6 +311,8 @@ export const renderXmlBatch = (
   template: XmlTemplateConfig,
   records: ExtractedRecord[]
 ): string => {
+  const recordIssue = xmlRecordPathIssue(template.recordPath)
+  if (recordIssue) throw new Error(recordIssue)
   const document = parseXml(template.content)
   const sample = findElementByAbsolutePath(document, template.recordPath)
   if (!sample?.parentNode) throw new Error('XML 记录节点无效')

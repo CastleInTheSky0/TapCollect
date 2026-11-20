@@ -182,7 +182,7 @@ https://www.example.com/list.aspx?classid=5&page={page}
 
 ### XML 模板与导出
 
-- 导入完整合法的 XML 模板，通过 XML 树选择一条示例记录节点。
+- 导入完整合法的 XML 模板，在第 4 步“模板映射”的 XML 树中选择单条示例记录节点。例如选择 `/config/InfoEntities/InfoEntity`，不要选根节点 `/config`。如果旧任务选了根节点，需重新选择并确认字段映射，才能执行测试或正式采集。
 - 保留模板中的固定节点、属性、注释、命名空间、示例值和声明编码。
 - 支持普通嵌套字段和属性字段。
 - 支持 `<field name="信息标题" id="title">...</field>` 这类重复 `field` 节点：使用 `id` 区分映射字段，同时显示 `name` 便于识别。

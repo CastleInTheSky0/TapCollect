@@ -97,6 +97,17 @@ describe('normalizeAppSettings', () => {
 })
 
 describe('taskConfigurationIssues', () => {
+  it('rejects a stored XML root selection only when XML is the active format', () => {
+    const task = createRunnableSpreadsheetTask()
+    task.xml!.recordPath = '/root'
+    expect(taskConfigurationIssues(task)).toEqual([])
+
+    task.output.format = 'xml'
+    expect(taskConfigurationIssues(task)).toEqual([
+      expect.stringContaining('XML 根节点不能作为记录节点')
+    ])
+  })
+
   it('migrates attachment handling off and validates active output fields and downloads', () => {
     const task = createRunnableTask()
     const legacy = JSON.parse(JSON.stringify(task))

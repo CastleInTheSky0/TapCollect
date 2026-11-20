@@ -16,7 +16,7 @@ import {
   isTaskRunnable
 } from '@shared/defaults'
 import { analyzeTaskListPageRules, firstTaskListPageUrl } from '@shared/list-page-rules'
-import { taskOutputTemplate } from '@shared/output-template'
+import { taskOutputTemplate, xmlRecordPathIssue } from '@shared/output-template'
 import { detailAttachmentConfigurationIssues, isDetailAttachmentEnabled } from '@shared/detail-attachment'
 import { detailHostConfigurationIssues, detailHostScope } from '@shared/detail-hosts'
 import {
@@ -283,6 +283,10 @@ export class CollectorEngine {
     if (detailIssues.length) throw new Error(detailIssues.join('；'))
     const outputTemplate = taskOutputTemplate(task)
     if (!outputTemplate) throw new Error('请先导入并配置输出模板')
+    if (task.output.format === 'xml' && task.xml) {
+      const recordIssue = xmlRecordPathIssue(task.xml.recordPath)
+      if (recordIssue) throw new Error(recordIssue)
+    }
     let clickSession: DynamicPageSession | null = null
     let listItemCount: number
     let matchCounts: Record<string, number[]>

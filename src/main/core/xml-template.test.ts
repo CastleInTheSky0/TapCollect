@@ -39,6 +39,21 @@ describe('XML template', () => {
     expect(configured.fields.every((field) => field.cdata)).toBe(true)
   })
 
+  it('rejects the document root during configuration and when rendering a legacy template', () => {
+    expect(inspectXmlTree(idFieldTemplate)[0]?.path).toBe('/config')
+    expect(() => configureXmlRecord(idFieldTemplate, 'template.xml', '/config')).toThrow(
+      'XML 根节点不能作为记录节点'
+    )
+    const configured = configureXmlRecord(
+      idFieldTemplate,
+      'template.xml',
+      '/config/InfoEntities/InfoEntity'
+    )
+    expect(() => renderXmlBatch({ ...configured, recordPath: '/config' }, [])).toThrow(
+      'XML 根节点不能作为记录节点'
+    )
+  })
+
   it('clones the record and preserves CDATA semantics', () => {
     const configured = configureXmlRecord(template, 'template.xml', '/book/article')
     configured.mappings = configured.mappings.map((mapping) => ({
